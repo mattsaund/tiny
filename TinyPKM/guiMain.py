@@ -13,16 +13,26 @@ PKMS Graph Browser (Tkinter version, Python 3.13+ compatible)
 """
 
 from __future__ import annotations
+import json
 import os
+import stat
 import math
 import time
 import re
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, colorchooser
+from tkinter import filedialog, colorchooser, messagebox, simpledialog
 
-BG = "#000000"
-FG = "#FFFFFF"
+DEFAULT_BACKGROUND = "#000000"
+DEFAULT_TEXT = "#FFFFFF"
+DEFAULT_NODE = "#FFFFFF"
+DEFAULT_RESOLUTION_INDEX = 2
+DEFAULT_ROOT_PATH = Path.home().resolve()
+DEFAULT_SHOW_HIDDEN = False
+SETTINGS_FILE = Path(__file__).with_name("user_settings.json")
+
+BG = DEFAULT_BACKGROUND
+FG = DEFAULT_TEXT
 NODE_W = 170      # screen-space
 NODE_H = 48       # screen-space
 RADIUS = 12
@@ -38,12 +48,12 @@ COLLISION_MARGIN = 8
 COLLISION_ITER = 20
 
 # Force-directed layout parameters
-FORCE_STEP_MS = 20
-K_REPULSE = 8000.0    # repulsive constant
-K_SPRING = 0.02       # attractive spring constant along edges
+FORCE_STEP_MS = 12
+K_REPULSE = 15000.0   # repulsive constant
+K_SPRING = 0.035      # attractive spring constant along edges
 SPRING_REST = 260.0   # desired edge length
-DAMPING = 0.85
-MAX_STEP = 35.0       # clamp per-step movement in world units
+DAMPING = 0.78
+MAX_STEP = 48.0       # clamp per-step movement in world units
 
 
 def readable_size(num_bytes: int) -> str:
@@ -71,7 +81,8 @@ def clip_to_rect_edge(xc: float, yc: float, xt: float, yt: float, w: float, h: f
 class Node:
     _next_tag_id = 0
 
-    def __init__(self, app: "App", label: str, path: Path, is_dir: bool, x: float, y: float, parent: "Node|None"=None):
+    def __init__(self, app: "App", label: str, path: Path, is_dir: bool, x: float, y: float,
+                 parent: "Node|None"=None, virtual: bool=False):
         self.app = app
         self.label = label
         self.path = path
@@ -83,6 +94,7 @@ class Node:
         self.children: list[Node] = []
         self.tag = f"node_{Node._next_tag_id}"
         Node._next_tag_id += 1
+        self.virtual = virtual
         # velocity for force simulation
         self.vx = 0.0
         self.vy = 0.0
@@ -100,31 +112,33 @@ class Node:
         try:
             if self.is_dir:
                 entries = list(self.path.iterdir())
+                if not self.app.show_hidden:
+                    entries = [p for p in entries if not self.app._is_hidden_path(p)]
                 entries.sort(key=lambda p: (not p.is_dir(), p.name.lower()))
                 entries = entries[:MAX_CHILDREN]
-                labels = [(p.name, p, p.is_dir()) for p in entries]
+                labels = [(p.name, p, p.is_dir(), False) for p in entries]
             else:
                 p = self.path
                 st = p.stat()
                 typ = p.suffix.lower()[1:] if p.suffix else "file"
                 labels = [
-                    (f"Type: {typ}", p, False),
-                    (f"Size: {readable_size(st.st_size)}", p, False),
-                    (f"Modified: {time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}", p, False),
+                    (f"Type: {typ}", p, False, True),
+                    (f"Size: {readable_size(st.st_size)}", p, False, True),
+                    (f"Modified: {time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}", p, False, True),
                 ]
         except Exception as e:
-            labels = [(f"Error: {e}", self.path, False)]
+            labels = [(f"Error: {e}", self.path, False, True)]
 
         n = max(1, len(labels))
         radius = max(BASE_RADIUS, 90 + n * RADIUS_PER_CHILD)
         angle0 = -90.0
         self.children.clear()
-        for i, (label, path, is_dir) in enumerate(labels):
+        for i, (label, path, is_dir, virtual) in enumerate(labels):
             angle = angle0 + (360.0 * i / n)
             rad = math.radians(angle)
             cx = self.x + radius * math.cos(rad)
             cy = self.y + radius * math.sin(rad)
-            child = Node(self.app, label, path, is_dir, cx, cy, parent=self)
+            child = Node(self.app, label, path, is_dir, cx, cy, parent=self, virtual=virtual)
             self.children.append(child)
 
     def collapse(self):
@@ -142,7 +156,7 @@ class App:
         self.root.title("PKMS Graph Browser (Tkinter)")
         self.background_color = BG
         self.text_color = FG
-        self.node_color = FG
+        self.node_color = DEFAULT_NODE
         self.root.configure(bg=self.background_color)
 
         # --- UI: top bar + canvas ---
@@ -167,7 +181,8 @@ class App:
                                     bg=self.background_color, fg="#888888", font=("Segoe UI", 10))
         self.search_hint.pack(side="left", padx=8)
         self.search_shown = False  # start hidden
-        self.settings_window: tk.Toplevel | None = None
+        self._search_open_via_hover = False
+        self.settings_window: tk.Frame | None = None
         self._settings_buttons: dict[str, tk.Button] = {}
         self._settings_active: str | None = None
         self._settings_header: tk.Frame | None = None
@@ -179,6 +194,7 @@ class App:
         self._settings_scrollbar: tk.Scrollbar | None = None
         self._settings_content_wrapper: tk.Frame | None = None
         self._settings_canvas_window = None
+        self._settings_drag_offset: tuple[int, int] | None = None
         self._keybinds_info = [
             ("Alt + Space", "Toggle search bar"),
             ("Ctrl + Space", "Toggle search bar"),
@@ -186,7 +202,6 @@ class App:
             ("Escape (search)", "Hide search bar"),
             ("F11", "Toggle fullscreen"),
             ("R / r", "Reload directory"),
-            ("F / f", "Toggle force layout"),
             ("Plus (+)", "Zoom in"),
             ("Minus (-) / Underscore (_)", "Zoom out"),
             ("Ctrl + Mouse Wheel", "Zoom on cursor"),
@@ -212,6 +227,8 @@ class App:
         self._drag_start = None           # for panning
         self._drag_node: Node | None = None
         self._last_drag_screen = (0, 0)   # incremental dragging reference
+        self._node_dragging = False
+        self._suppress_click = False
 
         # Force simulation
         self.force_running = False
@@ -223,7 +240,7 @@ class App:
             ("3200 x 1800", (3200, 1800)),
             ("3840 x 2160", (3840, 2160)),
         ]
-        self._resolution_index = tk.IntVar(value=2)  # default 1920x1080
+        self._resolution_index = tk.IntVar(value=DEFAULT_RESOLUTION_INDEX)  # default 1920x1080
         self._resolution_label_var = tk.StringVar(value=self._resolution_presets[self._resolution_index.get()][0])
         self._color_vars: dict[str, tuple[tk.IntVar, tk.IntVar, tk.IntVar]] = {}
         self._color_preview: dict[str, tk.Label] = {}
@@ -237,6 +254,18 @@ class App:
                 tk.IntVar(value=g),
                 tk.IntVar(value=b),
             )
+
+        self._settings_file = SETTINGS_FILE
+        self.default_root_path = DEFAULT_ROOT_PATH
+        self.show_hidden = DEFAULT_SHOW_HIDDEN
+        self._default_root_var = tk.StringVar(value=str(self.default_root_path))
+        self._show_hidden_var = tk.BooleanVar(value=self.show_hidden)
+        self._size_cache: dict[tuple[Path, bool], tuple[int, int]] = {}
+        self._pending_display_mode = "windowed"
+        self._pending_resolution_index = self._resolution_index.get()
+        self._collision_job: str | None = None
+        self._load_user_settings()
+        self._apply_window_preferences()
 
         self.root.bind("<Configure>", self._on_resize)
         # Pan with right mouse
@@ -253,8 +282,6 @@ class App:
         # Removed 'O' shortcut for choose_dir as requested
         self.root.bind("<KeyPress-R>", lambda e: self.reload())
         self.root.bind("<KeyPress-r>", lambda e: self.reload())
-        self.root.bind("<KeyPress-F>", lambda e: self.toggle_force())
-        self.root.bind("<KeyPress-f>", lambda e: self.toggle_force())
         # F11 fullscreen toggle
         self.root.bind("<F11>", lambda e: self.toggle_fullscreen())
 
@@ -262,30 +289,128 @@ class App:
         self.root.bind_all("<Alt-Key-space>", lambda e: self.toggle_searchbar())
         self.root.bind_all("<Control-Key-space>", lambda e: self.toggle_searchbar())
 
+        # Show search bar when hovering near the top edge
+        self.root.bind_all("<Motion>", self._on_global_mouse_move)
+
         self.root_node: Node | None = None
         if root_path is None:
-            root_path = Path.home()
+            root_path = self.default_root_path
+        else:
+            root_path = Path(root_path)
+            if root_path.exists():
+                self.default_root_path = root_path
+                self._default_root_var.set(str(self.default_root_path))
         self.load_root(root_path)
+        self._start_force_simulation()
 
     # ---------- Settings ----------
+    def _load_user_settings(self):
+        try:
+            with open(self._settings_file, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except FileNotFoundError:
+            data = {}
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"Warning: could not load settings ({exc})")
+            data = {}
+
+        path_str = data.get("default_root_path")
+        if path_str:
+            candidate = Path(path_str).expanduser()
+            if candidate.exists():
+                try:
+                    candidate = candidate.resolve()
+                except OSError:
+                    pass
+                self.default_root_path = candidate
+        self._default_root_var.set(str(self.default_root_path))
+        show_hidden = data.get("show_hidden")
+        if isinstance(show_hidden, bool):
+            self.show_hidden = show_hidden
+        self._show_hidden_var.set(self.show_hidden)
+        res_idx = data.get("resolution_index")
+        if isinstance(res_idx, int):
+            res_idx = max(0, min(len(self._resolution_presets) - 1, res_idx))
+            self._pending_resolution_index = res_idx
+        else:
+            self._pending_resolution_index = self._resolution_index.get()
+        mode = data.get("display_mode")
+        if mode in ("windowed", "fullscreen"):
+            self._pending_display_mode = mode
+        else:
+            self._pending_display_mode = "windowed"
+        self._resolution_index.set(self._pending_resolution_index)
+        self._resolution_label_var.set(self._resolution_presets[self._pending_resolution_index][0])
+        self.display_mode.set(self._pending_display_mode)
+
+    def _save_user_settings(self):
+        payload = {
+            "default_root_path": str(self.default_root_path),
+            "show_hidden": bool(self.show_hidden),
+            "resolution_index": int(self._resolution_index.get()),
+            "display_mode": self.display_mode.get(),
+        }
+        try:
+            with open(self._settings_file, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2)
+        except OSError as exc:
+            print(f"Warning: could not save settings ({exc})")
+        self._pending_resolution_index = self._resolution_index.get()
+        self._pending_display_mode = self.display_mode.get()
+
+    def _apply_window_preferences(self):
+        idx = max(0, min(len(self._resolution_presets) - 1, int(self._pending_resolution_index)))
+        self._resolution_index.set(idx)
+        self._resolution_label_var.set(self._resolution_presets[idx][0])
+        desired_mode = self._pending_display_mode
+        self.display_mode.set(desired_mode)
+        width, height = self._resolution_presets[idx][1]
+
+        if desired_mode == "fullscreen":
+            if not self.fullscreen:
+                self.toggle_fullscreen()
+        else:
+            if self.fullscreen:
+                self.toggle_fullscreen()
+            self.root.geometry(f"{width}x{height}")
+            self.root.update_idletasks()
+
+    def _is_hidden_path(self, path: Path) -> bool:
+        name = path.name
+        if name.startswith(".") and name not in (".", ".."):
+            return True
+        if os.name == "nt":
+            try:
+                attrs = os.stat(path, follow_symlinks=False).st_file_attributes
+                hidden_flag = getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0x02)
+                return bool(attrs & hidden_flag)
+            except (OSError, AttributeError):
+                return False
+        return False
+
     def open_settings(self):
         self.display_mode.set("fullscreen" if self.fullscreen else "windowed")
         if self.settings_window and self.settings_window.winfo_exists():
-            self.settings_window.deiconify()
             self.settings_window.lift()
             return
         self._sync_resolution_index()
 
-        win = tk.Toplevel(self.root)
-        win.title("Settings")
-        win.configure(bg=self.background_color)
-        win.geometry("420x320")
-        win.resizable(False, False)
-        win.transient(self.root)
-        win.protocol("WM_DELETE_WINDOW", self._close_settings)
-        self.settings_window = win
+        self.root.update_idletasks()
+        width, height = 420, 320
+        root_w = max(width, self.root.winfo_width())
+        root_h = max(height, self.root.winfo_height())
+        x = max(20, (root_w - width) // 2)
+        y = max(20, (root_h - height) // 2)
 
-        header = tk.Frame(win, bg=self.background_color)
+        win = tk.Frame(self.root, bg=self.background_color, bd=1, relief="ridge",
+                       highlightthickness=1, highlightbackground="#333333")
+        win.place(x=x, y=y, width=width, height=height)
+        win.pack_propagate(False)
+        win.grid_propagate(False)
+        self.settings_window = win
+        win.lift()
+
+        header = tk.Frame(win, bg=self.background_color, cursor="fleur")
         header.pack(side="top", fill="x")
         title = tk.Label(header, text="Settings", bg=self.background_color, fg=self.text_color, font=("Segoe UI", 14, "bold"))
         title.pack(side="left", padx=12, pady=10)
@@ -296,6 +421,12 @@ class App:
         self._settings_header = header
         self._settings_title = title
         self._settings_close = close_btn
+        header.bind("<ButtonPress-1>", self._start_settings_drag)
+        header.bind("<B1-Motion>", self._drag_settings_window)
+        header.bind("<ButtonRelease-1>", self._stop_settings_drag)
+        title.bind("<ButtonPress-1>", self._start_settings_drag)
+        title.bind("<B1-Motion>", self._drag_settings_window)
+        title.bind("<ButtonRelease-1>", self._stop_settings_drag)
 
         nav = tk.Frame(win, bg=self.background_color)
         nav.pack(side="top", fill="x", pady=(0, 6))
@@ -358,6 +489,41 @@ class App:
         self._settings_scrollbar = None
         self._settings_content_wrapper = None
         self._settings_canvas_window = None
+        self._settings_drag_offset = None
+
+    def _start_settings_drag(self, event):
+        if not self.settings_window or not self.settings_window.winfo_exists():
+            return
+        frame = self.settings_window
+        frame.lift()
+        self.root.update_idletasks()
+        self._settings_drag_offset = (
+            event.x_root - frame.winfo_rootx(),
+            event.y_root - frame.winfo_rooty(),
+        )
+
+    def _drag_settings_window(self, event):
+        if not self.settings_window or not self.settings_window.winfo_exists():
+            return
+        if self._settings_drag_offset is None:
+            return
+        frame = self.settings_window
+        offset_x, offset_y = self._settings_drag_offset
+        self.root.update_idletasks()
+        root_x = self.root.winfo_rootx()
+        root_y = self.root.winfo_rooty()
+        root_w = max(1, self.root.winfo_width())
+        root_h = max(1, self.root.winfo_height())
+        new_screen_x = event.x_root - offset_x
+        new_screen_y = event.y_root - offset_y
+        max_x = root_x + root_w - frame.winfo_width()
+        max_y = root_y + root_h - frame.winfo_height()
+        new_screen_x = max(root_x, min(new_screen_x, max_x))
+        new_screen_y = max(root_y, min(new_screen_y, max_y))
+        frame.place_configure(x=new_screen_x - root_x, y=new_screen_y - root_y)
+
+    def _stop_settings_drag(self, _event):
+        self._settings_drag_offset = None
 
     def _show_settings_page(self, page: str):
         if not self.settings_window or not self.settings_window.winfo_exists():
@@ -398,6 +564,35 @@ class App:
             desc_lbl.pack(side="left", padx=12)
 
     def _render_config_page(self):
+        path_frame = tk.Frame(self.settings_content, bg=self.background_color)
+        path_frame.pack(anchor="w", fill="x", pady=(0, 12))
+        path_label = tk.Label(path_frame, text="Default Root Path", bg=self.background_color,
+                              fg=self.text_color, font=("Segoe UI", 11, "bold"))
+        path_label.pack(anchor="w")
+        path_entry_row = tk.Frame(path_frame, bg=self.background_color)
+        path_entry_row.pack(anchor="w", fill="x", pady=(6, 0))
+        path_entry = tk.Entry(path_entry_row, textvariable=self._default_root_var,
+                              bg="#111111", fg=self.text_color, insertbackground=self.text_color,
+                              relief="flat", font=("Segoe UI", 10))
+        path_entry.pack(side="left", fill="x", expand=True)
+        browse_btn = tk.Button(path_entry_row, text="Browse...", command=self._browse_default_root,
+                               bg="#111111", fg=self.text_color, relief="flat",
+                               font=("Segoe UI", 10), activebackground="#222222",
+                               activeforeground=self.text_color, padx=10, pady=4)
+        browse_btn.pack(side="left", padx=(8, 0))
+
+        hidden_frame = tk.Frame(self.settings_content, bg=self.background_color)
+        hidden_frame.pack(anchor="w", fill="x", pady=(0, 12))
+        hidden_label = tk.Label(hidden_frame, text="Hidden Files", bg=self.background_color,
+                                fg=self.text_color, font=("Segoe UI", 11, "bold"))
+        hidden_label.pack(anchor="w")
+        hidden_toggle = tk.Checkbutton(hidden_frame, text="Show dot-prefixed files (e.g. .git, .ini)",
+                                       variable=self._show_hidden_var, onvalue=True, offvalue=False,
+                                       bg=self.background_color, fg=self.text_color,
+                                       activebackground="#222222", activeforeground=self.text_color,
+                                       selectcolor="#222222", font=("Segoe UI", 10))
+        hidden_toggle.pack(anchor="w", pady=(6, 0))
+
         mode_frame = tk.Frame(self.settings_content, bg=self.background_color)
         mode_frame.pack(anchor="w", fill="x", pady=(0, 12))
         mode_label = tk.Label(mode_frame, text="Display Mode", bg=self.background_color, fg=self.text_color,
@@ -463,11 +658,25 @@ class App:
             pick.pack(side="left", padx=(4, 0))
             self._update_color_preview(key)
 
-        apply_btn = tk.Button(self.settings_content, text="Apply", command=self.apply_config,
+        actions = tk.Frame(self.settings_content, bg=self.background_color)
+        actions.pack(anchor="e", pady=(6, 0))
+        reset_btn = tk.Button(actions, text="Reset to Defaults", command=self.reset_config_defaults,
+                              bg="#111111", fg=self.text_color, relief="flat",
+                              font=("Segoe UI", 10, "bold"), activebackground="#222222",
+                              activeforeground=self.text_color, padx=10, pady=4)
+        reset_btn.pack(side="left", padx=(0, 8))
+        apply_btn = tk.Button(actions, text="Apply", command=self.apply_config,
                               bg="#1f1f1f", fg=self.text_color, relief="flat",
                               font=("Segoe UI", 11, "bold"), activebackground="#333333",
                               activeforeground=self.text_color, padx=12, pady=6)
-        apply_btn.pack(anchor="e", pady=(6, 0))
+        apply_btn.pack(side="left")
+
+    def _browse_default_root(self):
+        current = self._default_root_var.get()
+        init_dir = current if current and Path(current).expanduser().exists() else str(Path.home())
+        selected = filedialog.askdirectory(initialdir=init_dir, title="Choose default root")
+        if selected:
+            self._default_root_var.set(selected)
 
     def _render_placeholder_page(self, message: str):
         note = tk.Label(self.settings_content, text=message, bg=self.background_color, fg="#BBBBBB",
@@ -529,15 +738,47 @@ class App:
             preview.configure(bg=hex_color, fg=self.background_color)
 
     def apply_config(self):
+        raw_path = self._default_root_var.get().strip()
+        if not raw_path:
+            messagebox.showerror("Invalid Path", "Please enter a directory for the default root.")
+            self._default_root_var.set(str(self.default_root_path))
+            return
+        candidate = Path(raw_path).expanduser()
+        if not candidate.exists():
+            messagebox.showerror("Invalid Path", f"The directory '{raw_path}' does not exist.")
+            self._default_root_var.set(str(self.default_root_path))
+            return
+        try:
+            candidate_resolved = candidate.resolve()
+        except OSError:
+            candidate_resolved = candidate
+        try:
+            current_root_resolved = self.default_root_path.resolve()
+        except OSError:
+            current_root_resolved = self.default_root_path
+        path_changed = candidate_resolved != current_root_resolved
+        show_hidden_selected = bool(self._show_hidden_var.get())
+        hidden_changed = show_hidden_selected != self.show_hidden
+        self.default_root_path = candidate_resolved
+        self._default_root_var.set(str(self.default_root_path))
+        self.show_hidden = show_hidden_selected
+
         mode = self.display_mode.get()
         target_fullscreen = (mode == "fullscreen")
         if target_fullscreen != self.fullscreen:
             self.toggle_fullscreen()
 
+        prev_idx = max(0, min(len(self._resolution_presets) - 1, int(self._pending_resolution_index)))
         idx = max(0, min(len(self._resolution_presets) - 1, self._resolution_index.get()))
+        res_changed = idx != prev_idx
         width, height = self._resolution_presets[idx][1]
         if not self.fullscreen:
             self.root.geometry(f"{width}x{height}")
+            if res_changed:
+                self.root.update_idletasks()
+                self.canvas.update_idletasks()
+                self.offset_x = self.canvas.winfo_width()/2
+                self.offset_y = self.canvas.winfo_height()/2
 
         node_hex = self._get_color_from_vars("node")
         text_hex = self._get_color_from_vars("text")
@@ -547,6 +788,33 @@ class App:
         self.text_color = text_hex
         self.background_color = bg_hex
         self._apply_theme()
+        self._save_user_settings()
+        if path_changed or hidden_changed:
+            self.load_root(self.default_root_path)
+        elif res_changed and not self.fullscreen:
+            self.redraw_all()
+
+    def reset_config_defaults(self):
+        self.display_mode.set("windowed")
+        self._resolution_index.set(DEFAULT_RESOLUTION_INDEX)
+        self._resolution_label_var.set(self._resolution_presets[DEFAULT_RESOLUTION_INDEX][0])
+
+        defaults = {
+            "background": DEFAULT_BACKGROUND,
+            "text": DEFAULT_TEXT,
+            "node": DEFAULT_NODE,
+        }
+        for key, hex_color in defaults.items():
+            r, g, b = self._hex_to_rgb(hex_color)
+            r_var, g_var, b_var = self._color_vars[key]
+            r_var.set(r)
+            g_var.set(g)
+            b_var.set(b)
+
+        self._default_root_var.set(str(DEFAULT_ROOT_PATH))
+        self._show_hidden_var.set(DEFAULT_SHOW_HIDDEN)
+
+        self.apply_config()
 
     def _sync_resolution_index(self):
         try:
@@ -633,11 +901,18 @@ class App:
             widget.configure(bg=self.background_color, fg=self.text_color,
                              selectcolor="#222222", activebackground="#222222",
                              activeforeground=self.text_color)
+        if isinstance(widget, tk.Checkbutton):
+            widget.configure(bg=self.background_color, fg=self.text_color,
+                             selectcolor="#222222", activebackground="#222222",
+                             activeforeground=self.text_color)
         if isinstance(widget, tk.Scale):
             widget.configure(bg=self.background_color, fg=self.text_color,
                              troughcolor="#222222", highlightthickness=0)
         if isinstance(widget, tk.Spinbox):
             widget.configure(bg="#111111", fg=self.text_color, insertbackground=self.text_color)
+        if isinstance(widget, tk.Entry):
+            widget.configure(bg="#111111", fg=self.text_color, insertbackground=self.text_color,
+                             relief="flat")
         for child in widget.winfo_children():
             self._update_child_theme(child)
 
@@ -654,17 +929,19 @@ class App:
         return r, g, b
 
     # ---------- Search bar ----------
-    def toggle_searchbar(self, hide_only: bool = False):
+    def toggle_searchbar(self, hide_only: bool = False, from_hover: bool = False):
         if hide_only or self.search_shown:
             self.search_frame.pack_forget()
             self.search_shown = False
             self.canvas.focus_set()
+            self._search_open_via_hover = False
         else:
-            self.search_var.set(str(self.root_node.path) if self.root_node else "")
+            self.search_var.set("")
             self.search_frame.pack(side="top", fill="x")
             self.search_shown = True
             self.search_entry.focus_set()
             self.search_entry.select_range(0, 'end')
+            self._search_open_via_hover = from_hover
 
     def _parse_resolution(self, text: str):
         # Accept "1920x1080", "1920 1080", "1920,1080"
@@ -757,13 +1034,12 @@ class App:
         self.redraw_all()
 
     def _on_wheel(self, evt):
-        # Ctrl must be held for zoom on Windows; on X11 we accept Button-4/5 without ctrl
         if hasattr(evt, "delta"):
-            if (evt.state & 0x4) == 0:  # Control bit on Windows
+            delta = evt.delta
+            if delta == 0:
                 return
-            delta = 1 if evt.delta > 0 else -1
         else:
-            delta = 1 if evt.num == 4 else -1
+            delta = 120 if evt.num == 4 else -120
         factor = 1.15 if delta > 0 else 1/1.15
         self.zoom(factor, (evt.x, evt.y))
 
@@ -807,11 +1083,107 @@ class App:
             walk(self.root_node)
         return pairs
 
+    def _truncate_label(self, label: str, padding: int = 24) -> str:
+        ellipsis = "..."
+        try:
+            max_chars = max(4, int((NODE_W - padding) // 7.0))
+        except Exception:
+            max_chars = 24
+        if len(label) <= max_chars:
+            return label
+        return label[:max_chars - len(ellipsis)] + ellipsis
+
+    def _format_node_size(self, node: Node) -> str | None:
+        if node.virtual:
+            return None
+        try:
+            if node.is_dir:
+                count, total_size = self._get_dir_stats(node.path)
+                item_text = "item" if count == 1 else "items"
+                return f"{count} {item_text}, {readable_size(total_size)}"
+            size = node.path.stat(follow_symlinks=False).st_size
+            return readable_size(size)
+        except Exception:
+            return None
+
+    def _get_dir_stats(self, path: Path) -> tuple[int, int]:
+        key = (path, self.show_hidden)
+        cached = self._size_cache.get(key)
+        if cached is not None:
+            return cached
+
+        count = 0
+        total_size = 0
+        try:
+            for entry in path.iterdir():
+                if not self.show_hidden and self._is_hidden_path(entry):
+                    continue
+                count += 1
+                try:
+                    if entry.is_dir() and not entry.is_symlink():
+                        _, child_size = self._get_dir_stats(entry)
+                        total_size += child_size
+                    else:
+                        total_size += entry.stat(follow_symlinks=False).st_size
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        stats = (count, total_size)
+        self._size_cache[key] = stats
+        return stats
+
+    def _schedule_collision_watch(self, delay: int = 220):
+        if hasattr(self, "root"):
+            if self._collision_job is not None:
+                self.root.after_cancel(self._collision_job)
+            self._collision_job = self.root.after(delay, self._collision_watch)
+
+    def _collision_watch(self):
+        self._collision_job = None
+        if not self.root_node:
+            return
+        if self._drag_node is not None or self.force_running:
+            self._schedule_collision_watch()
+            return
+        moved = self._resolve_global_collisions()
+        if moved:
+            self.redraw_all()
+        self._schedule_collision_watch()
+
+    def _start_force_simulation(self):
+        if self.force_running:
+            return
+        self.force_running = True
+        self._force_step()
+
+    def _on_global_mouse_move(self, event):
+        try:
+            root_y = self.root.winfo_rooty()
+        except Exception:
+            return
+        threshold = root_y + 8
+        if event.y_root <= threshold:
+            if not self.search_shown:
+                self.toggle_searchbar(from_hover=True)
+            return
+
+        if self.search_shown and self._search_open_via_hover:
+            try:
+                bar_top = self.search_frame.winfo_rooty()
+                bar_bottom = bar_top + self.search_frame.winfo_height()
+            except Exception:
+                bar_bottom = root_y + 42
+            if event.y_root > bar_bottom + 6:
+                self.toggle_searchbar(hide_only=True)
+
     # ---------- Collision resolution ----------
-    def _resolve_global_collisions(self, anchor: Node | None = None):
+    def _resolve_global_collisions(self, anchor: Node | None = None) -> bool:
         nodes = self._all_nodes()
         hw = self.box_w_world / 2.0
         hh = self.box_h_world / 2.0
+        moved_overall = False
         for _ in range(COLLISION_ITER):
             moved_any = False
             for i in range(len(nodes)):
@@ -846,16 +1218,21 @@ class App:
                 ax, ay = a.x, a.y
             if not moved_any:
                 break
-
+            moved_overall = True
+        return moved_overall
     # ---------- Node dragging (canvas-level continuous with neighbor push) ----------
     def _bind_node_events(self, node: Node):
         self.canvas.tag_bind(node.tag, "<Button-1>", lambda e, n=node: self._node_press(e, n))
-        self.canvas.tag_bind(node.tag, "<Double-Button-1>", lambda e, n=node: self._toggle_and_redraw(n))
+        self.canvas.tag_bind(node.tag, "<Double-Button-1>", lambda e, n=node: self._rename_node(e, n))
 
     def _node_press(self, evt, node: Node):
+        if self._drag_node is not None:
+            return
         self._drag_node = node
         self._last_drag_screen = (evt.x, evt.y)
         self.force_running = False
+        self._node_dragging = False
+        self._suppress_click = False
         self.canvas.bind("<B1-Motion>", self._node_drag_global)
         self.canvas.bind("<ButtonRelease-1>", self._node_release_global)
 
@@ -864,6 +1241,9 @@ class App:
             return
         sx0, sy0 = self._last_drag_screen
         sx1, sy1 = evt.x, evt.y
+        if not self._node_dragging:
+            if abs(sx1 - sx0) >= 2 or abs(sy1 - sy0) >= 2:
+                self._node_dragging = True
         w0x, w0y = self.screen_to_world(sx0, sy0)
         w1x, w1y = self.screen_to_world(sx1, sy1)
         dx = w1x - w0x
@@ -875,15 +1255,76 @@ class App:
         self.redraw_all()
 
     def _node_release_global(self, _evt):
+        node = self._drag_node
         self._drag_node = None
         self.canvas.unbind("<B1-Motion>")
         self.canvas.unbind("<ButtonRelease-1>")
+        if node and not self._node_dragging and not self._suppress_click:
+            self._handle_node_click(node)
+        self._node_dragging = False
+        self._suppress_click = False
+        self._start_force_simulation()
+
+    def _rename_node(self, _evt, node: Node):
+        self._suppress_click = True
+        if node.virtual:
+            return
+        self._drag_node = None
+        self._node_dragging = False
+        try:
+            if not node.path.exists():
+                messagebox.showerror("Rename Failed", "The selected item no longer exists.")
+                return
+        except OSError:
+            messagebox.showerror("Rename Failed", "Unable to access the selected item.")
+            return
+
+        initial = node.path.name
+        new_name = simpledialog.askstring("Rename", "Enter a new name:", initialvalue=initial, parent=self.root)
+        if new_name is None:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            messagebox.showerror("Rename Failed", "Name cannot be empty.")
+            return
+        if new_name in (".", ".."):
+            messagebox.showerror("Rename Failed", "Invalid name.")
+            return
+        separators = {os.sep}
+        if os.altsep:
+            separators.add(os.altsep)
+        if any(sep in new_name for sep in separators):
+            messagebox.showerror("Rename Failed", "Name cannot contain path separators.")
+            return
+
+        old_path = node.path
+        new_path = old_path.parent / new_name
+        if new_path.exists():
+            messagebox.showerror("Rename Failed", f"'{new_name}' already exists.")
+            return
+        try:
+            old_path.rename(new_path)
+        except Exception as exc:
+            messagebox.showerror("Rename Failed", str(exc))
+            return
+
+        if self.default_root_path == old_path:
+            self.default_root_path = new_path
+            self._default_root_var.set(str(self.default_root_path))
+        if self.root_node and self.root_node.path == old_path:
+            root_target = new_path
+        else:
+            root_target = self.root_node.path if self.root_node else new_path
+
+        self._save_user_settings()
+        self.load_root(root_target)
 
     # ---------- Force-directed layout ----------
     def toggle_force(self):
-        self.force_running = not self.force_running
         if self.force_running:
-            self._force_step()
+            self.force_running = False
+        else:
+            self._start_force_simulation()
 
     def _force_step(self):
         if not self.force_running:
@@ -956,14 +1397,25 @@ class App:
             self.load_root(self.root_node.path)
 
     def load_root(self, path: Path):
+        self._size_cache.clear()
         self.canvas.delete("all")
         self.scale_factor = 1.0
         self._update_world_box_size()
-        self.offset_x = self.canvas.winfo_width()/2
-        self.offset_y = self.canvas.winfo_height()/2
+        self.root.update_idletasks()
+        self.canvas.update_idletasks()
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+        if canvas_w <= 1 or canvas_h <= 1:
+            canvas_w = 1280
+            canvas_h = 840
+        self.offset_x = canvas_w / 2
+        self.offset_y = canvas_h / 2
         self.root_node = Node(self, str(path), path, True, 0, 0, None)
         self.root_node.expand()
+        self._resolve_global_collisions(anchor=self.root_node)
         self.redraw_all()
+        self._schedule_collision_watch()
+        self._start_force_simulation()
 
     # ---------- Drawing ----------
     def _draw_node_recursive(self, node: Node):
@@ -992,8 +1444,13 @@ class App:
         if node.is_dir:
             self.canvas.create_rectangle(icon_x0+2, icon_y0-6, icon_x0+14, icon_y0, outline=self.node_color, width=LINE_W, tags=tags)
 
-        text = node.label if len(node.label) <= 26 else node.label[:24] + "..."
-        self.canvas.create_text(x0+34, (y0+y1)/2, text=text, fill=self.text_color, anchor="w", font=("Segoe UI", 10), tags=tags)
+        text = self._truncate_label(node.label)
+        self.canvas.create_text(x0+34, (y0+y1)/2 - 6, text=text, fill=self.text_color, anchor="w", font=("Segoe UI", 10), tags=tags)
+
+        size_text = self._format_node_size(node)
+        if size_text:
+            self.canvas.create_text((x0+x1)/2, y1 - 8, text=size_text, fill=self.text_color,
+                                    font=("Segoe UI", 9), tags=tags)
 
         self._bind_node_events(node)
 
@@ -1006,15 +1463,22 @@ class App:
         if self.root_node:
             self._draw_node_recursive(self.root_node)
 
-    def _toggle_and_redraw(self, node: Node):
-        if node.expanded:
-            node.collapse()
-        else:
+    def _handle_node_click(self, node: Node):
+        if node.virtual:
+            return
+        if not node.expanded:
             node.expand()
+        else:
+            node.collapse()
+        self._resolve_global_collisions(anchor=node)
         self.redraw_all()
+        self._start_force_simulation()
 
     def run(self):
-        self.root.geometry("1280x840")
+        if not self.fullscreen:
+            idx = max(0, min(len(self._resolution_presets) - 1, self._resolution_index.get()))
+            width, height = self._resolution_presets[idx][1]
+            self.root.geometry(f"{width}x{height}")
         self.root.mainloop()
 
 
