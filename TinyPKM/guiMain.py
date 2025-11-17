@@ -19,6 +19,7 @@ import stat
 import math
 import time
 import re
+import shutil
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, colorchooser, messagebox, simpledialog
@@ -153,7 +154,7 @@ class Node:
 class App:
     def __init__(self, root_path: Path | None = None):
         self.root = tk.Tk()
-        self.root.title("PKMS Graph Browser (Tkinter)")
+        self.root.title("TinyPKM")
         self.background_color = BG
         self.text_color = FG
         self.node_color = DEFAULT_NODE
@@ -229,6 +230,8 @@ class App:
         self._last_drag_screen = (0, 0)   # incremental dragging reference
         self._node_dragging = False
         self._suppress_click = False
+        self._pan_moved = False
+        self._context_target_node: Node | None = None
 
         # Force simulation
         self.force_running = False
@@ -1046,6 +1049,8 @@ class App:
     def _pan_start(self, evt):
         self._panning = True
         self._drag_start = (evt.x, evt.y)
+        self._pan_moved = False
+        self._context_target_node = self._node_at_canvas(evt.x, evt.y)
 
     def _pan_move(self, evt):
         if not self._panning or not self._drag_start:
@@ -1053,14 +1058,25 @@ class App:
         x0, y0 = self._drag_start
         dx = evt.x - x0
         dy = evt.y - y0
+        if not self._pan_moved:
+            if abs(dx) < 3 and abs(dy) < 3:
+                return
+            self._pan_moved = True
         self._drag_start = (evt.x, evt.y)
         self.offset_x += dx
         self.offset_y += dy
         self.redraw_all()
 
-    def _pan_end(self, _evt):
+    def _pan_end(self, evt):
+        if not self._panning:
+            return
+        show_menu = not self._pan_moved
+        target = self._context_target_node
         self._panning = False
         self._drag_start = None
+        self._context_target_node = None
+        if show_menu:
+            self._show_context_menu(evt.x_root, evt.y_root, target)
 
     # ---------- Node utilities ----------
     def _all_nodes(self) -> list[Node]:
@@ -1082,6 +1098,28 @@ class App:
         if self.root_node:
             walk(self.root_node)
         return pairs
+
+    def _find_node_by_tag(self, tag: str) -> Node | None:
+        if not self.root_node:
+            return None
+        stack = [self.root_node]
+        while stack:
+            node = stack.pop()
+            if node.tag == tag:
+                return node
+            stack.extend(node.children)
+        return None
+
+    def _node_at_canvas(self, sx: float, sy: float) -> Node | None:
+        hits = self.canvas.find_overlapping(sx, sy, sx, sy)
+        for item in hits:
+            tags = self.canvas.gettags(item)
+            for tag in tags:
+                if tag.startswith("node_"):
+                    node = self._find_node_by_tag(tag)
+                    if node:
+                        return node
+        return None
 
     def _truncate_label(self, label: str, padding: int = 24) -> str:
         ellipsis = "..."
@@ -1429,6 +1467,8 @@ class App:
         x0, y0, x1, y1 = sx - NODE_W/2, sy - NODE_H/2, sx + NODE_W/2, sy + NODE_H/2
         r = RADIUS
         tags = (node.tag, "node")
+        # Add an invisible-but-clickable hit box so the whole rectangle responds to events.
+        self.canvas.create_rectangle(x0, y0, x1, y1, fill=self.background_color, outline="", width=0, tags=tags)
         self.canvas.create_arc(x0, y0, x0+2*r, y0+2*r, start=90, extent=90, style="arc", outline=self.node_color, width=LINE_W, tags=tags)
         self.canvas.create_arc(x1-2*r, y0, x1, y0+2*r, start=0, extent=90, style="arc", outline=self.node_color, width=LINE_W, tags=tags)
         self.canvas.create_arc(x1-2*r, y1-2*r, x1, y1, start=270, extent=90, style="arc", outline=self.node_color, width=LINE_W, tags=tags)
@@ -1473,6 +1513,86 @@ class App:
         self._resolve_global_collisions(anchor=node)
         self.redraw_all()
         self._start_force_simulation()
+
+    # ---------- Context menu & file operations ----------
+    def _show_context_menu(self, x_root: int, y_root: int, target: Node | None):
+        menu = tk.Menu(self.root, tearoff=0)
+        actionable_target = target if (target and not target.virtual) else None
+        if actionable_target:
+            menu.add_command(label="Delete", command=lambda n=actionable_target: self._delete_node(n))
+        else:
+            has_root = bool(self.root_node and getattr(self.root_node, "path", None))
+            state = "normal" if has_root else "disabled"
+            menu.add_command(label="New File", state=state, command=lambda: self._create_entry(is_dir=False))
+            menu.add_command(label="New Folder", state=state, command=lambda: self._create_entry(is_dir=True))
+        try:
+            menu.tk_popup(x_root, y_root)
+        finally:
+            menu.grab_release()
+
+    def _create_entry(self, is_dir: bool):
+        base_dir = self.root_node.path if self.root_node else None
+        if not base_dir:
+            messagebox.showerror("Create Failed", "No active directory to create items in.")
+            return
+        prompt = "Enter new folder name:" if is_dir else "Enter new file name:"
+        new_name = simpledialog.askstring("Create Item", prompt, parent=self.root)
+        if new_name is None:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            messagebox.showerror("Create Failed", "Name cannot be empty.")
+            return
+        if new_name in (".", ".."):
+            messagebox.showerror("Create Failed", "Invalid name.")
+            return
+        separators = {os.sep}
+        if os.altsep:
+            separators.add(os.altsep)
+        if any(sep in new_name for sep in separators):
+            messagebox.showerror("Create Failed", "Name cannot contain path separators.")
+            return
+        target_path = Path(base_dir) / new_name
+        if target_path.exists():
+            messagebox.showerror("Create Failed", f"'{new_name}' already exists.")
+            return
+        try:
+            if is_dir:
+                target_path.mkdir()
+            else:
+                target_path.touch(exist_ok=False)
+        except Exception as exc:
+            messagebox.showerror("Create Failed", str(exc))
+            return
+        self.reload()
+
+    def _delete_node(self, node: Node):
+        if node.virtual:
+            return
+        if node is self.root_node:
+            messagebox.showwarning("Delete Blocked", "Cannot delete the root directory from this view.")
+            return
+        try:
+            path = node.path
+        except AttributeError:
+            messagebox.showerror("Delete Failed", "Unknown target.")
+            return
+        if not path.exists():
+            messagebox.showinfo("Delete", "Item already deleted; refreshing view.")
+            self.reload()
+            return
+        label = f"'{path.name}'" if path.name else str(path)
+        if not messagebox.askyesno("Delete", f"Delete {label}? This cannot be undone."):
+            return
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except Exception as exc:
+            messagebox.showerror("Delete Failed", str(exc))
+            return
+        self.reload()
 
     def run(self):
         if not self.fullscreen:
