@@ -3,7 +3,7 @@
 PKMS Graph Browser (Tkinter version, Python 3.13+ compatible)
 - Black background, white outlines
 - Click folder to expand/collapse; click file to show metadata
-- Pan: Right-drag | Zoom: Ctrl + Wheel or +/-
+ - Pan: Left-drag empty space | Zoom: Ctrl + Wheel or +/-
 - Drag nodes: Left-drag anywhere on a node (continuous, canvas-level)
 - Edges clipped to box borders
 - Scale-aware box collisions + neighbor "push" (domino effect)
@@ -23,6 +23,12 @@ import shutil
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, colorchooser, messagebox, simpledialog
+
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = None
+    ImageTk = None
 
 DEFAULT_BACKGROUND = "#000000"
 DEFAULT_TEXT = "#FFFFFF"
@@ -55,6 +61,10 @@ K_SPRING = 0.035      # attractive spring constant along edges
 SPRING_REST = 260.0   # desired edge length
 DAMPING = 0.78
 MAX_STEP = 48.0       # clamp per-step movement in world units
+DOUBLE_CLICK_MAX_INTERVAL = 0.25  # seconds; tighten double-click window for rename
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp"}
+IMAGE_PREVIEW_MAX_WIDTH = 960
+IMAGE_PREVIEW_MAX_HEIGHT = 720
 
 
 def readable_size(num_bytes: int) -> str:
@@ -119,14 +129,17 @@ class Node:
                 entries = entries[:MAX_CHILDREN]
                 labels = [(p.name, p, p.is_dir(), False) for p in entries]
             else:
-                p = self.path
-                st = p.stat()
-                typ = p.suffix.lower()[1:] if p.suffix else "file"
-                labels = [
-                    (f"Type: {typ}", p, False, True),
-                    (f"Size: {readable_size(st.st_size)}", p, False, True),
-                    (f"Modified: {time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}", p, False, True),
-                ]
+                if not self.app or not self.app._should_generate_file_metadata(self):
+                    labels = []
+                else:
+                    p = self.path
+                    st = p.stat()
+                    typ = p.suffix.lower()[1:] if p.suffix else "file"
+                    labels = [
+                        (f"Type: {typ}", p, False, True),
+                        (f"Size: {readable_size(st.st_size)}", p, False, True),
+                        (f"Modified: {time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))}", p, False, True),
+                    ]
         except Exception as e:
             labels = [(f"Error: {e}", self.path, False, True)]
 
@@ -206,7 +219,7 @@ class App:
             ("Plus (+)", "Zoom in"),
             ("Minus (-) / Underscore (_)", "Zoom out"),
             ("Ctrl + Mouse Wheel", "Zoom on cursor"),
-            ("Right Mouse Drag", "Pan canvas"),
+            ("Left Mouse Drag (empty canvas)", "Pan canvas"),
             ("Left Drag on node", "Drag node position"),
             ("Double-click node", "Expand or collapse node"),
         ]
@@ -231,7 +244,26 @@ class App:
         self._node_dragging = False
         self._suppress_click = False
         self._pan_moved = False
-        self._context_target_node: Node | None = None
+        self._last_click_node: Node | None = None
+        self._last_click_time = 0.0
+        self._expand_animations: dict[Node, dict[str, object]] = {}
+        self._image_panel_frame: tk.Frame | None = None
+        self._image_panel_canvas: tk.Canvas | None = None
+        self._image_panel_title: tk.Label | None = None
+        self._image_panel_path: Path | None = None
+        self._image_panel_photo: tk.PhotoImage | None = None
+        self._image_panel_base_image = None
+        self._image_panel_zoom = 1.0
+        self._image_panel_image_id: int | None = None
+        self._image_panel_offset = (0.0, 0.0)
+        self._image_panel_drag_offset: tuple[int, int] | None = None
+        self._image_panel_position: tuple[int, int] | None = None
+        self._image_panel_size: tuple[int, int] | None = (480, 360)
+        self._image_panel_pan_start: tuple[int, int] | None = None
+        self._image_panel_resize_start: tuple[int, int, int, int] | None = None
+        self._image_panel_resizing = False
+        self._image_panel_resize_from_canvas = False
+        self._image_panel_auto_size = False
 
         # Force simulation
         self.force_running = False
@@ -271,10 +303,10 @@ class App:
         self._apply_window_preferences()
 
         self.root.bind("<Configure>", self._on_resize)
-        # Pan with right mouse
-        self.canvas.bind("<ButtonPress-3>", self._pan_start)
-        self.canvas.bind("<B3-Motion>", self._pan_move)
-        self.canvas.bind("<ButtonRelease-3>", self._pan_end)
+        # Pan with left mouse (background drag)
+        self.canvas.bind("<ButtonPress-1>", self._pan_start)
+        # Right-click for context menu actions
+        self.canvas.bind("<ButtonPress-3>", self._context_click)
         # Wheel zoom (Ctrl + Wheel)
         self.canvas.bind("<MouseWheel>", self._on_wheel)  # Windows
         self.canvas.bind("<Button-4>", self._on_wheel)    # Linux scroll up
@@ -390,6 +422,9 @@ class App:
             except (OSError, AttributeError):
                 return False
         return False
+
+    def _should_generate_file_metadata(self, node: Node) -> bool:
+        return not self._is_image_file(node)
 
     def open_settings(self):
         self.display_mode.set("fullscreen" if self.fullscreen else "windowed")
@@ -1047,10 +1082,15 @@ class App:
         self.zoom(factor, (evt.x, evt.y))
 
     def _pan_start(self, evt):
+        if self._drag_node is not None:
+            return "break"
+        if self._node_at_canvas(evt.x, evt.y):
+            return
         self._panning = True
         self._drag_start = (evt.x, evt.y)
         self._pan_moved = False
-        self._context_target_node = self._node_at_canvas(evt.x, evt.y)
+        self.canvas.bind("<B1-Motion>", self._pan_move)
+        self.canvas.bind("<ButtonRelease-1>", self._pan_end)
 
     def _pan_move(self, evt):
         if not self._panning or not self._drag_start:
@@ -1067,16 +1107,18 @@ class App:
         self.offset_y += dy
         self.redraw_all()
 
-    def _pan_end(self, evt):
+    def _pan_end(self, _evt):
         if not self._panning:
             return
-        show_menu = not self._pan_moved
-        target = self._context_target_node
         self._panning = False
         self._drag_start = None
-        self._context_target_node = None
-        if show_menu:
-            self._show_context_menu(evt.x_root, evt.y_root, target)
+        self._pan_moved = False
+        self.canvas.unbind("<B1-Motion>")
+        self.canvas.unbind("<ButtonRelease-1>")
+
+    def _context_click(self, evt):
+        target = self._node_at_canvas(evt.x, evt.y)
+        self._show_context_menu(evt.x_root, evt.y_root, target)
 
     # ---------- Node utilities ----------
     def _all_nodes(self) -> list[Node]:
@@ -1120,6 +1162,351 @@ class App:
                     if node:
                         return node
         return None
+
+    # ---------- Image helpers ----------
+    def _is_image_file(self, node: Node) -> bool:
+        if node.virtual or node.is_dir:
+            return False
+        suffix = node.path.suffix.lower()
+        return suffix in IMAGE_EXTENSIONS
+
+    def _load_image_for_preview(self, path: Path) -> tuple[object | None, tk.PhotoImage | None]:
+        if not path.exists():
+            messagebox.showerror("Preview Failed", "Image no longer exists on disk.")
+            return (None, None)
+        if Image and ImageTk:
+            try:
+                img = Image.open(path)
+                img.load()
+                base = img.copy()
+                img.close()
+                return (base, None)
+            except Exception as exc:
+                messagebox.showerror("Preview Failed", f"Could not load image: {exc}")
+                return (None, None)
+        try:
+            photo = tk.PhotoImage(file=str(path))
+            return (None, photo)
+        except Exception as exc:
+            messagebox.showerror("Preview Failed", f"Could not load image: {exc}")
+            return (None, None)
+
+    def _ensure_image_panel(self):
+        if self._image_panel_frame and self._image_panel_frame.winfo_exists():
+            return self._image_panel_frame
+        frame = tk.Frame(self.root, bg=self.background_color, bd=1, relief="ridge",
+                         highlightbackground="#333333", highlightthickness=1)
+        frame.place(x=120, y=120, width=320, height=240)
+        frame.pack_propagate(False)
+        header = tk.Frame(frame, bg=self.background_color, cursor="fleur")
+        header.pack(side="top", fill="x")
+        title = tk.Label(header, text="Preview", bg=self.background_color, fg=self.text_color,
+                         font=("Segoe UI", 11, "bold"))
+        title.pack(side="left", padx=10, pady=6)
+        close_btn = tk.Button(header, text="X", command=lambda: self._hide_image_panel(),
+                              bg="#111111", fg=self.text_color, relief="flat",
+                              font=("Segoe UI", 9, "bold"), highlightthickness=0,
+                              activebackground="#222222", activeforeground=self.text_color, padx=6, pady=2)
+        close_btn.pack(side="right", padx=10, pady=6)
+        body = tk.Frame(frame, bg=self.background_color)
+        body.pack(side="top", fill="both", expand=True)
+        canvas = tk.Canvas(body, bg=self.background_color, highlightthickness=0, bd=0)
+        canvas.pack(side="top", fill="both", expand=True, padx=8, pady=(0, 8))
+        canvas.bind("<Configure>", lambda _e: self._update_image_canvas_position())
+        canvas.bind("<MouseWheel>", self._on_image_panel_wheel)
+        canvas.bind("<Button-4>", lambda e: self._on_image_panel_wheel(e, delta=120))
+        canvas.bind("<Button-5>", lambda e: self._on_image_panel_wheel(e, delta=-120))
+        canvas.bind("<ButtonPress-1>", self._start_image_pan)
+        canvas.bind("<B1-Motion>", self._drag_image_pan)
+        canvas.bind("<ButtonRelease-1>", self._stop_image_pan)
+        header.bind("<ButtonPress-1>", self._start_image_panel_drag)
+        header.bind("<B1-Motion>", self._drag_image_panel)
+        header.bind("<ButtonRelease-1>", self._stop_image_panel_drag)
+        title.bind("<ButtonPress-1>", self._start_image_panel_drag)
+        title.bind("<B1-Motion>", self._drag_image_panel)
+        title.bind("<ButtonRelease-1>", self._stop_image_panel_drag)
+        canvas.bind("<Motion>", self._update_image_canvas_cursor)
+        canvas.bind("<Leave>", lambda _e: self._reset_image_canvas_cursor())
+        self._image_panel_frame = frame
+        self._image_panel_canvas = canvas
+        self._image_panel_title = title
+        return frame
+
+    def _place_image_panel(self, width: int | None = None, height: int | None = None):
+        frame = self._ensure_image_panel()
+        cur_w, cur_h = self._image_panel_size or (360, 280)
+        width = width or cur_w
+        height = height or cur_h
+        self._image_panel_size = (width, height)
+        frame.config(width=width, height=height)
+        if not self._image_panel_position or any(v is None for v in self._image_panel_position):
+            root_w = max(self.root.winfo_width(), width + 80)
+            x = max(24, root_w - width - 40)
+            y = max(60, 80)
+            self._image_panel_position = (x, y)
+        x, y = self._image_panel_position
+        frame.place(x=x, y=y, width=width, height=height)
+        self._image_panel_position = (x, y)
+        frame.lift()
+
+    def _start_image_panel_drag(self, event):
+        if not self._image_panel_frame:
+            return
+        self._image_panel_drag_offset = (event.x, event.y)
+        self._image_panel_frame.lift()
+
+    def _drag_image_panel(self, event):
+        if not self._image_panel_frame or not self._image_panel_drag_offset:
+            return
+        dx = event.x - self._image_panel_drag_offset[0]
+        dy = event.y - self._image_panel_drag_offset[1]
+        x = self._image_panel_frame.winfo_x() + dx
+        y = self._image_panel_frame.winfo_y() + dy
+        self._image_panel_position = (x, y)
+        self._image_panel_frame.place(x=x, y=y)
+
+    def _stop_image_panel_drag(self, _event):
+        self._image_panel_drag_offset = None
+
+    def _start_image_panel_resize(self, event):
+        if not self._image_panel_frame or not self._image_panel_size:
+            return
+        self._image_panel_resize_start = (
+            event.x_root,
+            event.y_root,
+            self._image_panel_size[0],
+            self._image_panel_size[1],
+        )
+        self._image_panel_resizing = True
+        self._image_panel_resize_from_canvas = event.widget is self._image_panel_canvas
+        if self._image_panel_canvas:
+            self._image_panel_canvas.config(cursor="size_se")
+
+    def _perform_image_panel_resize(self, event):
+        if not self._image_panel_resize_start:
+            return
+        x0, y0, w0, h0 = self._image_panel_resize_start
+        dx = event.x_root - x0
+        dy = event.y_root - y0
+        width = max(220, w0 + dx)
+        height = max(200, h0 + dy)
+        self._image_panel_size = (width, height)
+        self._image_panel_auto_size = False
+        self._place_image_panel(width, height)
+
+    def _stop_image_panel_resize(self, _event):
+        self._image_panel_resize_start = None
+        self._image_panel_resizing = False
+        self._image_panel_resize_from_canvas = False
+        self._reset_image_canvas_cursor()
+
+    def _start_image_pan(self, event):
+        if not self._image_panel_canvas or not self._image_panel_photo:
+            return
+        if self._should_resize_canvas(event):
+            self._start_image_panel_resize(event)
+            return "break"
+        self._image_panel_canvas.config(cursor="fleur")
+        self._image_panel_pan_start = (event.x, event.y)
+
+    def _drag_image_pan(self, event):
+        if not self._image_panel_canvas or not self._image_panel_photo:
+            return
+        if self._image_panel_resizing:
+            self._perform_image_panel_resize(event)
+            return
+        if not self._image_panel_pan_start:
+            return
+        sx, sy = self._image_panel_pan_start
+        dx = event.x - sx
+        dy = event.y - sy
+        ox, oy = self._image_panel_offset
+        self._image_panel_offset = (ox + dx, oy + dy)
+        self._image_panel_pan_start = (event.x, event.y)
+        self._update_image_canvas_position()
+
+    def _stop_image_pan(self, _event):
+        if self._image_panel_resizing:
+            self._stop_image_panel_resize(_event)
+            return
+        if self._image_panel_canvas:
+            self._image_panel_canvas.config(cursor="")
+        self._image_panel_pan_start = None
+
+    def _hide_image_panel(self, path: Path | None = None):
+        if path is not None and self._image_panel_path and path != self._image_panel_path:
+            return
+        if self._image_panel_frame and self._image_panel_frame.winfo_exists():
+            self._image_panel_frame.place_forget()
+        self._reset_image_canvas()
+        self._image_panel_photo = None
+        self._image_panel_path = None
+        self._image_panel_base_image = None
+        self._image_panel_zoom = 1.0
+        self._image_panel_offset = (0.0, 0.0)
+        self._image_panel_pan_start = None
+        self._image_panel_resizing = False
+        self._image_panel_resize_from_canvas = False
+        self._image_panel_auto_size = False
+
+    def _compute_initial_image_zoom(self, img) -> float:
+        try:
+            w, h = img.size
+        except Exception:
+            return 1.0
+        if w <= 0 or h <= 0:
+            return 1.0
+        self.root.update_idletasks()
+        limit_w = max(320, int(self.root.winfo_width() * 0.5) or 320)
+        limit_h = max(320, int(self.root.winfo_height() * 0.6) or 320)
+        scale_w = limit_w / w
+        scale_h = limit_h / h
+        scale = min(scale_w, scale_h, 1.0)
+        return max(scale, 0.1)
+
+    def _update_image_canvas_position(self):
+        if not self._image_panel_canvas or not self._image_panel_photo:
+            return
+        canvas = self._image_panel_canvas
+        if self._image_panel_image_id is None:
+            self._image_panel_image_id = canvas.create_image(0, 0, image=self._image_panel_photo, anchor="center")
+        canvas.update_idletasks()
+        width = max(1, canvas.winfo_width())
+        height = max(1, canvas.winfo_height())
+        cx = width / 2 + self._image_panel_offset[0]
+        cy = height / 2 + self._image_panel_offset[1]
+        canvas.coords(self._image_panel_image_id, cx, cy)
+
+    def _reset_image_canvas(self):
+        if self._image_panel_canvas and self._image_panel_image_id is not None:
+            try:
+                self._image_panel_canvas.delete(self._image_panel_image_id)
+            except Exception:
+                pass
+        self._image_panel_image_id = None
+
+    def _should_resize_canvas(self, event) -> bool:
+        canvas = self._image_panel_canvas
+        if not canvas:
+            return False
+        canvas.update_idletasks()
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 0 or height <= 0:
+            return False
+        margin = 14
+        near_right = (width - event.x) <= margin
+        near_bottom = (height - event.y) <= margin
+        return near_right or near_bottom
+
+    def _update_image_canvas_cursor(self, event):
+        canvas = self._image_panel_canvas
+        if not canvas:
+            return
+        if self._image_panel_resizing:
+            canvas.config(cursor="size_se")
+            return
+        if self._should_resize_canvas(event):
+            canvas.config(cursor="size_se")
+        else:
+            canvas.config(cursor="")
+
+    def _reset_image_canvas_cursor(self):
+        if self._image_panel_canvas and not self._image_panel_resizing:
+            self._image_panel_canvas.config(cursor="")
+
+    def _update_image_panel_photo(self):
+        if not (self._image_panel_base_image and Image and ImageTk and self._image_panel_canvas):
+            return
+        img = self._image_panel_base_image
+        zoom = self._image_panel_zoom
+        width = max(1, int(img.width * zoom))
+        height = max(1, int(img.height * zoom))
+        try:
+            resample = Image.LANCZOS
+        except AttributeError:
+            resample = Image.BICUBIC
+        scaled = img.resize((width, height), resample)
+        photo = ImageTk.PhotoImage(scaled)
+        self._image_panel_photo = photo
+        canvas = self._image_panel_canvas
+        if self._image_panel_image_id is None:
+            self._image_panel_image_id = canvas.create_image(0, 0, image=photo, anchor="center")
+        else:
+            canvas.itemconfigure(self._image_panel_image_id, image=photo)
+        if self._image_panel_auto_size:
+            panel_w = min(max(width + 48, 240), max(320, int(self.root.winfo_width() * 0.8)))
+            panel_h = min(max(height + 92, 260), max(320, int(self.root.winfo_height() * 0.85)))
+            self._image_panel_size = (panel_w, panel_h)
+            self._image_panel_auto_size = False
+        self._update_image_canvas_position()
+        self._place_image_panel()
+
+    def _on_image_panel_wheel(self, event, delta: int | None = None):
+        if self._image_panel_base_image is None or not (Image and ImageTk):
+            return
+        if delta is None:
+            delta = getattr(event, "delta", 0)
+        if delta == 0:
+            return "break"
+        if delta < 0:
+            factor = 1 / 1.15
+        else:
+            factor = 1.15
+        new_zoom = self._image_panel_zoom * factor
+        new_zoom = max(0.1, min(5.0, new_zoom))
+        if abs(new_zoom - self._image_panel_zoom) < 1e-5:
+            return "break"
+        self._image_panel_zoom = new_zoom
+        self._update_image_panel_photo()
+        return "break"
+
+    def _open_image_preview(self, node: Node):
+        path = node.path
+        if self._image_panel_path == path and self._image_panel_frame and self._image_panel_frame.winfo_ismapped():
+            self._image_panel_frame.lift()
+            return
+        base_image, photo_direct = self._load_image_for_preview(path)
+        if base_image is None and photo_direct is None:
+            return
+        self._ensure_image_panel()
+        self._reset_image_canvas()
+        if self._image_panel_title:
+            self._image_panel_title.config(text=path.name or str(path))
+        self._image_panel_offset = (0.0, 0.0)
+        self._image_panel_pan_start = None
+        self._image_panel_resizing = False
+        self._image_panel_resize_start = None
+        self._reset_image_canvas_cursor()
+        self._image_panel_path = path
+        if base_image is not None and Image and ImageTk:
+            self._image_panel_base_image = base_image
+            self._image_panel_zoom = self._compute_initial_image_zoom(base_image)
+            self._image_panel_auto_size = True
+            self._update_image_panel_photo()
+        else:
+            self._image_panel_base_image = None
+            self._image_panel_zoom = 1.0
+            photo = photo_direct
+            if not photo:
+                return
+            if self._image_panel_canvas is None:
+                self._ensure_image_panel()
+            canvas = self._image_panel_canvas
+            if canvas:
+                if self._image_panel_image_id is None:
+                    self._image_panel_image_id = canvas.create_image(0, 0, image=photo, anchor="center")
+                else:
+                    canvas.itemconfigure(self._image_panel_image_id, image=photo)
+            self._image_panel_photo = photo
+            if photo:
+                self._image_panel_auto_size = True
+                width = min(max(photo.width() + 48, 240), max(320, int(self.root.winfo_width() * 0.5) or 320))
+                height = min(max(photo.height() + 92, 260), max(320, int(self.root.winfo_height() * 0.6) or 320))
+                self._image_panel_size = (width, height)
+                self._update_image_canvas_position()
+                self._image_panel_auto_size = False
+        self._place_image_panel()
 
     def _truncate_label(self, label: str, padding: int = 24) -> str:
         ellipsis = "..."
@@ -1261,11 +1648,10 @@ class App:
     # ---------- Node dragging (canvas-level continuous with neighbor push) ----------
     def _bind_node_events(self, node: Node):
         self.canvas.tag_bind(node.tag, "<Button-1>", lambda e, n=node: self._node_press(e, n))
-        self.canvas.tag_bind(node.tag, "<Double-Button-1>", lambda e, n=node: self._rename_node(e, n))
 
     def _node_press(self, evt, node: Node):
         if self._drag_node is not None:
-            return
+            return "break"
         self._drag_node = node
         self._last_drag_screen = (evt.x, evt.y)
         self.force_running = False
@@ -1273,6 +1659,7 @@ class App:
         self._suppress_click = False
         self.canvas.bind("<B1-Motion>", self._node_drag_global)
         self.canvas.bind("<ButtonRelease-1>", self._node_release_global)
+        return "break"
 
     def _node_drag_global(self, evt):
         if not self._drag_node:
@@ -1297,14 +1684,26 @@ class App:
         self._drag_node = None
         self.canvas.unbind("<B1-Motion>")
         self.canvas.unbind("<ButtonRelease-1>")
+        if self._node_dragging:
+            self._last_click_node = None
         if node and not self._node_dragging and not self._suppress_click:
-            self._handle_node_click(node)
+            now = time.perf_counter()
+            if self._last_click_node is node and (now - self._last_click_time) <= DOUBLE_CLICK_MAX_INTERVAL:
+                self._last_click_node = None
+                self._last_click_time = 0.0
+                self._rename_node(None, node)
+            else:
+                self._last_click_node = node
+                self._last_click_time = now
+                self._handle_node_click(node)
         self._node_dragging = False
         self._suppress_click = False
         self._start_force_simulation()
 
     def _rename_node(self, _evt, node: Node):
         self._suppress_click = True
+        self._last_click_node = None
+        self._last_click_time = 0.0
         if node.virtual:
             return
         self._drag_node = None
@@ -1435,6 +1834,8 @@ class App:
             self.load_root(self.root_node.path)
 
     def load_root(self, path: Path):
+        self._cancel_all_expand_animations()
+        self._hide_image_panel()
         self._size_cache.clear()
         self.canvas.delete("all")
         self.scale_factor = 1.0
@@ -1503,9 +1904,89 @@ class App:
         if self.root_node:
             self._draw_node_recursive(self.root_node)
 
+    def _expand_with_animation(self, node: Node, steps: int = 10):
+        if node in self._expand_animations or node.expanded:
+            return
+        node.expand()
+        targets: list[tuple[Node, float, float]] = []
+        for ch in node.children:
+            targets.append((ch, ch.x, ch.y))
+            ch.x = node.x
+            ch.y = node.y
+        if not targets:
+            self.redraw_all()
+            self._resolve_global_collisions(anchor=node)
+            self._start_force_simulation()
+            return
+        self._expand_animations[node] = {"targets": targets, "step": 0, "steps": steps, "job": None}
+        self.force_running = False
+        self.redraw_all()
+        self._animate_expand_step(node)
+
+    def _animate_expand_step(self, node: Node):
+        anim = self._expand_animations.get(node)
+        if not anim:
+            return
+        step = anim.get("step", 0)
+        steps = anim.get("steps", 10)
+        if step >= steps:
+            for ch, tx, ty in anim.get("targets", []):
+                ch.x = tx
+                ch.y = ty
+            job = anim.get("job")
+            if job:
+                try:
+                    self.root.after_cancel(job)
+                except Exception:
+                    pass
+            self._expand_animations.pop(node, None)
+            self._resolve_global_collisions(anchor=node)
+            self.redraw_all()
+            self._start_force_simulation()
+            return
+        progress = (step + 1) / max(1, steps)
+        for ch, tx, ty in anim.get("targets", []):
+            ch.x = node.x + (tx - node.x) * progress
+            ch.y = node.y + (ty - node.y) * progress
+        anim["step"] = step + 1
+        self.redraw_all()
+        job = self.root.after(16, lambda n=node: self._animate_expand_step(n))
+        anim["job"] = job
+
+    def _cancel_expand_animation(self, node: Node):
+        anim = self._expand_animations.pop(node, None)
+        if not anim:
+            return
+        job = anim.get("job")
+        if job:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        for ch, tx, ty in anim.get("targets", []):
+            ch.x = tx
+            ch.y = ty
+
+    def _cancel_all_expand_animations(self):
+        for node in list(self._expand_animations.keys()):
+            self._cancel_expand_animation(node)
+        self._expand_animations.clear()
+
     def _handle_node_click(self, node: Node):
         if node.virtual:
             return
+        if self._is_image_file(node):
+            if not node.expanded:
+                self._expand_with_animation(node)
+                self._open_image_preview(node)
+            else:
+                self._cancel_expand_animation(node)
+                node.collapse()
+                self._hide_image_panel(node.path)
+                self.redraw_all()
+                self._start_force_simulation()
+            return
+        self._cancel_expand_animation(node)
         if not node.expanded:
             node.expand()
         else:
