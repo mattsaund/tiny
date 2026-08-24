@@ -7,6 +7,43 @@
 //!
 //! `[[wikilinks]]` are not CommonMark, so they are scanned out of text events
 //! and styled separately. The same scanner feeds the link graph.
+//!
+//! # Two entry points
+//!
+//! - [`render`] — full markdown. Headings get rules, lists get bullets, tables
+//!   get drawn, fenced code is syntax-highlighted via `highlight`.
+//! - [`render_plain`] — `.txt` and friends. Wraps long lines and picks out
+//!   wikilinks and URLs, and does nothing else. A `#` at the start of a line in
+//!   a text file is a hash, not a heading; a plain-text file that silently
+//!   reformatted itself would be a bug, not a feature.
+//!
+//! # Why wrapping is done by hand
+//!
+//! ratatui's `Paragraph` can wrap, but it wraps a finished `Line` — and by
+//! then every span already carries its own style. Re-wrapping smears those
+//! styles across the break, so a bolded word split over two lines loses its
+//! bold on the second half. [`wrap`] instead breaks the styled run into
+//! style-carrying tokens and reassembles them, which is also what makes the
+//! per-context indentation (list continuations, blockquote gutters) possible.
+//!
+//! # The rendering pipeline
+//!
+//! ```text
+//! source ──▶ pulldown-cmark events ──▶ Renderer ──▶ Vec<Line>
+//!                                        │
+//!                                        ├─ spans:      the inline run being built
+//!                                        ├─ style_stack: nested emphasis/strong/link
+//!                                        ├─ list_stack:  one entry per nesting level
+//!                                        └─ out:        finished lines
+//! ```
+//!
+//! The `Renderer` is a small state machine. Inline text accumulates into
+//! `spans` until something block-level ends, at which point `flush_inline` or
+//! `flush_item` wraps it into `out` and clears it. Almost every bug in here
+//! comes from a missing flush before a block boundary.
+//!
+//! Everything is measured in *display width* (`unicode-width`), not character
+//! count, so CJK text and emoji do not overflow the pane.
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
@@ -33,6 +70,14 @@ pub fn wikilinks(source: &str) -> Vec<String> {
 
 /// Split `text` into `(start, end, Option<target>)` runs. `None` marks plain
 /// text; `Some(target)` marks a wikilink whose displayed range is start..end.
+///
+/// The offsets are byte offsets into `text`, so callers can slice directly.
+/// Returned runs are contiguous and cover the whole string, which is what lets
+/// callers rebuild the text by concatenating them without losing anything.
+///
+/// Scanning is done over raw bytes for the `[[` and `]]` markers, which is
+/// safe because both are ASCII and cannot appear inside a multi-byte UTF-8
+/// sequence. An unterminated `[[` is left as ordinary text.
 fn scan_wikilinks(text: &str) -> Vec<(usize, usize, Option<String>)> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
@@ -107,6 +152,10 @@ pub fn render_plain(source: &str, width: usize, pal: &Palette) -> Vec<Line<'stat
 }
 
 /// Split a run of plain text so bare `http(s)://` URLs get the link style.
+///
+/// Only used by [`render_plain`] — real markdown has `Tag::Link` for this.
+/// Trailing sentence punctuation is trimmed off the URL, which is what makes
+/// `see https://example.com.` underline the address and not the full stop.
 fn scan_urls(text: &str, pal: &Palette) -> Vec<Span<'static>> {
     let mut out = Vec::new();
     let mut rest = text;
@@ -135,6 +184,14 @@ fn scan_urls(text: &str, pal: &Palette) -> Vec<Span<'static>> {
     out
 }
 
+/// Render markdown to styled lines fitted to `width`.
+///
+/// The enabled extensions are strikethrough, tables, task lists and footnotes
+/// — GitHub-flavoured markdown minus the parts with no sensible terminal
+/// representation. `hl` is threaded through only for fenced code blocks.
+///
+/// Trailing blank lines are trimmed so a note does not open with dead space at
+/// the bottom of the pane.
 pub fn render(source: &str, width: usize, pal: &Palette, hl: &Highlighter) -> Vec<Line<'static>> {
     let width = width.max(8);
     let mut opts = Options::empty();
@@ -172,23 +229,41 @@ fn is_blank(l: &Line<'_>) -> bool {
     l.spans.iter().all(|s| s.content.trim().is_empty())
 }
 
+/// A table being accumulated. Cells cannot be drawn as they arrive, because
+/// column widths depend on the widest cell in the whole table — so everything
+/// is buffered until `TagEnd::Table` and laid out at once by
+/// [`Renderer::emit_table`].
 struct TableState {
+    /// `rows[row][col]` is one cell's styled content.
     rows: Vec<Vec<Vec<Span<'static>>>>,
     in_head: bool,
 }
 
+/// The event-stream state machine. Lives only for the duration of one
+/// [`render`] call.
 struct Renderer<'a> {
     pal: &'a Palette,
     hl: &'a Highlighter,
+    /// Target width in cells. Everything wraps or clips to this.
     width: usize,
+    /// Finished lines, in order.
     out: Vec<Line<'static>>,
+    /// The inline run being built up, not yet wrapped into `out`. Flushed at
+    /// every block boundary.
     spans: Vec<Span<'static>>,
+    /// Nested inline styles. The base style sits at the bottom and is never
+    /// popped, so [`Renderer::style`] always has something to return.
     style_stack: Vec<Style>,
     /// One entry per nesting level; `Some(n)` is the next number in an
     /// ordered list, `None` is a bullet list.
     list_stack: Vec<Option<u64>>,
+    /// Blockquote nesting, drawn as one `│ ` gutter per level.
     quote_depth: usize,
+    /// `Some(info)` while inside a fenced block; the info string names the
+    /// language. Its presence is also how `Event::Text` knows to buffer rather
+    /// than emit.
     code_fence: Option<String>,
+    /// Raw code accumulated inside the current fence, highlighted on close.
     code_buf: String,
     table: Option<TableState>,
     /// Bullet/number to place on the first line of the current list item.
@@ -196,23 +271,30 @@ struct Renderer<'a> {
 }
 
 impl Renderer<'_> {
+    /// The style currently in effect — the top of the stack.
     fn style(&self) -> Style {
         // The stack always holds the base style, but there is no reason for a
         // rendering bug to become a crash.
         self.style_stack.last().copied().unwrap_or_default()
     }
 
+    /// Push a style derived from the current one, so emphasis nests: bold
+    /// inside a link keeps the link's underline.
     fn push_style(&mut self, f: impl FnOnce(Style) -> Style) {
         let s = f(self.style());
         self.style_stack.push(s);
     }
 
+    /// Pop back to the enclosing style, never past the base entry.
     fn pop_style(&mut self) {
         if self.style_stack.len() > 1 {
             self.style_stack.pop();
         }
     }
 
+    /// Emit a separating blank line, but never two in a row and never one at
+    /// the very top. Called at block boundaries, so this collapsing is what
+    /// keeps the spacing even without every caller having to check.
     fn blank(&mut self) {
         if !self.out.is_empty() && !self.out.last().is_some_and(is_blank) {
             self.out.push(Line::from(""));
@@ -266,6 +348,13 @@ impl Renderer<'_> {
         self.list_stack.len().saturating_sub(1) * 2
     }
 
+    /// Handle one parser event. The dispatch point for the whole renderer:
+    /// block starts and ends go to [`Renderer::start`] and [`Renderer::end`],
+    /// and everything inline is handled here.
+    ///
+    /// Text is routed to `code_buf` while a fence is open and to
+    /// [`Renderer::push_text`] otherwise — that branch is the only thing
+    /// stopping code blocks from being scanned for wikilinks.
     fn event(&mut self, ev: Event<'_>) {
         match ev {
             Event::Start(tag) => self.start(tag),
@@ -330,6 +419,9 @@ impl Renderer<'_> {
         }
     }
 
+    /// Open a block. Most cases flush the pending inline run first, since
+    /// anything accumulated belongs to the block that is ending, not the one
+    /// starting.
     fn start(&mut self, tag: Tag<'_>) {
         match tag {
             Tag::Paragraph => {}
@@ -418,6 +510,8 @@ impl Renderer<'_> {
         }
     }
 
+    /// Close a block: flush its text, undo whatever `start` pushed, and add
+    /// the trailing rule or blank line the block calls for.
     fn end(&mut self, tag: TagEnd) {
         match tag {
             TagEnd::Paragraph => {
@@ -497,6 +591,11 @@ impl Renderer<'_> {
         }
     }
 
+    /// Draw a fenced block: a `│ ` gutter, then syntax-highlighted source.
+    ///
+    /// Code is never re-wrapped. Indentation is meaning in most languages, and
+    /// a wrapped line of Python reads as broken. Overlong lines are clipped
+    /// instead, so the pane never scrolls sideways on its own.
     fn emit_code_block(&mut self, info: &str, body: &str) {
         let syntax = self.hl.syntax_for_token(info).clone();
         let gutter = self.pal.dim;
@@ -523,6 +622,16 @@ impl Renderer<'_> {
         }
     }
 
+    /// Lay out and draw the buffered table.
+    ///
+    /// Columns start at their natural width — the widest cell in each — then
+    /// the widest column is shaved one cell at a time until the whole table
+    /// fits the pane. Shrinking stops at three cells per column so a table
+    /// squeezed into a narrow pane degrades into something still readable
+    /// rather than a row of vertical bars.
+    ///
+    /// The first row is drawn bold and followed by a `─┼─` rule, whether or not
+    /// the source actually marked it as a header.
     fn emit_table(&mut self) {
         let Some(t) = self.table.take() else { return };
         let rows: Vec<Vec<Vec<Span<'static>>>> =
@@ -597,11 +706,15 @@ impl Renderer<'_> {
     }
 }
 
+/// Total display width of a run of spans, in terminal cells.
 fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|s| s.content.width()).sum()
 }
 
 /// Truncate to a display width, respecting character boundaries.
+///
+/// Width, not character count: a double-width character is only kept if both
+/// its cells fit, so clipping can never leave half a glyph behind.
 fn clip(s: &str, max_w: usize) -> String {
     let mut out = String::new();
     let mut w = 0;
@@ -617,6 +730,11 @@ fn clip(s: &str, max_w: usize) -> String {
 }
 
 /// Push a wrapped line, dropping whitespace that ran off the end of it.
+///
+/// Trailing spaces are invisible until they meet a reversed or backgrounded
+/// style, at which point they draw as a bright tail hanging off the end of the
+/// line. The `spans.len() > 1` guard keeps the prefix span, so an
+/// indent-only line does not collapse to nothing.
 fn push_trimmed(lines: &mut Vec<Line<'static>>, mut spans: Vec<Span<'static>>) {
     while spans.len() > 1
         && spans
@@ -635,6 +753,27 @@ fn push_trimmed(lines: &mut Vec<Line<'static>>, mut spans: Vec<Span<'static>>) {
 
 /// Wrap a styled inline run to `width`, prefixing the first line with
 /// `first_prefix` and every continuation line with `cont_prefix`.
+///
+/// The two prefixes are what make every indented construct work with one
+/// function: a list item passes its bullet as `first_prefix` and matching
+/// spaces as `cont_prefix`, so wrapped text lines up under the item's text
+/// rather than under its bullet. A blockquote passes its `│ ` gutter as both.
+///
+/// # How it works
+///
+/// 1. Flatten the styled spans into alternating word and whitespace tokens,
+///    each remembering the style it came from. This is why styling survives a
+///    break: the token is re-emitted with its own style on whichever line it
+///    lands.
+/// 2. Place tokens one at a time. A word that will not fit starts a new line.
+/// 3. Whitespace is dropped at a break rather than carried over, so a wrapped
+///    line never begins with the space that caused the wrap.
+/// 4. A single token wider than the pane — a long URL or path — is hard-broken
+///    across lines, since there is no break opportunity inside it.
+///
+/// `indent_w` tracks the current line's prefix width and exists to stop rule
+/// 2 firing on a line that holds nothing but its own indent, which would loop
+/// forever.
 fn wrap(
     spans: &[Span<'static>],
     width: usize,

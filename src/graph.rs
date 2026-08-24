@@ -13,6 +13,54 @@
 //! files is ambiguous — `new`, `main`, `get` — so past `max_ambiguity`
 //! definitions a symbol stops producing edges rather than wiring the project
 //! to itself.
+//!
+//! # How a graph gets built
+//!
+//! [`build`] is one pass over the project, then one pass over what it found:
+//!
+//! 1. **Walk.** `search::walk` lists the files — the same traversal search
+//!    uses, so the two always agree on what the project contains.
+//! 2. **Collect.** Each file becomes a [`Node`] plus a private `Facts` record:
+//!    what it defines, what it calls, what it links to, what it imports.
+//!    Notes are scanned for links; source is parsed for symbols and imports.
+//! 3. **Index.** Two lookup tables are built — `by_rel` (path to node) and
+//!    `by_stem` (bare filename to nodes) — plus `definers`, mapping each
+//!    symbol to the files that define it.
+//! 4. **Resolve.** Every recorded link, import and call is turned into an
+//!    [`Edge`] where a target can be found. Identical edges are merged and
+//!    counted, which is why the map is keyed by `(from, to, kind, label)`.
+//!
+//! # Exact edges and guessed ones
+//!
+//! Wikilinks, markdown links and imports are *resolved*: they name a target,
+//! and either it exists or no edge is drawn. Call edges are *guessed*: they
+//! match a called name against every file that defines that name, with no
+//! scope analysis, no type information, and no import following.
+//!
+//! Three guards keep that heuristic honest, and all three matter:
+//!
+//! - `max_ambiguity` — a name defined in more than N files says nothing about
+//!   which one was meant, so it produces no edge at all. Without this, `new`
+//!   and `main` connect the entire project to itself.
+//! - [`is_test_file`] and [`strip_tests`] — test helpers are named `fixture`,
+//!   `render`, `setup`, and collide with real code everywhere.
+//! - Only tags typed `call` become edges, and only definitions of callable
+//!   things become definitions. A `mod x;` is a definition to tree-sitter but
+//!   nothing ever calls it.
+//!
+//! When you see a wrong edge in the graph, one of those three is where to
+//! look.
+//!
+//! # Adding a language
+//!
+//! Four steps: add the `tree-sitter-*` crate, add a `LazyLock<Option<...>>`
+//! beside [`PYTHON`], add a [`Lang`] variant with its extensions in
+//! [`lang_of`] and a [`tags_for`] arm, and add an arm to [`collect_imports`]
+//! for its import syntax. Then add the name to [`supported_languages`], which
+//! is what the graph view tells the user it can trace.
+//!
+//! A language with no tags query still appears in the graph as a node — it
+//! just has no call edges. That is what [`is_sourcelike`] is for.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -22,11 +70,17 @@ use tree_sitter_tags::{TagsConfiguration, TagsContext};
 
 use crate::search;
 
+/// What a file is, which decides how it is scanned and how it is labelled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
+    /// Markdown. Scanned for both wikilinks and `[text](path)` links.
     Note,
+    /// Other prose — `.txt`, `.rst`, `.org`. Wikilinks only; a `[a](b)` in a
+    /// text file is not a link.
     Prose,
+    /// Source. Parsed for symbols and imports where a grammar exists.
     Code,
+    /// Everything else. Drawn as a node, never scanned.
     Other,
 }
 
@@ -42,10 +96,15 @@ pub enum EdgeKind {
     Call,
 }
 
+/// One file in the graph. Nodes are identified by their index into
+/// `Graph::nodes`, which is what [`Edge::from`] and [`Edge::to`] hold.
 #[derive(Debug, Clone)]
 pub struct Node {
     /// Path relative to the project root, which is also its display name.
+    /// Always uses forward slashes, including on Windows, so link targets
+    /// written in notes resolve the same way everywhere.
     pub rel: String,
+    /// Just the filename, used for the label drawn beside the dot.
     pub name: String,
     pub kind: NodeKind,
     /// Symbols this file defines, for the tooltip.
@@ -53,9 +112,12 @@ pub struct Node {
     pub path: PathBuf,
 }
 
+/// A connection between two files. Directed: `from` points at `to`.
 #[derive(Debug, Clone)]
 pub struct Edge {
+    /// Index into `Graph::nodes`.
     pub from: usize,
+    /// Index into `Graph::nodes`.
     pub to: usize,
     pub kind: EdgeKind,
     /// What connects them: the link target, the module, or the symbol.
@@ -64,9 +126,13 @@ pub struct Edge {
     pub count: usize,
 }
 
+/// The finished graph. Immutable once built — `GraphView` filters what is
+/// drawn without ever changing this.
 #[derive(Debug, Clone)]
 pub struct Graph {
+    /// Every file in the project, in walk order. Index is identity.
     pub nodes: Vec<Node>,
+    /// Merged and counted connections.
     pub edges: Vec<Edge>,
     /// Files that were unreachable from anything and reached nothing.
     pub orphans: usize,
@@ -75,10 +141,14 @@ pub struct Graph {
     pub languages: Vec<String>,
 }
 
+/// Build settings, derived from the live config by `App::graph_options` so a
+/// `:set` is reflected the next time the graph is opened.
 #[derive(Debug, Clone)]
 pub struct Options {
+    /// Directory names never walked into. Shared with search.
     pub ignore: Vec<String>,
     pub show_hidden: bool,
+    /// Extensions treated as [`NodeKind::Prose`].
     pub prose_extensions: Vec<String>,
     /// A symbol defined in more files than this is too ambiguous to link.
     pub max_ambiguity: usize,
@@ -134,6 +204,9 @@ static JAVASCRIPT: LazyLock<Option<TagsConfiguration>> = LazyLock::new(|| {
     .ok()
 });
 
+/// Languages with a tree-sitter grammar compiled in. Adding one means adding
+/// a variant here and wiring it through [`lang_of`], [`tags_for`] and
+/// [`collect_imports`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Lang {
     Python,
@@ -141,6 +214,9 @@ enum Lang {
     JavaScript,
 }
 
+/// Map a file extension to a parseable language, or `None` for everything
+/// else. TypeScript is absent deliberately — it needs its own grammar, and
+/// falling back to the JavaScript one mis-parses type annotations.
 fn lang_of(path: &Path) -> Option<Lang> {
     match path
         .extension()
@@ -155,6 +231,8 @@ fn lang_of(path: &Path) -> Option<Lang> {
     }
 }
 
+/// The compiled tags query for a language, or `None` if its query failed to
+/// compile at first use.
 fn tags_for(lang: Lang) -> Option<&'static TagsConfiguration> {
     match lang {
         Lang::Python => PYTHON.as_ref(),
@@ -170,6 +248,10 @@ pub fn supported_languages() -> &'static [&'static str] {
 
 // ---- one file's contribution ----------------------------------------------
 
+/// What one file contributes to the graph, before anything is resolved.
+///
+/// Kept separate from [`Node`] because it is scratch: the resolution pass
+/// consumes it and only `defines` survives onto the node, for the tooltip.
 #[derive(Debug, Default)]
 struct Facts {
     /// Symbols defined here.
@@ -182,6 +264,17 @@ struct Facts {
     imports: Vec<String>,
 }
 
+/// Build the whole graph for a project. See the module docs for the four
+/// phases; the code below follows them in order.
+///
+/// Cost is one read and one parse per file, so this is the single most
+/// expensive thing tiny does. It runs synchronously when you press `w`, which
+/// is why [`MAX_PARSE_BYTES`] and the `ignore` list exist.
+///
+/// Edges accumulate into a `BTreeMap` keyed by `(from, to, kind, label)` so
+/// repeats merge into a count rather than stacking up as duplicate lines —
+/// and so the output order is deterministic, which keeps the layout stable
+/// between runs.
 pub fn build(root: &Path, opts: &Options) -> Graph {
     let walk_opts = search::Opts {
         max_results: usize::MAX,
@@ -323,6 +416,8 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
     }
 }
 
+/// Classify a file. Order matters: markdown is checked before the prose list
+/// because it is usually *in* that list but has a link syntax of its own.
 fn node_kind(path: &Path, prose_exts: &[String]) -> NodeKind {
     match path
         .extension()
@@ -339,6 +434,9 @@ fn node_kind(path: &Path, prose_exts: &[String]) -> NodeKind {
     }
 }
 
+/// Extensions that are recognisably source without a grammar to parse them.
+/// These become [`NodeKind::Code`] nodes with no outgoing call edges, so a Go
+/// or C++ project still draws as something rather than as a pile of orphans.
 fn is_sourcelike(ext: &str) -> bool {
     matches!(
         ext,
@@ -363,6 +461,10 @@ fn is_sourcelike(ext: &str) -> bool {
     )
 }
 
+/// Read a file if it is small enough and looks like text. Deliberately a
+/// local copy of `search::read_text` rather than a shared helper: the two have
+/// different size limits, and the graph swallows errors as `None` where search
+/// wants a `Result`.
 fn read_text(path: &Path) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
     if meta.len() > MAX_PARSE_BYTES {
@@ -409,6 +511,10 @@ fn collect_links(text: &str, kind: NodeKind, f: &mut Facts) {
 
 /// Whether a file exists to test other files. Its helpers are not part of how
 /// the project fits together, and they collide with real names constantly.
+///
+/// Covers the common conventions across languages: a `test_` prefix (Python),
+/// `_test.` (Go, Rust), `.test.` and `.spec.` (JavaScript), and any path
+/// component named `tests` or `__tests__`.
 fn is_test_file(path: &Path) -> bool {
     let name = path
         .file_name()
@@ -437,6 +543,19 @@ fn strip_tests(lang: Lang, text: &str) -> &str {
 }
 
 /// Definitions and calls, via the language's tags query.
+///
+/// tree-sitter's tags queries emit a stream of tagged ranges with a syntax
+/// type name — `function`, `call`, `reference.implementation`, and so on. Two
+/// filters narrow that to something useful:
+///
+/// - **Definitions** are kept only for callable things. `mod x;` and `X = 1`
+///   are definitions too, but nothing calls them, and counting them makes
+///   every `mod` line look like a function.
+/// - **References** are kept only when typed `call`. The others describe type
+///   relationships, not one file reaching into another.
+///
+/// Parse failures return quietly: a file with a syntax error contributes
+/// nothing rather than taking the graph down.
 fn collect_symbols(ctx: &mut TagsContext, lang: Lang, text: &str, f: &mut Facts) {
     let Some(config) = tags_for(lang) else { return };
     let Ok((tags, _)) = ctx.generate_tags(config, text.as_bytes(), None) else {
@@ -469,12 +588,30 @@ fn collect_symbols(ctx: &mut TagsContext, lang: Lang, text: &str, f: &mut Facts)
     }
 }
 
+/// Whether a string is a bare identifier. Guards the import scanners against
+/// picking up braces, wildcards and other syntax as a module name.
 fn is_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// Imports, read line by line. Exact where it matters and quiet where it is
 /// not sure — an unresolvable target simply produces no edge.
+///
+/// Text scanning rather than tree-sitter, because import *statements* are
+/// trivially recognisable per language while extracting a usable path from the
+/// parse tree differs wildly between grammars. The cost is that an import
+/// inside a comment or a string counts; the benefit is about thirty lines
+/// instead of three more queries.
+///
+/// Each language keeps only what can name a file in this project:
+///
+/// - **Python** — the module path from `import a.b` or `from a.b import c`,
+///   with dots turned into slashes and leading relative dots stripped.
+/// - **Rust** — `mod name;` declares the file, `use crate::name` reaches into
+///   it. Only the first path segment after the prefix is taken, since that is
+///   the part that names a sibling module.
+/// - **JavaScript** — only relative specifiers. A bare `from 'react'` is a
+///   package, not a file here.
 fn collect_imports(lang: Lang, text: &str, f: &mut Facts) {
     for raw in text.lines() {
         let line = raw.trim();
@@ -549,6 +686,21 @@ fn collect_imports(lang: Lang, text: &str, f: &mut Facts) {
 /// Turn a written target into a file. Tries, in order: the path as given
 /// relative to the linking file, the same relative to the root, and finally
 /// the bare stem — which is how `[[design]]` finds `notes/design.md`.
+///
+/// The order is the whole design. Relative-to-the-linking-file comes first so
+/// `../utils` means the neighbour you meant, not something with the same name
+/// on the other side of the project. The bare-stem fallback comes last and is
+/// accepted *only when exactly one file answers to the name*, so an ambiguous
+/// `[[index]]` in a project with five `index.js` files draws no edge rather
+/// than a wrong one.
+///
+/// An extensionless target is tried against a list of likely suffixes, and
+/// against directory-index filenames (`mod.rs`, `__init__.py`, `index.js`), so
+/// `import utils` finds `utils/__init__.py`.
+///
+/// Returns `None` for anything it cannot place — a link to a file that does
+/// not exist simply produces no edge, silently, which is correct for a graph
+/// but does mean a typo'd wikilink is invisible here.
 fn resolve_link(
     target: &str,
     root: &Path,
@@ -603,6 +755,11 @@ fn resolve_link(
 }
 
 /// Resolve `.` and `..` without touching the filesystem.
+///
+/// Purely lexical, unlike `canonicalize`: link targets routinely name files
+/// that do not exist, and a syscall per candidate per link would be slow. Note
+/// that `pop` on an empty buffer is a no-op, so `../..` from the root cannot
+/// escape upwards — it just flattens.
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {

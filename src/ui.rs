@@ -6,6 +6,52 @@
 //! Nothing here picks a colour. Every style comes from the palette, whose
 //! defaults name no colour at all — so tiny renders in whatever the terminal
 //! is already using, and meaning is carried by weight, underline and reverse.
+//!
+//! # Reading order
+//!
+//! [`draw`] is the entry point and the map of everything below it:
+//!
+//! ```text
+//! draw
+//!  ├─ bar / status rows, placed by config (either can sit top or bottom)
+//!  ├─ draw_graph            when the graph is open — takes the whole screen
+//!  └─ two panes, side decided by config
+//!      ├─ draw_tree  or  draw_results   (results replace the tree while searching)
+//!      └─ draw_preview
+//!           ├─ draw_reading   rendered markdown or wrapped prose
+//!           ├─ draw_editor    raw source, with the real cursor
+//!           └─ draw_media     pictures and poster frames
+//!  └─ draw_help / draw_settings    overlays, drawn last so they sit on top
+//! ```
+//!
+//! # `&mut App`, and why
+//!
+//! Most of these take `&mut App` even though drawing should be a pure read.
+//! Three things genuinely cannot be computed until the pane size is known, and
+//! the pane size is only known here:
+//!
+//! - **Scroll offsets.** The key handler that moved a cursor has no idea how
+//!   tall the pane is, and the answer changes on every terminal resize.
+//! - **`preview_len`.** How far the preview can scroll depends on how many
+//!   lines the content produced at *this* width, which means rendering it.
+//! - **The media cache.** An image is decoded to fit the pane, so the request
+//!   is only well-formed once the pane exists.
+//!
+//! Everything else must stay read-only. If you find yourself wanting to set
+//! application state from a draw function, it almost certainly belongs in
+//! `app` instead.
+//!
+//! # Styling rules
+//!
+//! Nothing here writes a literal colour. Every style comes from
+//! `app.palette`, and the shipped palette names no colour at all — meaning is
+//! carried by bold, dim, underline and reverse, so tiny inherits the user's
+//! terminal theme. The one exception is syntax highlighting, whose colours
+//! come from the syntect theme by design.
+//!
+//! Widths are measured with `unicode-width`, never `chars().count()`. A CJK
+//! character is one character and two cells, and confusing the two is how
+//! borders end up misaligned.
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -24,6 +70,15 @@ use crate::graphview::GraphView;
 use crate::markdown;
 use crate::search::HitKind;
 
+/// Paint one frame. Called once per keypress by the event loop in `main`.
+///
+/// The vertical layout is assembled rather than hardcoded, because the bar and
+/// the status line can each be configured to either end of the window: `order`
+/// collects the slots in their final top-to-bottom sequence, then constraints
+/// are derived from it. The main area is whatever is left.
+///
+/// Overlays (help, settings) are drawn against the *full* screen area rather
+/// than the main region, so they float above the panes.
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let pal = app.palette;
@@ -114,6 +169,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
+/// A horizontal band of the window, used to build the vertical layout in the
+/// order the config asks for.
 enum Slot {
     Bar,
     Main,
@@ -122,6 +179,11 @@ enum Slot {
 
 /// A pane frame. With borders off, the title is drawn on its own line and the
 /// box is dropped entirely — a quieter screen for people who want one.
+///
+/// Returns the *inner* rectangle to draw content into, so callers do not have
+/// to know which of the two modes is in effect. Every pane goes through here,
+/// which is what keeps `borders = false` from needing a second code path in
+/// each drawing function.
 fn pane<'a>(f: &mut Frame, area: Rect, title: Vec<Span<'a>>, focused: bool, app: &App) -> Rect {
     let pal = app.palette;
     let style = if focused {
@@ -152,6 +214,13 @@ fn pane<'a>(f: &mut Frame, area: Rect, title: Vec<Span<'a>>, focused: bool, app:
 
 // ---- tree pane ------------------------------------------------------------
 
+/// The project tree. Draws a window of `app.rows` around the cursor.
+///
+/// Scrolling is resolved here — this is one of the three sanctioned mutations
+/// (see the module docs): `tree_scroll` is nudged the minimum needed to keep
+/// the selected row on screen, so the list stays still while the cursor moves
+/// within the visible region. `last_tree_height` is recorded for the key
+/// handler's page-up/page-down.
 fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     let pal = app.palette;
     let focused = app.focus == Focus::Tree && matches!(app.mode, Mode::Normal | Mode::Help(_));
@@ -222,6 +291,13 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
 
 /// Extend a row's styling across the pane so the cursor reads as a row, not
 /// just as coloured text.
+///
+/// Pads to the full width first, then patches the selection style over every
+/// span — otherwise a reversed selection would stop at the end of the text and
+/// look like a highlighted word rather than a selected line.
+///
+/// An unfocused pane still shows its cursor, dimmed, so you can see where you
+/// will land when focus comes back.
 fn highlight_row(spans: &mut Vec<Span>, width: usize, pal: Palette, focused: bool) {
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
     if used < width {
@@ -240,6 +316,15 @@ fn highlight_row(spans: &mut Vec<Span>, width: usize, pal: Palette, focused: boo
 
 // ---- search results -------------------------------------------------------
 
+/// Search results, drawn in the tree's place while the search bar is open.
+///
+/// Replacing the tree rather than opening a third pane is why `draw` widens
+/// the side pane during a search: result lines carry a path, a line number and
+/// a snippet, and need considerably more room than a filename.
+///
+/// Note that scrolling is computed into a local, not written back to `b` — the
+/// bar is borrowed immutably here, and the offset is cheap to recompute each
+/// frame.
 fn draw_results(f: &mut Frame, app: &mut App, area: Rect, b: &Bar) {
     let pal = app.palette;
     let title = vec![
@@ -312,6 +397,10 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect, b: &Bar) {
 }
 
 /// Show a matching line with the matched run standing out.
+///
+/// Splits at character indices, matching how `search::Hit::col` is reported.
+/// The run is drawn reversed rather than coloured, so it stands out in any
+/// terminal theme without the palette having to name a highlight colour.
 fn emphasize(text: &str, col: usize, len: usize, pal: Palette) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     if len == 0 || col >= chars.len() {
@@ -334,6 +423,12 @@ fn emphasize(text: &str, col: usize, len: usize, pal: Palette) -> Vec<Span<'stat
 
 // ---- preview pane ---------------------------------------------------------
 
+/// The right-hand pane. Dispatches on `app.preview` to one of the specific
+/// drawing functions, and builds the title that names the file and its state.
+///
+/// The `READ` / `EDIT` / `VIEW` tag encodes the same rule the key handling
+/// uses: prose and markdown open rendered and only show raw source once you
+/// have deliberately pressed `e`, while code goes straight into the editor.
 fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
     let pal = app.palette;
     let focused = app.focus == Focus::Editor && matches!(app.mode, Mode::Normal | Mode::Help(_));
@@ -440,6 +535,15 @@ fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// A picture or video poster frame, plus a caption.
+///
+/// Reserves two rows for the caption and honours the configured
+/// `media_height` ceiling, then asks `App::ensure_media` for a preview at that
+/// exact size — the cache is keyed on the size, so this both draws and, when
+/// the pane has changed shape, triggers the re-decode.
+///
+/// A failed decode is drawn as its error message rather than an empty pane, so
+/// a missing ffmpeg or a corrupt file explains itself.
 fn draw_media(
     f: &mut Frame,
     app: &mut App,
@@ -478,6 +582,16 @@ fn draw_media(
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
+/// Rendered markdown, or wrapped prose, with a scroll indicator.
+///
+/// Renders from the *buffer* rather than from disk, which is what makes
+/// unsaved edits appear in the rendered view the moment you press Esc.
+///
+/// The full document is rendered every frame and then sliced to the visible
+/// window. That is more work than it needs to be, but the render is cheap at
+/// note scale and it removes any need to invalidate a cache when the buffer,
+/// the width, or the palette changes. `preview_len` is written back so the key
+/// handler knows how far it can scroll.
 fn draw_reading(
     f: &mut Frame,
     app: &mut App,
@@ -536,6 +650,16 @@ fn draw_reading(
     }
 }
 
+/// Raw source with line numbers, syntax highlighting, and the real cursor.
+///
+/// Only the visible window is highlighted — see `highlight::highlight_window`
+/// for why that is both correct and cheap.
+///
+/// The cursor is placed with `set_cursor_position` so the terminal's own
+/// blinking cursor lands in the right cell, rather than being faked with a
+/// reversed span. That means converting the character-indexed cursor column
+/// into a *display width* offset, accounting for the horizontal scroll — which
+/// is what the `before` / `skipped` width subtraction is doing.
 fn draw_editor(f: &mut Frame, app: &mut App, inner: Rect, path: &std::path::Path, focused: bool) {
     let pal = app.palette;
     if !app.buffers.contains_key(path) {
@@ -602,6 +726,14 @@ fn draw_editor(f: &mut Frame, app: &mut App, inner: Rect, path: &std::path::Path
 }
 
 /// Apply the horizontal scroll to one highlighted line and clip it to width.
+///
+/// Walks the styled pieces twice over: first discarding `scroll_x` characters
+/// from the left, then accumulating until the display width runs out. Both
+/// halves have to respect piece boundaries, since a piece is the unit that
+/// carries a style.
+///
+/// Always returns at least one span, so an empty or fully-scrolled line still
+/// produces a `Line` and the row numbering stays aligned.
 fn clip_pieces<'a>(
     pieces: &[(Style, String)],
     scroll_x: usize,
@@ -647,10 +779,35 @@ fn clip_pieces<'a>(
 // ---- the graph ------------------------------------------------------------
 
 /// A style's colour, or the terminal's own where the theme names none.
+///
+/// The canvas widget wants a bare `Color` rather than a `Style`, so this is
+/// the one place styles get unwrapped. `Color::Reset` means "whatever the
+/// terminal is using", which keeps the default monochrome palette working.
 fn colour(style: Style) -> Color {
     style.fg.unwrap_or(Color::Reset)
 }
 
+/// The graph, drawn on a braille canvas with a detail strip underneath.
+///
+/// Braille gives four times the vertical resolution and twice the horizontal
+/// resolution of a text cell, which is what makes diagonal edges readable.
+///
+/// # Two things are harder than they look
+///
+/// **Fitting the viewport.** Labels stick out sideways from their dot, so the
+/// bounding box has to be widened by half the widest label or names get
+/// clipped at the edge. That width is only knowable in canvas units after a
+/// first [`fit_bounds`] pass, hence the two rounds: fit, measure, widen, fit
+/// again.
+///
+/// **Label collision.** Labels are placed in priority order — the selected
+/// file first, then its neighbours, then everything else — and each one claims
+/// a `(row, start, end)` span. A label whose span overlaps something already
+/// placed is simply dropped. That is why the cursor's own label is always
+/// legible however dense the graph gets.
+///
+/// Drawing is layered: edges, then dots, then labels, so a name is never
+/// threaded onto the line running under it.
 fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
     let Some(view) = app.graph_view.as_ref() else {
         return;
@@ -806,6 +963,10 @@ fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
 /// Expand the graph's bounding box to match the pane's shape, so the layout
 /// is not stretched. Braille sub-cells are roughly square, and there are two
 /// across and four down per character cell.
+///
+/// Always grows the box, never shrinks it, so nothing that was visible is
+/// pushed off screen. The target ratio is `(w * 2) / (h * 4)` — the pane's
+/// dimensions in braille sub-cells rather than in characters.
 fn fit_bounds(b: (f64, f64, f64, f64), w: u16, h: u16) -> (f64, f64, f64, f64) {
     let (mut x0, mut x1, mut y0, mut y1) = b;
     let want = (w as f64 * 2.0) / (h as f64 * 4.0);
@@ -824,6 +985,7 @@ fn fit_bounds(b: (f64, f64, f64, f64), w: u16, h: u16) -> (f64, f64, f64, f64) {
     (x0, x1, y0, y1)
 }
 
+/// Human-readable name for a node kind, for the detail strip.
 fn node_word(kind: crate::graph::NodeKind) -> &'static str {
     use crate::graph::NodeKind;
     match kind {
@@ -834,6 +996,8 @@ fn node_word(kind: crate::graph::NodeKind) -> &'static str {
     }
 }
 
+/// Human-readable name for an edge kind. Also labels the `1`-`4` toggles, so
+/// the words on screen match the words in the help and the README.
 fn kind_word(kind: EdgeKind) -> &'static str {
     match kind {
         EdgeKind::Wikilink => "wikilink",
@@ -843,6 +1007,16 @@ fn kind_word(kind: EdgeKind) -> &'static str {
     }
 }
 
+/// The strip under the graph: what the cursor is on, what it connects to, and
+/// which edge kinds are switched on.
+///
+/// Everything is capped — four connections each way, six defined symbols —
+/// with a `+n more` tail, because this has a fixed six rows and a hub file can
+/// have dozens of edges.
+///
+/// Only call edges show their label, since that label is the symbol being
+/// called and is the actual information. For an import or a link the label
+/// just repeats the filename already shown.
 fn draw_graph_detail(f: &mut Frame, app: &App, view: &GraphView, area: Rect) {
     let pal = app.palette;
     let Some(node) = view.selected_node() else {
@@ -947,6 +1121,10 @@ fn draw_graph_detail(f: &mut Frame, app: &App, view: &GraphView, area: Rect) {
 
 // ---- the bar --------------------------------------------------------------
 
+/// The search (`/`) or command (`:`) line.
+///
+/// Draws its own block cursor as a reversed span, because the terminal has
+/// only one real cursor and the editor pane has a stronger claim on it.
 fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     let Mode::Bar(b) = &app.mode else { return };
     let pal = app.palette;
@@ -980,6 +1158,12 @@ fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
 
 // ---- status line ----------------------------------------------------------
 
+/// The status line: prompts, confirmations, or the ordinary message plus
+/// context-sensitive hints.
+///
+/// Hints are dropped before the position readout when the window is too narrow
+/// for both, so the line degrades gracefully instead of wrapping or being
+/// clipped mid-word.
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette;
     let line = match &app.mode {
@@ -1044,6 +1228,8 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(line).style(app.palette.text), area);
 }
 
+/// The right-hand end of the status line: `line:col` while editing, otherwise
+/// the tree cursor's position in the row list.
 fn position_readout(app: &App) -> String {
     match app.active_buffer() {
         Some(ed) if app.focus == Focus::Editor && !app.read_mode => {
@@ -1055,6 +1241,8 @@ fn position_readout(app: &App) -> String {
 
 // ---- overlays -------------------------------------------------------------
 
+/// A centred rectangle for an overlay, shrunk to fit if the window is smaller
+/// than the requested size.
 fn centred(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width.saturating_sub(2));
     let h = h.min(area.height.saturating_sub(2));
@@ -1066,6 +1254,12 @@ fn centred(area: Rect, w: u16, h: u16) -> Rect {
     }
 }
 
+/// The keymap shown by `?`, as `(keys, description)` pairs.
+///
+/// An empty `keys` makes the row a section heading, and a pair of empty
+/// strings is a spacer. This is the user-facing source of truth for the
+/// bindings — if you add a key in `app`, add it here too, and to the table in
+/// the README.
 const HELP: &[(&str, &str)] = &[
     ("", "TREE"),
     ("up down  k j", "move the cursor"),
@@ -1105,6 +1299,8 @@ const HELP: &[(&str, &str)] = &[
     ("q  Ctrl+Q", "quit"),
 ];
 
+/// The keymap overlay. Scrollable, because the full list does not fit a short
+/// terminal — the footer says which of the two situations you are in.
 fn draw_help(f: &mut Frame, area: Rect, pal: &Palette, scroll: usize) {
     let popup = centred(area, 62, HELP.len() as u16 + 2);
     // Short terminals cannot show the whole keymap at once.
@@ -1148,6 +1344,13 @@ fn draw_help(f: &mut Frame, area: Rect, pal: &Palette, scroll: usize) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// The settings overlay: every key from `Config::settings_index`, its current
+/// value, and its description.
+///
+/// A row being edited swaps the description for an inline text field with its
+/// own drawn cursor. Values are read live from `app.config`, so a change takes
+/// effect on the screen behind the overlay immediately — `Ctrl+S` is what
+/// makes it persist to `tiny.conf`.
 fn draw_settings(f: &mut Frame, app: &App, area: Rect, s: &Settings) {
     let pal = app.palette;
     let index = Config::settings_index();
@@ -1222,12 +1425,16 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect, s: &Settings) {
 
 // ---- small helpers --------------------------------------------------------
 
+/// Filename for a pane title, falling back to the whole path for anything
+/// without one.
 fn label(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
 }
 
+/// Decimal digit count, used to size the line-number gutter so it is exactly
+/// wide enough for the longest number in the file.
 fn digits(n: usize) -> usize {
     let mut n = n.max(1);
     let mut d = 0;
@@ -1238,11 +1445,16 @@ fn digits(n: usize) -> usize {
     d
 }
 
+/// Split a string at a character index, for drawing a text cursor. Character
+/// index, not byte offset — slicing on a raw cursor position would panic on
+/// any non-ASCII input.
 fn split_at_char(s: &str, ci: usize) -> (String, String) {
     let b = s.char_indices().nth(ci).map_or(s.len(), |(b, _)| b);
     (s[..b].to_string(), s[b..].to_string())
 }
 
+/// Byte count as `B` / `KB` / `MB` / …, with one decimal place above a
+/// kilobyte. Exact bytes below that, since "0.4 KB" tells you less than "412 B".
 fn readable_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = bytes as f64;

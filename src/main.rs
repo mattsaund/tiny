@@ -2,6 +2,41 @@
 //!
 //! Left pane is the project tree, right pane is whatever the cursor is on:
 //! markdown renders, code opens in an editor, pictures draw. `Ctrl+S` saves.
+//!
+//! # Where things live
+//!
+//! Reading top to bottom, the program is four layers:
+//!
+//! 1. **Startup** — this file. Parse the command line, work out what to open
+//!    ([`project`]), load configuration ([`config`]), then hand control to a
+//!    plain blocking event loop.
+//! 2. **State** — [`app`]. One `App` struct owns everything mutable: the tree
+//!    cursor, the open buffers, the current mode, the status line. Every
+//!    keypress goes through `App::on_key`.
+//! 3. **Drawing** — [`ui`]. Reads `App` and paints a frame. It is deliberately
+//!    the only module that knows about ratatui widgets.
+//! 4. **Support** — [`tree`], [`editor`], [`search`], [`markdown`],
+//!    [`highlight`], [`media`], [`graph`], [`graphview`]. Each is a
+//!    self-contained piece of machinery `app` and `ui` call into.
+//!
+//! # The one-way rule
+//!
+//! State flows one way: keys mutate `App`, then `ui` reads `App` and draws.
+//! `ui` never handles input, and `app` never touches a ratatui widget. The one
+//! sanctioned exception is that `ui` writes back scroll offsets and the media
+//! cache, because those genuinely cannot be computed until the pane size is
+//! known — and the pane size is only known while drawing. If you find yourself
+//! wanting a second exception, that is usually a sign the state belongs on
+//! `App` instead.
+//!
+//! # The event loop is blocking on purpose
+//!
+//! There is no tick, no timer, and no background thread. `run` blocks in
+//! `event::read()` until the user does something, then redraws once. An idle
+//! tiny uses no CPU at all, which is most of why it stays small. The cost is
+//! that every operation is synchronous: a slow search or a big graph build
+//! freezes the UI while it runs, so anything expensive needs its own budget
+//! (see the size caps in `search`, `graph`, and `highlight`).
 
 mod app;
 mod config;
@@ -22,6 +57,9 @@ use crossterm::event::{self, Event, KeyEventKind};
 use app::App;
 use config::{CONF_NAME, Config};
 
+/// `--help` output. Kept here as one literal rather than assembled from an
+/// argument parser: there are only four options, and a contributor changing
+/// the CLI should be able to see the whole surface in one place.
 const USAGE: &str = "\
 tiny — a terminal knowledge manager
 
@@ -44,6 +82,11 @@ KEYS:
     :                   commands and settings
 ";
 
+/// Thin wrapper so the real work can use `?`.
+///
+/// Errors are printed with `{e:#}`, which walks anyhow's whole context chain —
+/// so "cannot open /nope: No such file or directory" reaches the user instead
+/// of just the innermost io error. Exit code 1 on failure, for scripts.
 fn main() {
     if let Err(e) = real_main() {
         eprintln!("tiny: {e:#}");
@@ -51,6 +94,26 @@ fn main() {
     }
 }
 
+/// Startup, in the order things have to happen.
+///
+/// The ordering here is not arbitrary — each step needs the one before it:
+///
+/// 1. Handle the options that never touch the disk (`--help`, `--version`,
+///    `--config`) and return early.
+/// 2. Load the *user* config, because [`project::resolve`] needs `auto_init`
+///    and `default_root` to decide what to do with the argument.
+/// 3. Resolve the argument into a [`project::Target`], creating the project
+///    if it does not exist.
+/// 4. Reload the config now that the project root is known, so
+///    `<project>/.tiny/tiny.conf` can override the user's settings. This is
+///    why the config is read twice; there is no way around it without
+///    splitting the file into two parsers.
+/// 5. Write out the defaults on first run.
+/// 6. Build the `App`, take over the terminal, loop, and restore.
+///
+/// Only one warning survives to the status bar, most-specific first: a broken
+/// project config is more interesting than a broken user config, which is more
+/// interesting than "we just wrote you a config file".
 fn real_main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -104,6 +167,15 @@ fn real_main() -> Result<()> {
     result
 }
 
+/// The event loop: draw, block for a key, dispatch, repeat.
+///
+/// Note the order — the frame is drawn *before* the quit check, so the last
+/// action a user takes is visible on screen before the program exits. It also
+/// means `App` never has to ask for a redraw: every keypress produces exactly
+/// one frame, and nothing else produces any.
+///
+/// `ratatui::restore` in the caller runs whether or not this returns an error,
+/// so a failure in here still gives the terminal back.
 fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
     loop {
         terminal.draw(|f| ui::draw(f, app))?;

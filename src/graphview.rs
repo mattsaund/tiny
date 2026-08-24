@@ -8,6 +8,32 @@
 //! Navigation is spatial: the arrow keys move to the nearest file in that
 //! direction, so the graph is something you walk around rather than a list
 //! that happens to be drawn as dots.
+//!
+//! # Division of labour
+//!
+//! `graph` decides *what connects to what*; this module decides *where it sits
+//! and what you can do with it*; `ui::draw_graph` turns that into pixels. The
+//! `Graph` itself is never mutated after construction — filtering happens by
+//! asking [`GraphView::node_visible`] and [`GraphView::edge_visible`] at draw
+//! time, so toggling an edge kind is instant and reversible.
+//!
+//! # Why the layout is not animated
+//!
+//! Force-directed graphs usually animate, and the animation is usually the
+//! worst part of them: things drift while you are trying to read a label.
+//! [`GraphView::layout`] runs the simulation to completion in one go and then
+//! stops. The result is a still picture. `r` re-runs it, and since the seed is
+//! fixed the same project always settles the same way.
+//!
+//! This also fits the event loop, which blocks on input and has no tick — an
+//! animation would need a timer thread and a redraw signal that do not exist.
+//!
+//! # Coordinates
+//!
+//! Positions are in an abstract space centred on the origin, with **y running
+//! upwards** like a graph and unlike a terminal. `ui` maps that onto the
+//! braille canvas. It is why `Up` calls `move_towards(0.0, 1.0)` and looks
+//! backwards at first glance.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -17,27 +43,46 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::graph::{self, Edge, EdgeKind, Graph, Node};
 
 /// What a keypress asked the app to do.
+///
+/// The view handles its own navigation but cannot open files or close itself —
+/// both need `App`. Returning an intent keeps this module free of any
+/// dependency on application state.
 pub enum Action {
+    /// Handled internally; nothing for `App` to do.
     None,
+    /// Leave the graph and go back to the tree.
     Close,
+    /// Open this file in the editor, closing the graph.
     Open(PathBuf),
 }
 
+/// The graph plus everything about how it is currently being looked at.
 pub struct GraphView {
+    /// Built once and never modified. All filtering is applied at read time.
     pub graph: Graph,
     /// Laid-out position of each node, parallel to `graph.nodes`.
     pub pos: Vec<(f64, f64)>,
+    /// Index of the node under the cursor. May point at something currently
+    /// filtered out, which is why [`GraphView::selected_node`] checks
+    /// visibility and [`GraphView::ensure_selection`] repairs it.
     pub selected: usize,
-    /// Which edge kinds to draw: wikilink, link, import, call.
+    /// Which edge kinds to draw: wikilink, link, import, call. Indexed by
+    /// [`kind_index`], and bound to the `1`-`4` keys.
     pub kinds: [bool; 4],
+    /// Show files with no visible connections. Off by default, because a big
+    /// project's unconnected files crowd out the structure you came to see.
     pub show_orphans: bool,
     /// Draw every label, rather than only the ones near the cursor.
     pub labels_all: bool,
+    /// Substring matched against each node's relative path, case-insensitively.
+    /// Empty means no filtering.
     pub filter: String,
     /// True while the filter box has the keyboard.
     pub filtering: bool,
 }
 
+/// Position of an edge kind in [`GraphView::kinds`], and in the `1`-`4` key
+/// bindings. `pub` because `ui` needs it to draw the toggle row.
 pub fn kind_index(kind: EdgeKind) -> usize {
     match kind {
         EdgeKind::Wikilink => 0,
@@ -48,6 +93,10 @@ pub fn kind_index(kind: EdgeKind) -> usize {
 }
 
 impl GraphView {
+    /// Build the graph, lay it out, and put the cursor somewhere sensible.
+    ///
+    /// Everything expensive happens here, synchronously — this is what `w`
+    /// costs.
     pub fn build(root: &Path, opts: &graph::Options) -> Self {
         let graph = graph::build(root, opts);
         let mut view = Self {
@@ -67,6 +116,16 @@ impl GraphView {
 
     // ---- what is on screen ------------------------------------------------
 
+    /// Whether a node is currently drawn.
+    ///
+    /// Two independent tests: it must match the filter, and — unless orphans
+    /// are shown — it must touch at least one edge of a kind still switched
+    /// on. That second condition is why turning off `call` can make whole
+    /// files disappear, not just the lines between them.
+    ///
+    /// Scans every edge, and is called per node, so this is quadratic. Fine at
+    /// the scale a terminal can draw; the place to start if a huge project
+    /// ever feels sluggish.
     pub fn node_visible(&self, i: usize) -> bool {
         let Some(n) = self.graph.nodes.get(i) else {
             return false;
@@ -84,25 +143,34 @@ impl GraphView {
             .any(|e| self.kind_on(e) && (e.from == i || e.to == i))
     }
 
+    /// Whether this edge's kind is switched on, ignoring everything else.
     fn kind_on(&self, e: &Edge) -> bool {
         self.kinds[kind_index(e.kind)]
     }
 
+    /// An edge is drawn only when its kind is on *and* both endpoints are
+    /// visible — otherwise a filter would leave lines dangling into nothing.
     pub fn edge_visible(&self, e: &Edge) -> bool {
         self.kind_on(e) && self.node_visible(e.from) && self.node_visible(e.to)
     }
 
+    /// Every drawn node, in index order. Also the order `Tab` steps through.
     pub fn visible_indices(&self) -> Vec<usize> {
         (0..self.graph.nodes.len())
             .filter(|i| self.node_visible(*i))
             .collect()
     }
 
+    /// The node under the cursor, or `None` when the cursor is on something
+    /// currently filtered out.
     pub fn selected_node(&self) -> Option<&Node> {
         let i = self.selected;
         self.node_visible(i).then(|| self.graph.nodes.get(i))?
     }
 
+    /// Everything connected to `i` by a visible edge, in either direction.
+    /// Drives label priority and highlighting: neighbours are drawn brighter
+    /// than the rest of the graph.
     pub fn neighbours(&self, i: usize) -> HashSet<usize> {
         let mut out = HashSet::new();
         for e in &self.graph.edges {
@@ -137,6 +205,9 @@ impl GraphView {
     }
 
     /// Bounding box of the visible nodes, with a little air around it.
+    ///
+    /// Returned as `(x0, x1, y0, y1)`. `ui` widens this further to match the
+    /// pane's aspect ratio and to leave room for labels sticking out sideways.
     pub fn bounds(&self) -> (f64, f64, f64, f64) {
         let visible = self.visible_indices();
         if visible.is_empty() {
@@ -159,6 +230,33 @@ impl GraphView {
 
     /// Settle the graph with a force simulation: nodes push apart, edges pull
     /// together, and everything drifts gently towards the middle.
+    ///
+    /// A standard spring-electrical model, run to a stop rather than animated:
+    ///
+    /// - **Repulsion** — every pair of nodes pushes apart with an inverse-square
+    ///   force, so nothing overlaps. This is the O(n²) part, capped by ignoring
+    ///   pairs further apart than 800 units.
+    /// - **Springs** — each edge pulls its endpoints towards `REST` distance,
+    ///   which is what gathers connected files into clusters.
+    /// - **Centring** — a weak pull towards the origin stops disconnected
+    ///   components drifting off to infinity, since nothing else attracts them.
+    /// - **Damping and cooling** — velocity is scaled by `DAMP` each step and
+    ///   `heat` decays, so motion converges instead of oscillating.
+    ///
+    /// The constants are tuned for *reading*, not compactness: `REST` is large
+    /// because each dot needs room for a filename beside it, not just for the
+    /// dot.
+    ///
+    /// Two details that matter more than they look:
+    ///
+    /// - Nodes start on a **ring**, not at a point. From a single point,
+    ///   repulsion alone takes an enormous number of iterations to untangle.
+    /// - The jitter comes from a seeded [`Lcg`], so layout is **deterministic**.
+    ///   The same project always draws the same way, which is the difference
+    ///   between a picture you can learn and one you have to re-read.
+    ///
+    /// Iteration count falls as the graph grows: a rough layout of 500 files
+    /// beats a slow one, and the cost per iteration is already quadratic.
     pub fn layout(&mut self) {
         let n = self.graph.nodes.len();
         if n == 0 {
@@ -246,6 +344,8 @@ impl GraphView {
 
     // ---- moving around ----------------------------------------------------
 
+    /// Park the cursor on the first drawn node, used at build time and
+    /// whenever a filter change strands it.
     fn select_first_visible(&mut self) {
         if let Some(i) = self.visible_indices().first() {
             self.selected = *i;
@@ -253,6 +353,13 @@ impl GraphView {
     }
 
     /// Move to the nearest visible node in a direction.
+    ///
+    /// `(dx, dy)` is a unit vector. Each candidate is decomposed into distance
+    /// *along* that direction and distance *across* it; anything with a
+    /// non-positive `along` is behind the cursor and skipped. The score
+    /// `along + across * 2.0` weights sideways displacement double, so the
+    /// cursor prefers something straight ahead over something closer but well
+    /// off-axis — otherwise arrow keys feel like they teleport.
     fn move_towards(&mut self, dx: f64, dy: f64) {
         let visible = self.visible_indices();
         if visible.is_empty() {
@@ -288,6 +395,9 @@ impl GraphView {
         }
     }
 
+    /// `Tab` / `Shift+Tab`: step through every visible node in index order,
+    /// wrapping. The exhaustive alternative to spatial movement, for when a
+    /// node is not reachable by arrow keys.
     fn cycle(&mut self, forward: bool) {
         let visible = self.visible_indices();
         if visible.is_empty() {
@@ -304,6 +414,11 @@ impl GraphView {
 
     // ---- keys -------------------------------------------------------------
 
+    /// Handle one keypress and say what, if anything, `App` should do.
+    ///
+    /// Ctrl chords are refused outright and passed back as `None`, so global
+    /// bindings keep their meaning here rather than being eaten as graph keys.
+    /// While the filter box is open every key goes to it instead.
     pub fn on_key(&mut self, key: KeyEvent) -> Action {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return Action::None;
@@ -347,6 +462,8 @@ impl GraphView {
         Action::None
     }
 
+    /// Keys for the `/` filter box. Esc clears and closes; Enter keeps the
+    /// filter but hands the keyboard back to navigation.
     fn on_filter_key(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Esc => {
@@ -402,6 +519,10 @@ impl GraphView {
 
 /// A tiny linear congruential generator, so layouts are reproducible and
 /// there is no random-number dependency.
+///
+/// Deliberately not a good PRNG — it only has to break ties between coincident
+/// nodes and scatter the starting ring slightly. Determinism is the feature;
+/// statistical quality is irrelevant here.
 struct Lcg(u64);
 
 impl Lcg {

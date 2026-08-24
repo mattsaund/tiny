@@ -6,6 +6,52 @@
 //!
 //! Open buffers are kept in a map rather than reloaded per selection, so
 //! arrowing away from a file with unsaved edits and back does not lose them.
+//!
+//! # The two axes of state
+//!
+//! Almost every question about "why did that key do that" is answered by two
+//! independent pieces of state:
+//!
+//! - [`Focus`] — which pane the keyboard belongs to, `Tree` or `Editor`.
+//! - [`Mode`] — what, if anything, is layered on top: a prompt, a confirmation,
+//!   the search or command bar, the settings area, the help overlay, or
+//!   `Normal` for none of them.
+//!
+//! [`App::on_key`] dispatches on `Mode` first and only falls through to `Focus`
+//! when the mode is `Normal`. The graph is checked before either, because it
+//! takes the whole screen and every key with it.
+//!
+//! A third flag, `read_mode`, decides whether a focused text file shows
+//! rendered output or raw source. It is not part of `Mode` because it is a
+//! property of *how you are looking at this file*, not of what has the
+//! keyboard.
+//!
+//! # The mode take-and-replace pattern
+//!
+//! `on_key` does `std::mem::replace(&mut self.mode, Mode::Normal)` and hands
+//! the owned mode to a handler. This is not a borrow-checker workaround so much
+//! as a useful default: a handler that does nothing leaves `Normal` behind, so
+//! **closing is the default and staying open is explicit**. Every handler that
+//! wants its mode to persist has to put it back — which is why you see
+//! `self.mode = Mode::Bar(b)` at the end of so many branches. Forget it and the
+//! overlay closes; that is the intended failure direction.
+//!
+//! # Buffers outlive the selection
+//!
+//! `buffers` is keyed by path and is never cleared wholesale. Arrowing past a
+//! file opens it; arrowing away leaves it open, with any unsaved edits intact.
+//! Only three things remove entries: a delete (drops the file and anything
+//! under it), a rename (moves the entry to the new key so edits follow the
+//! file), and a refresh or replace (drops *clean* buffers so they re-read from
+//! disk, keeps dirty ones).
+//!
+//! # Where drawing state lives
+//!
+//! `preview_len`, `last_edit_height` and `last_tree_height` are written by
+//! `ui` during a draw and read here by the key handlers. They are how paging
+//! and scroll clamping know the size of a window this module cannot see. On
+//! the very first frame they hold their defaults, which is harmless — every
+//! use is clamped.
 
 use std::collections::HashMap;
 use std::fs;
@@ -24,12 +70,15 @@ use crate::project;
 use crate::search::{self, Hit, HitKind};
 use crate::tree::{Row, Tree};
 
+/// Which pane has the keyboard. Combined with [`Mode`] and `read_mode`, this
+/// determines how any given key is interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Tree,
     Editor,
 }
 
+/// Which single-line prompt is open in the status bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptKind {
     NewFile,
@@ -37,12 +86,17 @@ pub enum PromptKind {
     Rename,
 }
 
+/// A one-line text prompt in the status bar, for naming and renaming.
 #[derive(Debug, Clone)]
 pub struct Prompt {
     pub kind: PromptKind,
+    /// Shown before the field, e.g. `New file`.
     pub label: String,
     pub input: String,
+    /// Character index into `input`, not a byte offset.
     pub cursor: usize,
+    /// Directory the typed name is resolved against. Captured when the prompt
+    /// opens, so moving the tree cursor afterwards cannot change the target.
     pub base: PathBuf,
 }
 
@@ -53,12 +107,18 @@ pub enum BarKind {
     Command,
 }
 
+/// State for the bar. Search results live here rather than on `App` because
+/// they only exist while the bar is open, and closing it should discard them.
 #[derive(Debug, Clone)]
 pub struct Bar {
     pub kind: BarKind,
     pub input: String,
+    /// Character index into `input`.
     pub cursor: usize,
+    /// Re-run from scratch on every keystroke. See the module docs in `search`
+    /// for why that is affordable.
     pub results: Vec<Hit>,
+    /// Highlighted result. Moving it previews that hit without leaving the bar.
     pub selected: usize,
     pub scroll: usize,
     /// Set when a search found nothing, so the bar can say so.
@@ -79,9 +139,11 @@ impl Bar {
     }
 }
 
-/// The in-program settings area.
+/// The in-program settings area. Rows come from `Config::settings_index`, so
+/// this holds only the cursor and whatever is being typed.
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
+    /// Index into `Config::settings_index`.
     pub selected: usize,
     pub scroll: usize,
     /// Present while a value is being typed.
@@ -89,21 +151,33 @@ pub struct Settings {
     pub cursor: usize,
 }
 
+/// What a `y` will actually do. Every irreversible action in tiny goes through
+/// one of these — there is no undo for a delete or a project-wide replace, so
+/// the confirmation is the only guard.
 #[derive(Debug, Clone)]
 pub enum ConfirmKind {
+    /// Remove a file, or a directory and everything under it.
     Delete(PathBuf),
+    /// Quit, discarding unsaved buffers.
     QuitUnsaved,
+    /// Rewrite every occurrence across the project.
     Replace { find: String, replace: String },
 }
 
+/// A pending yes/no question. The `message` is built at the point the action
+/// is requested, so it can quote real counts — how many files, how many
+/// occurrences — rather than a generic warning.
 #[derive(Debug, Clone)]
 pub struct Confirm {
     pub kind: ConfirmKind,
     pub message: String,
 }
 
+/// What is layered over the normal two-pane view. Checked before [`Focus`] in
+/// [`App::on_key`], so an open overlay owns the keyboard.
 #[derive(Debug, Clone)]
 pub enum Mode {
+    /// No overlay; keys go to whichever pane has focus.
     Normal,
     Prompt(Prompt),
     Confirm(Confirm),
@@ -132,6 +206,10 @@ impl TextKind {
 }
 
 /// Extensionless files that are prose by convention rather than by suffix.
+///
+/// Without this, `LICENSE` and `README` would be classified as code and open
+/// straight into the editor with line numbers, which is not what anyone wants
+/// from a licence file.
 const PROSE_NAMES: &[&str] = &[
     "LICENCE",
     "LICENSE",
@@ -145,6 +223,13 @@ const PROSE_NAMES: &[&str] = &[
     "TODO",
 ];
 
+/// Decide how a text file should open.
+///
+/// Checked in order: markdown first (it is usually also in the prose list but
+/// has a renderer of its own), then the configured prose extensions, then
+/// anything else with an extension is code. Extensionless files fall back to
+/// [`PROSE_NAMES`], and are code otherwise — which is the right default for a
+/// `Makefile` or a shell script.
 pub fn text_kind(path: &Path, prose_exts: &[String]) -> TextKind {
     match path
         .extension()
@@ -199,6 +284,10 @@ pub enum Preview {
 }
 
 /// A drawn media preview, kept so it is not re-decoded on every keystroke.
+///
+/// Keyed on the pane size as well as the path, because the preview is rendered
+/// to fit — a resized pane needs a fresh decode. Holds a `Result` so a failed
+/// decode is cached too, and a broken file is not retried on every frame.
 pub struct MediaCache {
     pub path: PathBuf,
     pub cols: usize,
@@ -206,35 +295,71 @@ pub struct MediaCache {
     pub result: std::result::Result<media::Preview, String>,
 }
 
-/// Files larger than this are not loaded into the editor.
+/// Files larger than this are not loaded into the editor. Shown as a
+/// "large file" preview instead — the undo model snapshots whole buffers, so
+/// there is a real ceiling on what can be edited comfortably.
 const MAX_EDIT_BYTES: u64 = 8 * 1024 * 1024;
 
+/// Everything mutable. One of these exists for the life of the program;
+/// `ui::draw` reads it and `on_key` writes it.
 pub struct App {
     pub tree: Tree,
+    /// Flattened tree, rebuilt after every structural change. The cursor
+    /// indexes into this.
     pub rows: Vec<Row>,
+    /// Cursor position in `rows`. Kept valid by every mutation path — a stale
+    /// index would silently preview the wrong file.
     pub selected: usize,
+    /// First visible row. Owned here but written by `ui` once the pane height
+    /// is known.
     pub tree_scroll: usize,
     pub focus: Focus,
     pub mode: Mode,
+    /// What the right pane is showing for the current selection. Derived from
+    /// the cursor by [`App::sync_preview`]; never set directly.
     pub preview: Preview,
     pub preview_scroll: usize,
+    /// How many lines the preview produced at the current width. Written by
+    /// `ui` during a draw, read here to clamp scrolling.
     pub preview_len: usize,
     /// Markdown opens rendered; `e` drops into raw editing.
     pub read_mode: bool,
+    /// Open files, keyed by path. Outlives the selection so unsaved edits
+    /// survive arrowing away and back — see the module docs.
     pub buffers: HashMap<PathBuf, Editor>,
+    /// The live config. Mutated by `:set` and the settings area; persisted
+    /// only on an explicit `Ctrl+S`.
     pub config: Config,
+    /// Parsed styles. Rebuilt from `config.theme` by [`App::apply_config`], so
+    /// a theme change repaints without a restart.
     pub palette: Palette,
+    /// Rebuilt alongside the palette when `syntax_theme` changes.
     pub highlighter: Highlighter,
     pub media: Option<MediaCache>,
     /// The graph, while it is being looked at.
     pub graph_view: Option<GraphView>,
+    /// The message on the status line. Every action sets this — it is the
+    /// program's only channel for telling the user what just happened.
     pub status: String,
+    /// Checked by the event loop after each draw, so the final frame is shown
+    /// before the program exits.
     pub should_quit: bool,
+    /// Pane heights from the last draw, used for page-up/page-down. Defaults
+    /// are used on the first frame, before anything has been drawn.
     pub last_edit_height: usize,
     pub last_tree_height: usize,
 }
 
 impl App {
+    /// Build the initial state from a resolved target and a loaded config.
+    ///
+    /// The startup warning, if any, is shown in place of the usual greeting —
+    /// a broken config file should be the first thing you see, not something
+    /// buried behind a "? for help".
+    ///
+    /// When the target named a file, the cursor is revealed onto it and the
+    /// editor is focused straight away: that is the entire point of writing
+    /// `tiny ~/code/main.py` rather than naming the folder.
     pub fn new(target: project::Target, config: Config, warning: Option<String>) -> Result<Self> {
         let root = target.root.clone();
         if !root.is_dir() {
@@ -297,6 +422,9 @@ impl App {
         self.selected_row().map(|r| r.path.as_path())
     }
 
+    /// The buffer behind the current preview, if the preview is a text file.
+    /// Returns `None` for directories, media and binaries, which is what makes
+    /// `Ctrl+S` on a picture say "nothing to save" instead of panicking.
     pub fn active_buffer(&self) -> Option<&Editor> {
         match &self.preview {
             Preview::Buffer { path, .. } => self.buffers.get(path),
@@ -314,6 +442,8 @@ impl App {
         }
     }
 
+    /// Every buffer with unsaved changes. Drives the confirm-on-quit prompt,
+    /// which names them so you know what you are about to discard.
     pub fn dirty_buffers(&self) -> Vec<&Path> {
         self.buffers
             .values()
@@ -346,6 +476,11 @@ impl App {
     }
 
     /// Build the graph and hand the screen over to it.
+    ///
+    /// Built fresh every time rather than cached: it is the only way to be
+    /// sure it reflects files edited since the last look, and there is no
+    /// invalidation scheme that would be simpler than just rebuilding.
+    /// Synchronous, so a large project pauses here — see `graph::build`.
     fn open_graph(&mut self) {
         let root = self.root().to_path_buf();
         let options = self.graph_options();
@@ -358,7 +493,9 @@ impl App {
         self.graph_view = Some(view);
     }
 
-    /// Move the cursor to a path and start editing it.
+    /// Move the cursor to a path and start editing it. Used when leaving the
+    /// graph with Enter. A path outside the project is reported rather than
+    /// opened, since the tree has nowhere to put it.
     pub fn open_path(&mut self, path: &Path) {
         if self.reveal(path) {
             if matches!(self.preview, Preview::Buffer { .. }) {
@@ -380,6 +517,14 @@ impl App {
 
     // ---- selection & preview ---------------------------------------------
 
+    /// Re-flatten the tree and keep the cursor on the same *file*, not the same
+    /// index.
+    ///
+    /// This is the difference between a refresh feeling stable and feeling like
+    /// the list jumped: rows shift whenever anything above them is added,
+    /// removed, expanded or collapsed, so the path is remembered and looked up
+    /// again afterwards. Only when the file is genuinely gone does the index
+    /// get clamped instead.
     fn rebuild_rows(&mut self) {
         let want = self.selected_path().map(Path::to_path_buf);
         self.rows = self.tree.flatten();
@@ -394,6 +539,12 @@ impl App {
     }
 
     /// Open every folder on the way to `path` and put the cursor on it.
+    ///
+    /// Necessary because the tree loads lazily: a file three directories deep
+    /// does not exist as a row until its parents have been expanded. Returns
+    /// false when the path is outside the project or could not be found, and
+    /// still syncs the preview either way so the pane never shows something
+    /// stale.
     fn reveal(&mut self, path: &Path) -> bool {
         let root = self.tree.root_path().to_path_buf();
         let Ok(rel) = path.strip_prefix(&root) else {
@@ -419,6 +570,12 @@ impl App {
         }
     }
 
+    /// Point the preview at whatever the cursor is now on, and reset its
+    /// scroll.
+    ///
+    /// Called after every cursor move. This is the single seam between the two
+    /// panes — the tree does not know about the preview and vice versa; they
+    /// are coupled only here.
     fn sync_preview(&mut self) {
         self.preview_scroll = 0;
         let Some(row) = self.selected_row().cloned() else {
@@ -440,6 +597,16 @@ impl App {
         self.preview = self.load_file_preview(&row.path);
     }
 
+    /// Classify a file and, if it is text, open a buffer for it.
+    ///
+    /// Order matters. An already-open buffer wins over anything on disk, so a
+    /// file with unsaved edits is never re-read out from under them. Then
+    /// media, then the size ceiling, then a decode attempt — a file that is not
+    /// valid UTF-8, or that contains a zero byte, is reported as binary rather
+    /// than opened as mojibake.
+    ///
+    /// The `\0` check catches UTF-16 and similar, which decode as valid UTF-8
+    /// often enough to slip past `from_utf8` alone.
     fn load_file_preview(&mut self, path: &Path) -> Preview {
         // A buffer already open, possibly with unsaved edits, wins over disk.
         if self.buffers.contains_key(path) {
@@ -510,6 +677,9 @@ impl App {
         });
     }
 
+    /// Move the tree cursor by `delta` rows, clamped to the list. Only syncs
+    /// the preview when the cursor actually moved, so holding a key at the end
+    /// of the list does not re-read the same file repeatedly.
     fn move_selection(&mut self, delta: isize) {
         if self.rows.is_empty() {
             return;
@@ -532,6 +702,12 @@ impl App {
 
     // ---- key dispatch -----------------------------------------------------
 
+    /// The single entry point for input. Dispatches in strict priority order:
+    /// graph, then mode, then focus.
+    ///
+    /// See the module docs for the take-and-replace pattern: the mode is moved
+    /// out and `Normal` left in its place, so a handler that does nothing
+    /// closes its overlay, and one that wants to stay open has to say so.
     pub fn on_key(&mut self, key: KeyEvent) {
         // The graph takes the whole screen while it is open, and every key
         // with it.
@@ -568,6 +744,9 @@ impl App {
         self.mode = Mode::Help(next);
     }
 
+    /// Forward a key to the graph view and act on what it asks for. The view
+    /// handles its own navigation; only opening a file and closing the graph
+    /// need application state.
     fn on_graph_key(&mut self, key: KeyEvent) {
         let action = match self.graph_view.as_mut() {
             Some(view) => view.on_key(key),
@@ -592,6 +771,9 @@ impl App {
         }
     }
 
+    /// Keys for the tree pane. Single letters are free here — unlike the
+    /// editor, nothing is being typed — which is why `n`, `r`, `d` and friends
+    /// can be bare.
     fn on_tree_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let page = self.last_tree_height.saturating_sub(1).max(1) as isize;
@@ -625,6 +807,15 @@ impl App {
         }
     }
 
+    /// Keys for the preview pane.
+    ///
+    /// The escape hatches come first and return early, so nothing that leaves
+    /// the pane or acts on the file can be swallowed as text input. That is
+    /// also why `Ctrl+P` exists as a second binding for the command bar: a
+    /// bare `:` in the editor is a colon being typed.
+    ///
+    /// Below that the function forks on `read_mode`: reading scrolls, editing
+    /// types.
     fn on_editor_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let tab_width = self.config.tab_width;
@@ -716,6 +907,7 @@ impl App {
 
     // ---- the bar ----------------------------------------------------------
 
+    /// Open the search or command line, discarding whatever was there before.
     fn open_bar(&mut self, kind: BarKind) {
         self.mode = Mode::Bar(Bar::new(kind));
         self.status = match kind {
@@ -724,6 +916,18 @@ impl App {
         };
     }
 
+    /// Keys for the search and command bar.
+    ///
+    /// Two structural things to know when editing this:
+    ///
+    /// - Branches that end with `return` leave `self.mode` as the `Normal` that
+    ///   `on_key` swapped in — that is how Esc and Enter close the bar. Every
+    ///   other branch has to put the bar back.
+    /// - Ctrl chords are handled up front and never fall through, so a chord
+    ///   cannot leak its letter into the query.
+    ///
+    /// Text edits fall out of the `match` to the bottom, where a search bar
+    /// re-runs its query and previews the top hit.
     fn on_bar_key(&mut self, mut b: Bar, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl {
@@ -814,6 +1018,8 @@ impl App {
         self.mode = Mode::Bar(b);
     }
 
+    /// Re-run the query from scratch and reset the result cursor. Called on
+    /// every keystroke — see `search`'s module docs for why that is fine.
     fn run_search(&mut self, b: &mut Bar) {
         let opts = self.search_opts();
         b.results = search::search(self.tree.root_path(), &b.input, &opts);
@@ -832,7 +1038,8 @@ impl App {
         self.place_cursor_on(&hit);
     }
 
-    /// Move to a result and hand focus to the pane it is in.
+    /// Commit to a result: move to it and hand the keyboard to the preview.
+    /// The Enter-key counterpart to [`App::preview_hit`].
     fn jump_to(&mut self, hit: &Hit) {
         self.reveal(&hit.path);
         self.place_cursor_on(hit);
@@ -841,6 +1048,12 @@ impl App {
         }
     }
 
+    /// Put the cursor on a hit, choosing rendered or raw view to suit it.
+    ///
+    /// A content hit forces raw source: the whole point is to see the matching
+    /// line with the cursor on it, and rendered markdown has no line the hit
+    /// corresponds to. A name hit leaves the file in whatever view it would
+    /// normally open in.
     fn place_cursor_on(&mut self, hit: &Hit) {
         if hit.kind == HitKind::Content {
             // A match inside a note is easier to see as raw source with the
@@ -858,6 +1071,13 @@ impl App {
 
     // ---- commands ---------------------------------------------------------
 
+    /// Parse and run a `:` command.
+    ///
+    /// Adding one means adding an arm here and an entry in `complete_command`'s
+    /// `COMMANDS` list, or it will work but never tab-complete. Handlers return
+    /// `Result<String>`: a non-empty `Ok` becomes the status message, an empty
+    /// one means the command already set its own, and an `Err` is shown with
+    /// its full context chain.
     fn run_command(&mut self, line: &str) {
         let args = split_args(line);
         let Some(cmd) = args.first().map(String::as_str) else {
@@ -915,6 +1135,10 @@ impl App {
         }
     }
 
+    /// `:set key value`, or `:set key` to report the current value.
+    ///
+    /// Remaining arguments are rejoined with spaces, so a style spec like
+    /// `:set theme.heading cyan bold` arrives intact.
     fn cmd_set(&mut self, args: &[String]) -> Result<String> {
         let key = args.first().ok_or_else(|| anyhow!(":set <key> <value>"))?;
         if args.len() < 2 {
@@ -931,6 +1155,8 @@ impl App {
         Ok(format!("{key} = {value}"))
     }
 
+    /// `:replace find replace`. Counts first and asks before writing anything —
+    /// this rewrites files on disk and cannot be undone.
     fn cmd_replace(&mut self, args: &[String]) -> Result<String> {
         if args.len() < 2 {
             return Err(anyhow!(
@@ -966,6 +1192,11 @@ impl App {
     }
 
     /// Re-derive everything a settings change can affect.
+    ///
+    /// Must be called after any successful `Config::set`, or the change sits in
+    /// the config struct without reaching the screen. Rebuilds the palette and
+    /// highlighter, re-reads the tree if dotfile visibility changed, and drops
+    /// the media cache since a size change invalidates whatever was drawn.
     fn apply_config(&mut self) {
         self.palette = Palette::from_theme(&self.config.theme);
         let (hl, _) = Highlighter::with_theme(&self.config.syntax_theme);
@@ -985,6 +1216,16 @@ impl App {
         self.status = "settings — Enter to change, ^S to write tiny.conf, Esc to close".into();
     }
 
+    /// Keys for the settings overlay.
+    ///
+    /// Two states in one function, separated by whether `s.editing` is set:
+    /// navigating the list, or typing into one row's value. Taking the buffer
+    /// out with `take()` at the top means each branch has to put it back to
+    /// stay in edit mode — the same "closing is the default" pattern as the
+    /// mode dispatch itself.
+    ///
+    /// `Ctrl+S` writes `tiny.conf` and works in both states, since finishing a
+    /// value and immediately saving is the obvious thing to want.
     fn on_settings_key(&mut self, mut s: Settings, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let index = Config::settings_index();
@@ -1072,6 +1313,9 @@ impl App {
 
     // ---- prompts & confirmations -----------------------------------------
 
+    /// Keys for the status-bar text prompt. Ctrl chords are ignored outright
+    /// rather than acted on — there is nothing useful to do with them here, and
+    /// letting one through would type its letter into a filename.
     fn on_prompt_key(&mut self, mut p: Prompt, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             self.mode = Mode::Prompt(p);
@@ -1124,6 +1368,8 @@ impl App {
         }
     }
 
+    /// Keys for a yes/no question. Only `y` acts; `n` and Esc cancel, and
+    /// anything else leaves the question standing rather than guessing.
     fn on_confirm_key(&mut self, c: Confirm, key: KeyEvent) {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => match c.kind {
@@ -1138,6 +1384,12 @@ impl App {
         }
     }
 
+    /// Carry out a confirmed project-wide replace.
+    ///
+    /// Files changed underneath any open buffer, so clean buffers are dropped
+    /// and will re-read from disk on next view. Dirty ones are kept — their
+    /// unsaved edits are worth more than consistency with a file the user has
+    /// already diverged from.
     fn do_replace(&mut self, find: &str, replace: &str) {
         let opts = self.search_opts();
         match search::replace_all(self.tree.root_path(), find, replace, &opts) {
@@ -1161,6 +1413,8 @@ impl App {
 
     // ---- actions ----------------------------------------------------------
 
+    /// Right-arrow / Enter on the tree: expand a closed folder, step into an
+    /// already-open one, or focus the preview for a file.
     fn activate(&mut self) {
         let Some(row) = self.selected_row().cloned() else {
             return;
@@ -1177,6 +1431,9 @@ impl App {
         }
     }
 
+    /// Hand the keyboard to the preview pane, choosing rendered or raw view by
+    /// file kind: prose and markdown open to be read, code opens to be typed
+    /// into. Does nothing for a directory, and explains itself for a binary.
     fn focus_editor(&mut self) {
         match &self.preview {
             Preview::Buffer { kind, .. } => {
@@ -1202,6 +1459,9 @@ impl App {
         }
     }
 
+    /// Left-arrow: close an open folder, or jump to the parent of anything
+    /// else. Two behaviours on one key, which is what makes it feel like
+    /// "outwards".
     fn collapse_or_parent(&mut self) {
         let Some(row) = self.selected_row().cloned() else {
             return;
@@ -1219,6 +1479,9 @@ impl App {
         }
     }
 
+    /// `.`: show or hide dotfiles. Writes through to the config so the setting
+    /// is consistent with `:set show_hidden`, but does not persist it — that
+    /// still needs an explicit save.
     fn toggle_hidden(&mut self) {
         let next = !self.tree.show_hidden();
         self.tree.set_show_hidden(next);
@@ -1231,6 +1494,9 @@ impl App {
         };
     }
 
+    /// Re-read the project from disk. The manual replacement for a file
+    /// watcher (see `tree`'s module docs). Clean buffers are dropped so they
+    /// pick up external changes; dirty ones are kept.
     fn refresh(&mut self) {
         self.tree.refresh_all();
         // Drop clean buffers so they re-read from disk; keep unsaved work.
@@ -1240,6 +1506,9 @@ impl App {
         self.status = "refreshed".into();
     }
 
+    /// Write the current buffer. Reports "nothing to save" for a non-text
+    /// preview and "no changes" for a clean one, rather than silently doing
+    /// nothing in either case.
     pub fn save_active(&mut self) {
         let Some(ed) = self.active_buffer_mut() else {
             self.status = "nothing to save".into();
@@ -1256,6 +1525,8 @@ impl App {
         }
     }
 
+    /// Quit, or ask first if anything is unsaved. The prompt names every dirty
+    /// file, since "discard changes?" is unanswerable without knowing which.
     fn request_quit(&mut self) {
         let dirty = self.dirty_buffers();
         if dirty.is_empty() {
@@ -1269,6 +1540,9 @@ impl App {
         });
     }
 
+    /// Where a new file or folder should go: the selected directory, or the
+    /// parent of the selected file. Matches what most file managers do, and
+    /// means you rarely have to type a path.
     fn creation_base(&self) -> PathBuf {
         match self.selected_row() {
             Some(r) if r.is_dir => r.path.clone(),
@@ -1281,6 +1555,9 @@ impl App {
         }
     }
 
+    /// Open a naming prompt. Rename pre-fills the current name and refuses to
+    /// touch the project root, which has no parent inside the tree to rename
+    /// it within.
     fn begin_prompt(&mut self, kind: PromptKind) {
         let (label, input, base) = match kind {
             PromptKind::NewFile => ("New file".to_string(), String::new(), self.creation_base()),
@@ -1315,6 +1592,8 @@ impl App {
         });
     }
 
+    /// Act on a confirmed prompt. An empty name cancels rather than erroring —
+    /// pressing Enter on a blank field clearly means "never mind".
     fn commit_prompt(&mut self, p: Prompt) {
         let name = p.input.trim().to_string();
         if name.is_empty() {
@@ -1358,6 +1637,9 @@ impl App {
         Ok(format!("created {}", display_name(&target)))
     }
 
+    /// Rename the selected entry, moving any open buffer with it so unsaved
+    /// edits follow the file to its new name. Refuses to overwrite an existing
+    /// path.
     fn rename_selected(&mut self, base: &Path, name: &str) -> Result<String> {
         let Some(row) = self.selected_row().cloned() else {
             return Err(anyhow!("nothing selected"));
@@ -1385,6 +1667,9 @@ impl App {
         Ok(format!("renamed to {}", display_name(&target)))
     }
 
+    /// Ask before deleting. The message counts a directory's entries first,
+    /// because `remove_dir_all` takes everything underneath and the user should
+    /// see the number before pressing `y`.
     fn begin_delete(&mut self) {
         let Some(row) = self.selected_row().cloned() else {
             return;
@@ -1412,6 +1697,12 @@ impl App {
         });
     }
 
+    /// Carry out a confirmed delete, then put the cursor somewhere sensible.
+    ///
+    /// Buffers under the deleted path are dropped — including unsaved ones,
+    /// since there is no longer a file to save them to. The cursor moves to the
+    /// parent directory where it can, rather than staying on an index that now
+    /// points at a different file.
     fn do_delete(&mut self, path: &Path) {
         let is_dir = path.is_dir();
         let result = if is_dir {
@@ -1441,6 +1732,8 @@ impl App {
 
 // ---- free helpers ---------------------------------------------------------
 
+/// A human word for a non-text file, so the preview can say "PDF" or "archive"
+/// instead of just "binary".
 fn binary_kind(path: &Path) -> &'static str {
     match path
         .extension()
@@ -1456,12 +1749,14 @@ fn binary_kind(path: &Path) -> &'static str {
     }
 }
 
+/// Filename for a status message, falling back to the full path.
 pub fn display_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
 }
 
+/// `""` or `"s"`, for building status messages that read properly at n = 1.
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
@@ -1473,6 +1768,11 @@ fn char_byte(s: &str, ci: usize) -> usize {
 
 /// Split a command line on whitespace, keeping double-quoted runs together so
 /// `:replace "old thing" "new thing"` works.
+///
+/// The `any` flag tracks whether the current argument was *started*, which is
+/// what lets `""` produce a deliberate empty argument rather than being
+/// dropped as whitespace. There is no escaping — a literal quote cannot be
+/// passed, which is a known limit rather than an oversight.
 pub fn split_args(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -1503,6 +1803,14 @@ pub fn split_args(line: &str) -> Vec<String> {
 }
 
 /// Fill in the rest of a command name, or a setting name after `set`.
+///
+/// Completes to the longest common prefix of the matches rather than to the
+/// first one, so Tab on an ambiguous prefix advances as far as it safely can
+/// and then stops — the shell behaviour. Returns without changing anything
+/// when that would add nothing.
+///
+/// Any new command added to [`App::run_command`] needs adding to `COMMANDS`
+/// here too, or it will work but never complete.
 fn complete_command(b: &mut Bar) {
     const COMMANDS: &[&str] = &[
         "set", "replace", "config", "settings", "graph", "web", "write", "save", "quit", "help",
@@ -1559,6 +1867,17 @@ fn complete_command(b: &mut Bar) {
 
 /// Join a user-typed name onto `base`, refusing anything that would escape the
 /// project root — a typed `../../etc/passwd` must not create a file there.
+///
+/// **This is a security boundary.** Every path that comes from user input and
+/// is then created, renamed to, or written must pass through here. The check
+/// is lexical, done by walking components and popping on `..`, so it does not
+/// depend on the target existing — and it fails closed twice over: once if
+/// `..` pops past the start, and again if the normalised result does not sit
+/// under `root`.
+///
+/// It relies on `root` being canonicalized, which `project::resolve`
+/// guarantees. Symlinks inside the project are not resolved, so a symlink
+/// pointing outside is not caught here.
 fn safe_join(base: &Path, name: &str, root: &Path) -> Result<PathBuf> {
     let candidate = base.join(name);
     let mut normalized = PathBuf::new();

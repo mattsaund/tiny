@@ -7,12 +7,36 @@
 //! Matching is smart-cased — an all-lowercase query ignores case, a query
 //! with any capital in it does not. Replace is always case-sensitive, because
 //! rewriting files on a loose match is not a mistake worth being clever about.
+//!
+//! # Why no index
+//!
+//! An index is the obvious optimisation and the wrong one here. It would need
+//! building on startup, invalidating on every save, and persisting somewhere
+//! under `.tiny/` — and it can go stale, which means search can start lying.
+//! A linear scan over a folder of notes and source finishes in single-digit
+//! milliseconds and is correct by construction. The size caps below
+//! ([`MAX_FILE_BYTES`], `max_results`) are what keep it that way; if a project
+//! ever outgrows them, that is the moment to reconsider, not before.
+//!
+//! # Smart case
+//!
+//! `widget` matches `Widget`; `Widget` matches only `Widget`. This applies to
+//! [`search`] alone. [`count`] and [`replace_all`] are always case-sensitive
+//! and always literal, because a find-replace that guessed at your intent
+//! across a whole project would be a very bad afternoon.
+//!
+//! # Shared with the graph
+//!
+//! [`walk`] is `pub` because `graph::build` uses the same traversal, and the
+//! two must agree on what counts as part of the project — otherwise a file
+//! could be searchable but absent from the graph, or the reverse.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+/// Whether a hit came from a file's name or from a line inside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HitKind {
     /// The query matched the file's name.
@@ -21,6 +45,8 @@ pub enum HitKind {
     Content,
 }
 
+/// One match. Carries enough to jump straight to it: the file, the line, and
+/// the character column, which `App::place_cursor_on` feeds to `Editor::goto`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hit {
     pub path: PathBuf,
@@ -33,10 +59,18 @@ pub struct Hit {
     pub text: String,
 }
 
+/// Traversal limits, built from the live config by `App::search_opts` so
+/// `:set search_ignore ...` takes effect on the next keystroke.
 #[derive(Debug, Clone)]
 pub struct Opts {
+    /// Stop collecting past this many hits. The search box runs on every
+    /// keystroke, so an unbounded result set on a one-letter query would
+    /// stall the UI.
     pub max_results: usize,
+    /// Directory names never walked into, matched exactly — `target`, not
+    /// `*/target/*`.
     pub ignore: Vec<String>,
+    /// Whether dotfiles and dot-directories are searched at all.
     pub show_hidden: bool,
 }
 
@@ -53,6 +87,8 @@ impl Default for Opts {
     }
 }
 
+/// What a replace did, or what one would do. Used both to describe the change
+/// afterwards and to fill in the confirmation prompt beforehand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Report {
     pub files: usize,
@@ -66,6 +102,15 @@ const MAX_LINE_DISPLAY: usize = 400;
 
 /// Search names and contents under `root`. Name matches come first, then
 /// content matches in directory order.
+///
+/// The ordering is why hits are collected into two vectors and concatenated at
+/// the end: typing part of a filename should surface the file itself, not the
+/// forty lines that happen to mention it. Case folding is decided once from
+/// the query and applied to both passes.
+///
+/// A file yields at most one name hit but any number of content hits. The cap
+/// is checked in both loops, so a single enormous file cannot exhaust it
+/// before other files are reached.
 pub fn search(root: &Path, query: &str, opts: &Opts) -> Vec<Hit> {
     let query = query.trim();
     if query.is_empty() {
@@ -123,6 +168,12 @@ pub fn search(root: &Path, query: &str, opts: &Opts) -> Vec<Hit> {
 }
 
 /// How many occurrences a `:replace` would rewrite, without touching anything.
+///
+/// Runs before the confirmation prompt so the user is told the real scale of
+/// what they are about to do. Deliberately a separate pass rather than a
+/// dry-run flag on [`replace_all`]: the two are read by different code paths
+/// and keeping them apart makes it impossible to accidentally write during a
+/// count.
 pub fn count(root: &Path, needle: &str, opts: &Opts) -> Report {
     if needle.is_empty() {
         return Report::default();
@@ -141,6 +192,14 @@ pub fn count(root: &Path, needle: &str, opts: &Opts) -> Report {
 
 /// Rewrite every occurrence across the project. Case-sensitive, literal.
 /// Files that fail to write are reported rather than silently skipped.
+///
+/// There is no undo for this — it edits files on disk, not buffers. The
+/// confirmation prompt in `App::cmd_replace` is the only guard, which is why
+/// it quotes the exact counts from [`count`].
+///
+/// On partial failure it keeps going and returns an error naming every file it
+/// could not write, so the user knows exactly what state the project is in.
+/// `App::do_replace` then drops clean buffers so open files re-read from disk.
 pub fn replace_all(root: &Path, needle: &str, replacement: &str, opts: &Opts) -> Result<Report> {
     if needle.is_empty() {
         return Ok(Report::default());
@@ -173,6 +232,9 @@ pub fn replace_all(root: &Path, needle: &str, replacement: &str, opts: &Opts) ->
 }
 
 /// Character index of the first match, honouring case folding.
+///
+/// Returns a *character* index, not a byte offset, because it ends up as an
+/// `Editor` cursor column — see the note on character indexing in `editor`.
 fn find_in(haystack: &str, needle: &str, fold: bool) -> Option<usize> {
     let hay = if fold {
         haystack.to_lowercase()
@@ -184,6 +246,8 @@ fn find_in(haystack: &str, needle: &str, fold: bool) -> Option<usize> {
     Some(hay[..byte].chars().count())
 }
 
+/// Cut a line down for display. Long lines are shortened, never skipped — the
+/// hit is still real, there is just no room to show all of it.
 fn truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         s.to_string()
@@ -193,6 +257,10 @@ fn truncate(s: &str, max_chars: usize) -> String {
 }
 
 /// Read a file if it is text. Binary files and oversized files are skipped.
+///
+/// "Binary" means "contains a zero byte", the same cheap heuristic `grep`
+/// uses. It is what stops a `.png` or a compiled object from being scanned —
+/// and, in [`replace_all`], from being rewritten.
 fn read_text(path: &Path) -> Result<String> {
     let meta = fs::metadata(path)?;
     if meta.len() > MAX_FILE_BYTES {
@@ -206,6 +274,17 @@ fn read_text(path: &Path) -> Result<String> {
 }
 
 /// Every candidate file under `root`, in sorted directory order.
+///
+/// Shared with `graph::build`, so the two always agree on what the project
+/// contains. Iterative with an explicit stack rather than recursive, so a
+/// pathologically deep tree cannot blow the call stack.
+///
+/// Symlinks are skipped entirely, not just not-followed. A link pointing back
+/// up its own tree would otherwise loop forever, and there is no sane way to
+/// present the same file twice under two paths.
+///
+/// Directories are pushed reversed so the stack pops them in sorted order,
+/// which is what makes results stable between runs.
 pub fn walk(root: &Path, opts: &Opts) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];

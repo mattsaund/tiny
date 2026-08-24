@@ -6,6 +6,25 @@
 //! the parser from line 0 but only *collects* the lines actually on screen,
 //! then stops. Cost scales with scroll depth rather than file size, and no
 //! cache has to be invalidated on every keystroke.
+//!
+//! # Why re-parse from the top every frame
+//!
+//! It looks wasteful, and the alternative looks obvious: cache the parser
+//! state at each line and resume from the nearest one. That cache would then
+//! have to be invalidated on every edit, keyed per buffer, and kept correct
+//! when a line is inserted or removed — a whole subsystem, with its own bugs,
+//! to speed up something that is already fast enough. Parsing a few hundred
+//! lines of text takes well under a frame, and the parse only ever runs to the
+//! *bottom of the visible window*, not to the end of the file. A file long
+//! enough for this to hurt is past [`MAX_HIGHLIGHT_LINES`] anyway.
+//!
+//! # Two different highlighters
+//!
+//! This module and `markdown` both style text, and they do not overlap:
+//! `highlight` colours *code* by grammar and is used for the editor pane and
+//! for fenced blocks inside notes; `markdown` styles *prose* structure and
+//! calls into here for those fenced blocks. Editor styling comes from the
+//! syntect theme; everything else comes from the palette.
 
 use std::path::Path;
 
@@ -15,8 +34,17 @@ use syntect::highlighting::{FontStyle, Theme, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
 /// A single highlighted run of text within a line.
+///
+/// A line is a `Vec<Piece>`; the whole window is a `Vec<Vec<Piece>>`. The text
+/// is owned rather than borrowed because it outlives the parse — `ui` clips it
+/// horizontally before turning it into spans.
 pub type Piece = (Style, String);
 
+/// Owns the loaded syntax definitions and the active theme.
+///
+/// Construction loads syntect's full default syntax set, which is not cheap,
+/// so `App` builds exactly one and keeps it. It is rebuilt only when
+/// `syntax_theme` changes.
 pub struct Highlighter {
     syntaxes: SyntaxSet,
     theme: Theme,
@@ -27,6 +55,8 @@ pub struct Highlighter {
 const MAX_HIGHLIGHT_LINES: usize = 20_000;
 
 impl Highlighter {
+    /// A highlighter with the default theme, discarding the warning that
+    /// cannot happen for a name syntect is known to ship.
     pub fn new() -> Self {
         Self::with_theme("base16-ocean.dark").0
     }
@@ -64,6 +94,7 @@ impl Highlighter {
         )
     }
 
+    /// The no-op syntax, used for unknown file types and unlabelled fences.
     fn plain(&self) -> &SyntaxReference {
         self.syntaxes.find_syntax_plain_text()
     }
@@ -92,6 +123,16 @@ impl Highlighter {
 
     /// Highlight `count` lines starting at `start`, parsing from the top of the
     /// file so multi-line constructs resolve correctly.
+    ///
+    /// The loop runs from line 0 but skips pushing anything until it reaches
+    /// `start`: those early lines are parsed purely to build up state, so a
+    /// line 400 deep inside a docstring is styled as a string rather than as
+    /// code. Cost therefore scales with how far you have scrolled, not with
+    /// how long the file is.
+    ///
+    /// Two escape hatches drop to unstyled text rather than failing: files
+    /// past [`MAX_HIGHLIGHT_LINES`], and any line syntect refuses to parse.
+    /// Neither should stop you editing.
     pub fn highlight_window(
         &self,
         lines: &[String],
@@ -140,6 +181,9 @@ impl Highlighter {
     }
 
     /// Highlight a short standalone snippet, e.g. a fenced block in markdown.
+    ///
+    /// A snippet is self-contained, so there is no earlier state to recover
+    /// and the whole thing is both parsed and collected.
     pub fn highlight_snippet(&self, text: &str, syntax: &SyntaxReference) -> Vec<Vec<Piece>> {
         let lines: Vec<String> = text.lines().map(str::to_string).collect();
         let n = lines.len();
@@ -153,6 +197,12 @@ impl Default for Highlighter {
     }
 }
 
+/// syntect style to ratatui style.
+///
+/// Only the foreground crosses over. syntect themes also carry a background
+/// per token, but painting it would fight the terminal's own background and
+/// leave the editor looking like a patchwork — the pane keeps one ground and
+/// varies only the ink.
 fn convert_style(s: syntect::highlighting::Style) -> Style {
     let mut out = Style::default().fg(Color::Rgb(s.foreground.r, s.foreground.g, s.foreground.b));
     if s.font_style.contains(FontStyle::BOLD) {

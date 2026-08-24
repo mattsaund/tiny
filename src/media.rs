@@ -9,6 +9,26 @@
 //! Video shows a poster frame, pulled with ffmpeg when it is installed. When
 //! it is not, the pane says so and falls back to file details rather than
 //! pretending the feature is missing.
+//!
+//! # The half-block trick
+//!
+//! Terminal cells are about twice as tall as they are wide, so one pixel per
+//! cell gives a picture stretched to twice its height. The fix is the upper
+//! half-block `▀`: set its *foreground* to the top pixel and its *background*
+//! to the bottom one, and a single cell carries a 1x2 column of pixels. The
+//! result is roughly square and doubles the vertical resolution for free.
+//!
+//! The only requirement is 24-bit colour, which every modern terminal has.
+//! Nothing here detects or negotiates a graphics protocol — no sixel, no
+//! kitty, no iTerm2 — which is why it works over ssh and inside tmux.
+//!
+//! # Nothing is cached here
+//!
+//! [`render`] decodes and scales from scratch every time. `App` holds the
+//! result in a `MediaCache` keyed by path *and* pane size, so a redraw at the
+//! same size is free and a resize re-decodes. Keep it that way: caching inside
+//! this module would need its own invalidation, and the app already knows when
+//! the answer can change.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,13 +39,21 @@ use image::{DynamicImage, GenericImageView, Rgba};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
+/// What kind of preview a file wants, decided from its extension alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Image,
     Video,
+    /// Anything else — text, binaries, files with no extension.
     Other,
 }
 
+/// Classify by extension, case-insensitively.
+///
+/// Extension-only on purpose: this runs on every cursor move in the tree, and
+/// sniffing file contents would mean a read per keystroke. The actual decode
+/// in [`load`] does check the real format, so a mislabelled file fails with a
+/// clear message rather than drawing garbage.
 pub fn classify(path: &Path) -> Kind {
     match path
         .extension()
@@ -46,11 +74,18 @@ pub fn classify(path: &Path) -> Kind {
 /// A drawn preview: the block of cells, plus a line describing what it is.
 #[derive(Debug, Clone)]
 pub struct Preview {
+    /// Ready-to-render rows of half-block cells.
     pub lines: Vec<Line<'static>>,
+    /// Caption, e.g. `1920x1080 PNG`. Drawn under the picture.
     pub note: String,
 }
 
 /// Draw `path` into at most `cols` x `rows` cells.
+///
+/// The size is a ceiling, not a target: aspect ratio is preserved, so the
+/// result fills one axis and is centred on the other. Errors are ordinary
+/// values here — a file that will not decode produces a message the pane
+/// shows in place of the picture.
 pub fn render(path: &Path, kind: Kind, cols: usize, rows: usize) -> Result<Preview> {
     if cols < 2 || rows < 2 {
         return Err(anyhow!("pane too small"));
@@ -77,6 +112,7 @@ pub fn render(path: &Path, kind: Kind, cols: usize, rows: usize) -> Result<Previ
     }
 }
 
+/// The extension, upper-cased, for the caption. `"file"` when there is none.
 fn format_name(path: &Path) -> String {
     path.extension()
         .and_then(|e| e.to_str())
@@ -84,6 +120,10 @@ fn format_name(path: &Path) -> String {
         .unwrap_or_else(|| "file".into())
 }
 
+/// Decode an image file, identifying the format from its contents.
+///
+/// Every error names the file, because this message is what the user sees in
+/// the pane instead of a picture.
 fn load(path: &Path) -> Result<DynamicImage> {
     // Sniff the contents rather than trusting the extension.
     let reader = image::ImageReader::open(path)
@@ -96,6 +136,10 @@ fn load(path: &Path) -> Result<DynamicImage> {
 }
 
 /// A temp file that deletes itself when the preview is done with it.
+///
+/// The `Drop` impl is the whole point: [`render`] decodes the frame and then
+/// lets this fall out of scope, so a long session browsing videos does not
+/// leave a trail of PNGs in the temp directory.
 struct TempFrame {
     path: PathBuf,
 }
@@ -107,6 +151,15 @@ impl Drop for TempFrame {
 }
 
 /// Pull a single frame out of a video with ffmpeg.
+///
+/// Two attempts, because seeking is the fast path and it fails on very short
+/// clips: first at the one-second mark (`-ss` before `-i`, so ffmpeg seeks
+/// rather than decoding from the start), then from frame 0 if that produced
+/// nothing.
+///
+/// ffmpeg is an optional runtime dependency, never a build one. When it is
+/// missing the error says so by name, so the pane can tell the user what to
+/// install instead of just failing.
 fn poster_frame(path: &Path) -> Result<TempFrame> {
     if Command::new("ffmpeg").arg("-version").output().is_err() {
         return Err(anyhow!(
@@ -151,6 +204,14 @@ fn poster_frame(path: &Path) -> Result<TempFrame> {
 }
 
 /// Scale to fit and pack two pixel rows into each line of cells.
+///
+/// The pixel budget is `cols` wide by `rows * 2` tall, since each cell holds
+/// two stacked pixels. One scale factor is chosen for both axes so the aspect
+/// ratio survives, then the image is centred horizontally.
+///
+/// The row loop steps by two: `row` becomes the foreground and `row + 1` the
+/// background of the same `▀`. An odd final row has no partner, so its lower
+/// half is left transparent.
 fn to_half_blocks(img: &DynamicImage, cols: usize, rows: usize) -> Vec<Line<'static>> {
     let (iw, ih) = img.dimensions();
     if iw == 0 || ih == 0 {
@@ -199,6 +260,11 @@ fn to_half_blocks(img: &DynamicImage, cols: usize, rows: usize) -> Vec<Line<'sta
 
 /// A pixel's colour, or `None` where it is transparent enough to show the
 /// terminal's own background through.
+///
+/// The threshold is a hard cutoff rather than a blend: there is nothing to
+/// blend *with*, since the terminal background is whatever the user's theme
+/// says and is not knowable from here. `None` becomes `Color::Reset`, which
+/// leaves that half-cell painted in the terminal's own colours.
 fn px(p: &Rgba<u8>) -> Option<Color> {
     if p.0[3] < 32 {
         None

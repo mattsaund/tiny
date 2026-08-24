@@ -4,6 +4,29 @@
 //! A project is just a directory with a `.tiny/` folder in it. That folder
 //! holds an optional per-project `tiny.conf` and, later, the link-graph
 //! cache. Nothing about a project lives outside the directory it describes.
+//!
+//! # Why there is no `tiny new`
+//!
+//! Naming a path that does not exist creates it. That collapses "make a
+//! project" and "open a project" into the same gesture, which is the whole
+//! reason there is no separate subcommand. The cost is that a typo in a path
+//! silently creates a directory instead of erroring — a trade the design
+//! accepts, because the alternative is a `new` command nobody remembers.
+//!
+//! # The scaffolding rule
+//!
+//! Two different things happen when tiny meets a directory without a `.tiny/`:
+//!
+//! - **Marker only.** An existing folder full of someone's work gets a
+//!   `.tiny/` and nothing else. Dropping a `README.md` and a `notes/` folder
+//!   into a stranger's thesis directory would be rude, and unrecoverable
+//!   without a diff.
+//! - **Marker plus scaffolding.** A directory tiny just created, or one that
+//!   was already effectively empty, gets a starter `README.md` and
+//!   `notes/welcome.md` so a brand-new project is not a blank screen.
+//!
+//! `resolve` decides which, and `init`'s `scaffold` flag carries the answer.
+//! Both paths are idempotent: an existing file is never overwritten.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,11 +46,20 @@ pub struct Target {
     pub created: bool,
 }
 
+/// A directory is a project if it holds a `.tiny/` folder. That is the whole
+/// definition — there is no registry, no database, and no state anywhere else
+/// on the machine. Move the folder and the project moves with it.
 pub fn is_project(dir: &Path) -> bool {
     dir.join(PROJECT_DIR).is_dir()
 }
 
 /// Walk up from `start` looking for a directory that is already a project.
+///
+/// This is what makes `tiny` with no argument do the right thing from a
+/// subdirectory: standing in `myproject/src/deep/` and running `tiny` opens
+/// `myproject/`, the same way `git` finds its repo root. Returns `None` when
+/// the walk reaches the filesystem root without finding a marker, in which
+/// case the caller falls back to the working directory itself.
 pub fn find_root(start: &Path) -> Option<PathBuf> {
     let mut cur = Some(start);
     while let Some(dir) = cur {
@@ -46,6 +78,11 @@ pub fn find_root(start: &Path) -> Option<PathBuf> {
 /// - a file: its directory, with the cursor on the file
 /// - a directory: itself
 /// - a path that does not exist: created, then treated as a directory
+///
+/// Everything is canonicalized before it is returned, so the rest of the
+/// program can compare paths with `==` and use `strip_prefix` against the root
+/// without worrying about `./`, symlinks, or relative segments. `tree`,
+/// `search` and `graph` all rely on that being true.
 pub fn resolve(arg: Option<&str>, cfg: &Config) -> Result<Target> {
     let (mut root, file, mut created) = match arg {
         None => {
@@ -101,6 +138,11 @@ pub fn resolve(arg: Option<&str>, cfg: &Config) -> Result<Target> {
 
 /// Mark a directory as a project. With `scaffold`, also lay down a starting
 /// note so a brand-new project is not an empty screen.
+///
+/// Idempotent by construction: every write is guarded by an `exists()` check,
+/// so running it twice — which `:init` lets a user do deliberately — never
+/// clobbers an edited README or welcome note. Called both from `resolve` on
+/// startup and from the `:init` command.
 pub fn init(root: &Path, scaffold: bool) -> Result<()> {
     let meta = root.join(PROJECT_DIR);
     fs::create_dir_all(&meta).with_context(|| format!("cannot create {}", meta.display()))?;
@@ -136,6 +178,11 @@ pub fn init(root: &Path, scaffold: bool) -> Result<()> {
 }
 
 /// Empty enough to scaffold into: no visible files, ignoring dotfiles.
+///
+/// Dotfiles are ignored so a directory holding only `.git/` or `.gitignore` —
+/// a freshly cloned or freshly `git init`-ed folder — still counts as empty
+/// and gets the welcome scaffolding. An unreadable directory returns `false`:
+/// when in doubt, write nothing.
 fn is_effectively_empty(dir: &Path) -> bool {
     match fs::read_dir(dir) {
         Ok(entries) => !entries
@@ -146,6 +193,11 @@ fn is_effectively_empty(dir: &Path) -> bool {
 }
 
 /// Expand a leading `~`, which the shell leaves alone inside quotes.
+///
+/// Needed because `tiny "~/notes"` and `tiny '~/notes'` reach us with a
+/// literal tilde — the shell only expands it unquoted. Deliberately handles
+/// just `~` and `~/...`; `~otheruser` is not supported and is left as a
+/// literal path, which will simply fail to open.
 fn expand(s: &str) -> PathBuf {
     if let Some(rest) = s.strip_prefix("~/")
         && let Ok(home) = std::env::var("HOME")
@@ -163,6 +215,13 @@ fn expand(s: &str) -> PathBuf {
 }
 
 /// `YYYY-MM-DD` from the system clock, without pulling in a date crate.
+///
+/// Used once, for the `created =` line in `.tiny/project.conf`. Adding `chrono`
+/// or `time` to the dependency tree for a single date stamp was not worth it,
+/// so the civil-calendar conversion is inlined below.
+///
+/// This is UTC, not local time — a project created late at night may be dated
+/// tomorrow. The stamp is cosmetic, so that is accepted rather than fixed.
 fn today() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -182,6 +241,9 @@ fn today() -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// The starter note written into `notes/welcome.md` when a project is
+/// scaffolded. It doubles as the first thing that exercises the markdown
+/// renderer, so if you change `markdown.rs`, this is a good page to look at.
 pub const WELCOME: &str = r#"# Welcome
 
 This is a **tiny** project — a folder of markdown files, nothing more.

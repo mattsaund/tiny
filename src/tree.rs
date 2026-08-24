@@ -3,21 +3,54 @@
 //!
 //! Children are read from disk only when a directory is first expanded, so
 //! opening a project with a deep `node_modules` in it stays instant.
+//!
+//! # The two shapes
+//!
+//! There are deliberately two representations of the same thing:
+//!
+//! - [`Node`] is the **tree**: nested, mutable, and the source of truth for
+//!   which directories are open and which have been read.
+//! - [`Row`] is the **list**: one flat entry per visible line, produced by
+//!   [`Tree::flatten`], carrying a precomputed `depth` for indentation.
+//!
+//! `app` holds the flattened rows and indexes into them with a single `usize`
+//! cursor; `ui` draws a window of them. Nothing outside this module walks the
+//! nested form. That means every structural change — expand, collapse,
+//! refresh — has to be followed by a re-flatten, which `App::rebuild_rows`
+//! does while preserving the cursor by path rather than by index.
+//!
+//! # There is no file watcher
+//!
+//! The tree only re-reads the disk when something asks it to: `R`/`F5`, a
+//! create/rename/delete, or a `.`-toggle. Files changed by another program do
+//! not appear until then. That is a deliberate simplification — an inotify
+//! watcher would mean a background thread and a redraw signal, and the event
+//! loop is built to block until a key arrives (see `main`).
 
 use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// One entry in the nested tree. Directories own their `children`, which stay
+/// empty until the directory is first expanded.
 #[derive(Debug, Clone)]
 pub struct Node {
+    /// Absolute path. Canonicalized at the root, so it is safe to compare with
+    /// `==` and to `strip_prefix` against `Tree::root_path`.
     pub path: PathBuf,
+    /// Just the final component, cached so drawing does not re-derive it.
     pub name: String,
     pub is_dir: bool,
+    /// Whether the user has opened this directory. Independent of `loaded`: a
+    /// directory can be read but collapsed, which is what happens when you
+    /// expand something and then close it again.
     pub expanded: bool,
     /// Whether `children` has been read from disk yet.
     pub loaded: bool,
     /// Set when the directory exists but could not be read (permissions, etc).
     pub unreadable: bool,
+    /// Populated only once `loaded` is true. Empty for files, and for
+    /// directories that have never been opened.
     pub children: Vec<Node>,
 }
 
@@ -41,16 +74,25 @@ impl Node {
 }
 
 /// One visible line in the tree pane.
+///
+/// A flattened snapshot of a [`Node`], not a reference to one — `app` keeps a
+/// `Vec<Row>` and indexes it by cursor position, so rows have to outlive any
+/// borrow of the tree. Cloning the path and name on every flatten is the price
+/// of that, and it is cheap next to the disk read that produced them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
     pub path: PathBuf,
     pub name: String,
+    /// Nesting level, with the project root at 0. Drawing multiplies this by
+    /// the indent width; nothing else uses it.
     pub depth: usize,
     pub is_dir: bool,
     pub expanded: bool,
     pub unreadable: bool,
 }
 
+/// The directory model. Owns the root [`Node`] and the dotfile setting that
+/// governs every read.
 pub struct Tree {
     root: Node,
     show_hidden: bool,
@@ -58,6 +100,10 @@ pub struct Tree {
 
 impl Tree {
     /// Build a tree rooted at `path` with its top level already loaded.
+    ///
+    /// The root is forced to `is_dir` and `expanded` regardless of what is on
+    /// disk: the project root is always a directory and is always open, so
+    /// there is no state in which the tree pane can be empty of context.
     pub fn new(path: PathBuf, show_hidden: bool) -> Self {
         let mut root = Node::new(path, true);
         root.is_dir = true;
@@ -85,6 +131,11 @@ impl Tree {
     }
 
     /// Depth-first walk producing the rows to draw, in display order.
+    ///
+    /// Called after every structural change, and its result is what the cursor
+    /// indexes into. Cost is proportional to the number of *visible* rows, not
+    /// to the size of the project, because collapsed directories are not
+    /// descended into.
     pub fn flatten(&self) -> Vec<Row> {
         let mut out = Vec::new();
         // The root itself is row 0, so the project name is always on screen.
@@ -102,6 +153,14 @@ impl Tree {
         out
     }
 
+    /// Locate a node by absolute path, walking down from the root one
+    /// component at a time.
+    ///
+    /// Returns `None` for anything outside the root, and for anything inside a
+    /// directory that has not been loaded yet — an unloaded directory has no
+    /// children to find, even though the file exists on disk. Callers that
+    /// need the node to exist have to `expand` the parents first; that is what
+    /// `App::reveal` does.
     pub fn find(&self, path: &Path) -> Option<&Node> {
         let rel = path.strip_prefix(&self.root.path).ok()?;
         let mut node = &self.root;
@@ -115,6 +174,9 @@ impl Tree {
         Some(node)
     }
 
+    /// Mutable twin of [`Tree::find`]. Duplicated rather than generic because
+    /// threading mutability through a shared walk needs either unsafe code or
+    /// a macro, and neither is worth it for twelve lines.
     fn find_mut(&mut self, path: &Path) -> Option<&mut Node> {
         let rel = path.strip_prefix(&self.root.path).ok()?.to_path_buf();
         let mut node = &mut self.root;
@@ -148,6 +210,8 @@ impl Tree {
         }
     }
 
+    /// Close a directory. Its children stay in memory, so reopening it is
+    /// instant and does not touch the disk. Returns true if anything changed.
     pub fn collapse(&mut self, path: &Path) -> bool {
         match self.find_mut(path) {
             Some(n) if n.is_dir && n.expanded => {
@@ -181,6 +245,10 @@ impl Tree {
     }
 
     /// Re-read every directory that has been loaded so far.
+    ///
+    /// The blunt instrument behind `R`, `:reload`, and every file operation.
+    /// Cost is one `read_dir` per open directory — fine for a project you are
+    /// looking at, and the reason unopened directories are skipped entirely.
     pub fn refresh_all(&mut self) {
         let dirs = self.loaded_dirs();
         for d in dirs {
@@ -206,6 +274,20 @@ impl Tree {
 
     /// Read `dir` from disk and merge the result into the tree, carrying over
     /// the expansion state of any subdirectory that still exists.
+    ///
+    /// The merge is what makes refresh non-destructive. A naive re-read would
+    /// collapse everything the user had opened; instead each fresh entry looks
+    /// for its predecessor by name and inherits `expanded`, `loaded` and the
+    /// whole subtree from it. Entries that vanished from disk are simply not
+    /// in the fresh list, so they disappear; new ones arrive collapsed.
+    ///
+    /// The `prev.is_dir == fresh_child.is_dir` guard handles the case where a
+    /// name was deleted and recreated as the other kind — inheriting a
+    /// directory's children onto a file would be nonsense.
+    ///
+    /// A read failure is recorded as `unreadable` rather than propagated: a
+    /// permission-denied directory should draw dimmed in the tree, not stop
+    /// the program.
     fn load_children_at(&mut self, dir: &Path) {
         let show_hidden = self.show_hidden;
         let fresh = read_dir_sorted(dir, show_hidden);
@@ -242,6 +324,8 @@ impl Tree {
     }
 }
 
+/// Recursive half of [`Tree::flatten`]: append `nodes` and, for any that are
+/// open, their children one level deeper.
 fn push_rows(nodes: &[Node], depth: usize, out: &mut Vec<Row>) {
     for n in nodes {
         out.push(Row {
@@ -260,6 +344,14 @@ fn push_rows(nodes: &[Node], depth: usize, out: &mut Vec<Row>) {
 
 /// Directories first, then case-insensitive name; ties broken by the raw name
 /// so the order is stable between reads.
+///
+/// The tiebreak matters more than it looks: `read_dir` returns entries in
+/// whatever order the filesystem feels like, and without a total ordering
+/// `README` and `readme` could swap places between refreshes, moving rows out
+/// from under the cursor.
+///
+/// Individual failing entries are skipped rather than failing the whole read,
+/// so one bad inode does not hide a directory's other contents.
 fn read_dir_sorted(dir: &Path, show_hidden: bool) -> std::io::Result<Vec<Node>> {
     let mut out = Vec::new();
     for entry in fs::read_dir(dir)? {

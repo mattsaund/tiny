@@ -11,6 +11,37 @@
 //! carry weight as well as hue: `"bold"`, `"underline"`, `"white on black"`,
 //! `"#7dcfff bold"`. The shipped defaults are deliberately monochrome and use
 //! the terminal's own palette, so tiny looks like the terminal it runs in.
+//!
+//! # Layering
+//!
+//! The project file **replaces** the user file rather than merging into it.
+//! Fields a project omits fall back to the library defaults, not to the user's
+//! settings. That is a real trade: it means a project config has to restate
+//! anything it wants kept, but it also means opening someone else's project
+//! gives you exactly what they specified, with no half-understood blend of two
+//! files to reason about. See [`Config::load_from`].
+//!
+//! # Adding a setting
+//!
+//! Four places have to agree, and there is no macro tying them together, so
+//! all four need editing by hand:
+//!
+//! 1. A field on [`Config`], with a doc comment.
+//! 2. A default in `impl Default for Config`.
+//! 3. A row in [`Config::settings_index`] — this drives both `:set` completion
+//!    and the in-program settings area.
+//! 4. Arms in [`Config::get`] and [`Config::set`].
+//!
+//! Miss (3) and the setting works from a config file but is invisible in the
+//! UI; miss (4) and `:set` reports it as unknown. The
+//! `every_setting_round_trips` test in this file catches most of this.
+//!
+//! # Nothing here fails hard
+//!
+//! A malformed file falls back to defaults and returns a warning string for
+//! the status bar; an unknown word in a style spec is ignored; out-of-range
+//! numbers are clamped by [`Config::sanitized`]. A typo in a config file
+//! should cost you an underline, never the program.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,9 +52,12 @@ use serde::{Deserialize, Serialize};
 
 /// Directory name marking a folder as a tiny project.
 pub const PROJECT_DIR: &str = ".tiny";
+/// Config file name, used identically at both layers: `~/.config/tiny/tiny.conf`
+/// and `<project>/.tiny/tiny.conf`.
 pub const CONF_NAME: &str = "tiny.conf";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Which side of the window the tree pane occupies.
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     Left,
@@ -31,6 +65,7 @@ pub enum Side {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Vertical placement for the bar and the status line, independently settable.
 #[serde(rename_all = "lowercase")]
 pub enum Position {
     Top,
@@ -38,6 +73,7 @@ pub enum Position {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Glyph set for the tree's expand/collapse indicators.
 #[serde(rename_all = "lowercase")]
 pub enum Markers {
     /// `▾ ▸` — geometric shapes, present in every terminal font.
@@ -46,6 +82,11 @@ pub enum Markers {
     Ascii,
 }
 
+/// Every setting, in one flat struct.
+///
+/// `#[serde(default)]` is what makes a partial file legal: any key the user
+/// left out is filled from [`Config::default`], so a two-line `tiny.conf` is
+/// as valid as a complete one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -141,6 +182,9 @@ impl Config {
 
     /// Load user config, then let the project's own file override it.
     /// Returns the config plus anything worth telling the user about.
+    ///
+    /// Called twice during startup — once with `None` before the project is
+    /// known, then again with the resolved root. See `main::real_main`.
     pub fn load(project_root: Option<&Path>) -> (Self, Option<String>) {
         Self::load_from(Self::user_path().as_deref(), project_root)
     }
@@ -183,6 +227,10 @@ impl Config {
     }
 
     /// Write to the user config path, creating the directory if needed.
+    ///
+    /// Writes the *whole* config, including everything left at its default, so
+    /// the generated file doubles as documentation of what can be set. Bound
+    /// to `Ctrl+S` in the settings area, and run once on first launch.
     pub fn save(&self) -> Result<PathBuf> {
         let path = Self::user_path().ok_or_else(|| anyhow!("no config directory"))?;
         self.save_to(&path)?;
@@ -197,6 +245,11 @@ impl Config {
         Ok(())
     }
 
+    /// Clamp every numeric field into a range that cannot break the layout.
+    ///
+    /// Run after loading a file and after every `:set`, so there is no path by
+    /// which a hand-edited `tree_width = 40` produces a tree wider than the
+    /// window or a `tab_width = 0` produces an infinite loop.
     fn sanitized(mut self) -> Self {
         self.tree_width = self.tree_width.clamp(0.10, 0.60);
         self.tab_width = self.tab_width.clamp(1, 16);
@@ -244,6 +297,14 @@ impl Config {
     }
 
     /// Current value of a key, as it would be written to the file.
+    ///
+    /// Round-trips with [`Config::set`]: whatever comes out of `get` is
+    /// accepted by `set` and produces the same value again. The settings area
+    /// depends on that, since it seeds its edit field from `get` and feeds the
+    /// result back to `set`.
+    ///
+    /// `None` means the key does not exist, which the caller reports as an
+    /// unknown setting.
     pub fn get(&self, key: &str) -> Option<String> {
         Some(match key {
             "auto_init" => self.auto_init.to_string(),
@@ -282,6 +343,12 @@ impl Config {
 
     /// Apply one `:set key value`. Rejects unknown keys and unparseable
     /// values rather than silently doing nothing.
+    ///
+    /// Note that theme entries are stored as raw strings without validation —
+    /// [`parse_style`] ignores words it does not recognise, so a misspelled
+    /// colour is accepted here and simply has no effect when drawn. Callers
+    /// must follow a successful `set` with `App::apply_config` to rebuild the
+    /// palette and highlighter; the config alone is just data.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let v = value.trim();
         match key {
@@ -372,6 +439,12 @@ impl Default for Theme {
 }
 
 /// A resolved theme: specs parsed once at startup so drawing never re-parses.
+///
+/// `Copy`, and deliberately so — `ui` passes it around by value on every line
+/// it draws, and threading a reference through would add lifetimes to most of
+/// that module for no benefit. Rebuilt by `App::apply_config` whenever the
+/// theme changes, which is how `:set theme.heading cyan bold` repaints without
+/// a restart.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub text: Style,
@@ -439,6 +512,12 @@ pub fn parse_style(spec: &str) -> Style {
     style
 }
 
+/// Parse one colour word: a name, `#rgb`, `#rrggbb`, or a 0-255 palette index.
+///
+/// Named colours and `default` map to ratatui's 16-colour constants, which the
+/// terminal renders with its own palette — that is what lets tiny match the
+/// theme a user already has. `#rrggbb` forces a true-colour value instead, and
+/// needs a 24-bit terminal.
 pub fn parse_color(s: &str) -> Option<Color> {
     let s = s.trim();
     if let Some(hex) = s.strip_prefix('#') {
@@ -471,6 +550,8 @@ pub fn parse_color(s: &str) -> Option<Color> {
         .or_else(|| parse_hex(s))
 }
 
+/// `#abc` or `#aabbcc` to an RGB colour. Three-digit form expands each nibble
+/// by multiplying by 17, so `#abc` and `#aabbcc` are the same colour.
 fn parse_hex(s: &str) -> Option<Color> {
     let s = s.trim().trim_start_matches('#');
     match s.len() {
@@ -502,6 +583,10 @@ fn parse_bool(v: &str) -> Result<bool> {
 
 /// A whitespace- or comma-separated list, as typed into `:set` or the
 /// settings area. Leading dots on extensions are forgiven.
+///
+/// So `:set prose_extensions md,.txt rst` and `:set prose_extensions md txt
+/// rst` mean the same thing. Never fails — an unparseable list is an empty
+/// one, which is a legal value.
 fn parse_list(v: &str) -> Vec<String> {
     v.split([' ', ',', '\t'])
         .map(|s| s.trim().trim_start_matches('.'))
@@ -537,6 +622,10 @@ fn pos_name(p: Position) -> &'static str {
     }
 }
 
+/// `$XDG_CONFIG_HOME/tiny`, falling back to `~/.config/tiny`.
+///
+/// Returns `None` when neither variable is set, which is why `--config` can
+/// fail and why first-run config writing is best-effort.
 fn config_dir() -> Option<PathBuf> {
     if let Ok(x) = std::env::var("XDG_CONFIG_HOME")
         && !x.is_empty()
@@ -549,6 +638,8 @@ fn config_dir() -> Option<PathBuf> {
         .map(|h| Path::new(&h).join(".config").join("tiny"))
 }
 
+/// `$HOME`, or `.` when it is unset — used only as `default_root`, the
+/// fallback for when the working directory cannot be read at all.
 fn home() -> PathBuf {
     std::env::var("HOME")
         .ok()
