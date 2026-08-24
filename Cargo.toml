@@ -1,0 +1,23 @@
+[package]
+name = "tinypkm"
+description = "A terminal knowledge manager"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "tiny"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+crossterm = "0.29.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+pulldown-cmark = "0.13.4"
+ratatui = "0.30.2"
+serde = { version = "1.0.229", features = ["derive"] }
+syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+toml = "1.1.4"
+unicode-width = "0.2.2"
+
+[dev-dependencies]
+tempfile = "3.27.0"

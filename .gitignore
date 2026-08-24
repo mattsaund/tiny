@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# TinyPKM per-project state (graph cache, session)
+.tinypkm/cache/
