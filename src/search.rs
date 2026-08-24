@@ -90,8 +90,7 @@ pub fn search(root: &Path, query: &str, opts: &Opts) -> Vec<Hit> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if find_in(&name, &needle, fold).is_some() {
-            let col = find_in(&name, &needle, fold).unwrap();
+        if let Some(col) = find_in(&name, &needle, fold) {
             names.push(Hit {
                 path: path.clone(),
                 kind: HitKind::Name,

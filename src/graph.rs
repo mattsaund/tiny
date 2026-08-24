@@ -18,13 +18,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use serde::Serialize;
 use tree_sitter_tags::{TagsConfiguration, TagsContext};
 
 use crate::search;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
     Note,
     Prose,
@@ -32,8 +30,7 @@ pub enum NodeKind {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EdgeKind {
     /// `[[wikilink]]` between notes.
     Wikilink,
@@ -45,7 +42,7 @@ pub enum EdgeKind {
     Call,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Node {
     /// Path relative to the project root, which is also its display name.
     pub rel: String,
@@ -53,11 +50,10 @@ pub struct Node {
     pub kind: NodeKind,
     /// Symbols this file defines, for the tooltip.
     pub defines: Vec<String>,
-    #[serde(skip)]
     pub path: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Edge {
     pub from: usize,
     pub to: usize,
@@ -68,16 +64,15 @@ pub struct Edge {
     pub count: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Graph {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     /// Files that were unreachable from anything and reached nothing.
     pub orphans: usize,
-    /// Languages whose calls tiny can follow, so the page can say so rather
+    /// Languages whose calls tiny can follow, so the view can say so rather
     /// than leaving you wondering why your Go files have no edges.
     pub languages: Vec<String>,
-    pub root: String,
 }
 
 #[derive(Debug, Clone)]
@@ -325,7 +320,6 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
             .iter()
             .map(|s| s.to_string())
             .collect(),
-        root: root.to_string_lossy().into_owned(),
     }
 }
 
@@ -1040,17 +1034,6 @@ mod tests {
             "{:?}",
             g.nodes.iter().map(|n| &n.rel).collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn the_graph_serialises_to_json() {
-        let td = tempfile::tempdir().unwrap();
-        write(td.path(), "a.md", "[[b]]\n");
-        write(td.path(), "b.md", "hi\n");
-        let json = serde_json::to_string(&graph(&td)).unwrap();
-        assert!(json.contains("\"wikilink\""), "{json}");
-        assert!(json.contains("\"note\""));
-        assert!(json.contains("\"a.md\""));
     }
 
     #[test]

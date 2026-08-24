@@ -9,13 +9,18 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::Color;
 use ratatui::style::{Modifier, Style};
+use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
+use ratatui::widgets::canvas::{Canvas, Line as CanvasLine, Points};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Bar, BarKind, Focus, Mode, Preview, Settings, TextKind};
 use crate::config::{Config, Palette, Position, Side};
+use crate::graph::EdgeKind;
+use crate::graphview::GraphView;
 use crate::markdown;
 use crate::search::HitKind;
 
@@ -61,6 +66,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Slot::Bar => draw_bar(f, app, rows[i]),
             Slot::Status => draw_status(f, app, rows[i]),
         }
+    }
+
+    if app.graph_view.is_some() {
+        draw_graph(f, app, main);
+        return;
     }
 
     // A wider list while searching: results are longer than file names.
@@ -634,6 +644,307 @@ fn clip_pieces<'a>(
     out
 }
 
+// ---- the graph ------------------------------------------------------------
+
+/// A style's colour, or the terminal's own where the theme names none.
+fn colour(style: Style) -> Color {
+    style.fg.unwrap_or(Color::Reset)
+}
+
+fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
+    let Some(view) = app.graph_view.as_ref() else {
+        return;
+    };
+    let pal = app.palette;
+
+    // The picture, then a strip describing whatever the cursor is on.
+    let detail_h = if area.height > 14 { 6 } else { 0 };
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(detail_h)])
+        .split(area);
+
+    let title = vec![
+        Span::raw(" "),
+        Span::styled("GRAPH", pal.text.add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  {}", view.summary()), pal.dim),
+        Span::raw(" "),
+    ];
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(pal.border_focus)
+        .title(Line::from(title));
+    if view.filtering || !view.filter.is_empty() {
+        block = block.title_bottom(Line::from(vec![
+            Span::styled(" / ", pal.text.add_modifier(Modifier::REVERSED)),
+            Span::styled(view.filter.clone(), pal.text),
+            Span::styled(if view.filtering { "_ " } else { " " }, pal.dim),
+        ]));
+    } else if !view.show_orphans && view.orphan_count() > 0 {
+        // Say that `o` has something to show, rather than leaving those files
+        // silently missing.
+        block = block.title_bottom(Line::from(Span::styled(
+            format!(" o: {} unconnected ", view.orphan_count()),
+            pal.dim,
+        )));
+    }
+    let inner = block.inner(rows[0]);
+    f.render_widget(block, rows[0]);
+    if inner.width < 4 || inner.height < 3 {
+        return;
+    }
+
+    let selected = view.selected;
+    let near = view.neighbours(selected);
+    let visible = view.visible_indices();
+    let label_all = view.labels_all || visible.len() <= 30;
+
+    // Labels stick out sideways from the dot they belong to, so the viewport
+    // has to make room for the widest one or it gets clipped at the edge.
+    let (x0, x1, y0, y1) = fit_bounds(view.bounds(), inner.width, inner.height);
+    let unit_x = (x1 - x0) / inner.width.max(1) as f64;
+    let widest = visible
+        .iter()
+        .map(|i| view.graph.nodes[*i].name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let margin = (widest as f64 / 2.0 + 1.0) * unit_x;
+    let (x0, x1, y0, y1) = fit_bounds(
+        (x0 - margin, x1 + margin, y0, y1),
+        inner.width,
+        inner.height,
+    );
+    let unit_x = (x1 - x0) / inner.width.max(1) as f64;
+    let unit_y = (y1 - y0) / inner.height.max(1) as f64;
+
+    // Work out which labels fit before drawing any: the selected file gets
+    // the space first, then its neighbours, then whatever is left over.
+    let mut order: Vec<usize> = Vec::new();
+    if view.node_visible(selected) {
+        order.push(selected);
+    }
+    order.extend(visible.iter().copied().filter(|i| near.contains(i)));
+    if label_all {
+        order.extend(
+            visible
+                .iter()
+                .copied()
+                .filter(|i| *i != selected && !near.contains(i)),
+        );
+    }
+
+    let mut taken: Vec<(i32, i32, i32)> = Vec::new();
+    let mut labels: Vec<(f64, f64, String, Style)> = Vec::new();
+    for i in order {
+        let node = &view.graph.nodes[i];
+        // Padded on both sides so the label clears the edge lines running
+        // underneath it instead of being threaded onto them.
+        let label = format!(" {} ", node.name);
+        let w = label.chars().count() as i32;
+        let (px, py) = view.pos[i];
+        let col = ((px - x0) / unit_x).round() as i32;
+        let row = ((y1 - py) / unit_y).round() as i32 + 1;
+        let (a, b) = (col - w / 2, col - w / 2 + w);
+        if taken.iter().any(|(r, s, e)| *r == row && a < *e && *s < b) {
+            continue; // something already has this space
+        }
+        taken.push((row, a, b));
+        let style = if i == selected {
+            pal.text.add_modifier(Modifier::REVERSED)
+        } else if near.contains(&i) {
+            pal.text
+        } else {
+            pal.dim
+        };
+        labels.push((px - (w as f64 / 2.0) * unit_x, py - unit_y, label, style));
+    }
+
+    let dim = colour(pal.dim);
+    let fg = colour(pal.text);
+    let canvas = Canvas::default()
+        .marker(Marker::Braille)
+        .x_bounds([x0, x1])
+        .y_bounds([y0, y1])
+        .paint(move |ctx| {
+            for e in &view.graph.edges {
+                if !view.edge_visible(e) {
+                    continue;
+                }
+                let touches = e.from == selected || e.to == selected;
+                let (ax, ay) = view.pos[e.from];
+                let (bx, by) = view.pos[e.to];
+                ctx.draw(&CanvasLine {
+                    x1: ax,
+                    y1: ay,
+                    x2: bx,
+                    y2: by,
+                    color: if touches { fg } else { dim },
+                });
+            }
+            ctx.layer();
+
+            // Every visible file gets a dot, so an unlabelled one still reads
+            // as something rather than as the end of a line.
+            let dots: Vec<(f64, f64)> = visible.iter().map(|i| view.pos[*i]).collect();
+            ctx.draw(&Points {
+                coords: &dots,
+                color: dim,
+            });
+            ctx.layer();
+
+            for (x, y, label, style) in &labels {
+                ctx.print(*x, *y, Line::from(Span::styled(label.clone(), *style)));
+            }
+        });
+    f.render_widget(canvas, inner);
+
+    if detail_h > 0 {
+        draw_graph_detail(f, app, view, rows[1]);
+    }
+}
+
+/// Expand the graph's bounding box to match the pane's shape, so the layout
+/// is not stretched. Braille sub-cells are roughly square, and there are two
+/// across and four down per character cell.
+fn fit_bounds(b: (f64, f64, f64, f64), w: u16, h: u16) -> (f64, f64, f64, f64) {
+    let (mut x0, mut x1, mut y0, mut y1) = b;
+    let want = (w as f64 * 2.0) / (h as f64 * 4.0);
+    let (dx, dy) = ((x1 - x0).max(1e-6), (y1 - y0).max(1e-6));
+    if dx / dy < want {
+        let target = dy * want;
+        let pad = (target - dx) / 2.0;
+        x0 -= pad;
+        x1 += pad;
+    } else {
+        let target = dx / want;
+        let pad = (target - dy) / 2.0;
+        y0 -= pad;
+        y1 += pad;
+    }
+    (x0, x1, y0, y1)
+}
+
+fn node_word(kind: crate::graph::NodeKind) -> &'static str {
+    use crate::graph::NodeKind;
+    match kind {
+        NodeKind::Note => "note",
+        NodeKind::Prose => "prose",
+        NodeKind::Code => "code",
+        NodeKind::Other => "file",
+    }
+}
+
+fn kind_word(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::Wikilink => "wikilink",
+        EdgeKind::Link => "link",
+        EdgeKind::Import => "import",
+        EdgeKind::Call => "call",
+    }
+}
+
+fn draw_graph_detail(f: &mut Frame, app: &App, view: &GraphView, area: Rect) {
+    let pal = app.palette;
+    let Some(node) = view.selected_node() else {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled("  nothing selected", pal.dim))),
+            area,
+        );
+        return;
+    };
+    let (out, incoming) = view.connections(view.selected);
+
+    // Which edge kinds are switched on, as the 1-4 keys see them.
+    let toggles: Vec<Span> = [
+        EdgeKind::Wikilink,
+        EdgeKind::Link,
+        EdgeKind::Import,
+        EdgeKind::Call,
+    ]
+    .iter()
+    .enumerate()
+    .flat_map(|(i, k)| {
+        let on = view.kinds[crate::graphview::kind_index(*k)];
+        [
+            Span::styled(
+                format!("{}:{} ", i + 1, kind_word(*k)),
+                if on { pal.text } else { pal.dim },
+            ),
+            Span::raw(""),
+        ]
+    })
+    .collect();
+
+    let summarise = |edges: &[&crate::graph::Edge], outgoing: bool| {
+        if edges.is_empty() {
+            return vec![Span::styled("none", pal.dim)];
+        }
+        let mut spans = Vec::new();
+        for e in edges.iter().take(4) {
+            let other = if outgoing { e.to } else { e.from };
+            spans.push(Span::styled(view.graph.nodes[other].name.clone(), pal.text));
+            // The symbol is the point of a call edge. For an import or a link
+            // the label just repeats the file name, so it is left out.
+            if e.kind == EdgeKind::Call {
+                let times = if e.count > 1 {
+                    format!(":{} x{}", e.label, e.count)
+                } else {
+                    format!(":{}", e.label)
+                };
+                spans.push(Span::styled(times, pal.dim));
+            }
+            spans.push(Span::raw(" "));
+        }
+        if edges.len() > 4 {
+            spans.push(Span::styled(format!("+{} more", edges.len() - 4), pal.dim));
+        }
+        spans
+    };
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(node.rel.clone(), pal.text.add_modifier(Modifier::BOLD)),
+            Span::styled(format!("  {}", node_word(node.kind)), pal.dim),
+        ]),
+        Line::from(
+            std::iter::once(Span::styled(format!("  out {:<3} ", out.len()), pal.dim))
+                .chain(summarise(&out, true))
+                .collect::<Vec<_>>(),
+        ),
+        Line::from(
+            std::iter::once(Span::styled(
+                format!("  in  {:<3} ", incoming.len()),
+                pal.dim,
+            ))
+            .chain(summarise(&incoming, false))
+            .collect::<Vec<_>>(),
+        ),
+    ];
+    if !node.defines.is_empty() {
+        // A file can define dozens of things; the first few say enough.
+        let shown = node.defines.len().min(6);
+        let mut text = node.defines[..shown].join(", ");
+        if node.defines.len() > shown {
+            text.push_str(&format!(", +{}", node.defines.len() - shown));
+        }
+        lines.push(Line::from(vec![
+            Span::styled("  defines ", pal.dim),
+            Span::styled(text, pal.dim),
+        ]));
+    }
+    // The toggles, with a note on which languages calls can be followed in —
+    // right beside the switch it explains.
+    let mut footer: Vec<Span> = std::iter::once(Span::raw("  ")).chain(toggles).collect();
+    footer.push(Span::styled(
+        format!("  calls traced in {}", view.languages().join(", ")),
+        pal.dim,
+    ));
+    lines.push(Line::from(footer));
+
+    f.render_widget(Paragraph::new(lines), area);
+}
+
 // ---- the bar --------------------------------------------------------------
 
 fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
@@ -694,6 +1005,17 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(format!(" {}", c.message), pal.marker),
         ]),
         _ => {
+            if app.graph_view.is_some() {
+                let line = Line::from(vec![
+                    Span::styled(format!(" {}", app.status), pal.text),
+                    Span::styled(
+                        "   arrows move · Enter open · 1-4 kinds · o orphans · / filter · Esc back",
+                        pal.dim,
+                    ),
+                ]);
+                f.render_widget(Paragraph::new(line).style(pal.text), area);
+                return;
+            }
             let hints = match (&app.mode, app.focus) {
                 (Mode::Settings(_), _) => "up/down pick · Enter change · ^S write · Esc close",
                 (Mode::Bar(_), _) => "Esc close",
@@ -756,10 +1078,13 @@ const HELP: &[(&str, &str)] = &[
     (".", "show or hide dotfiles"),
     ("R  F5", "re-read the project from disk"),
     ("", ""),
-    ("", "WEB VIEW"),
-    ("w", "draw the project as a graph in a browser"),
+    ("", "GRAPH"),
+    ("w", "draw the project as a graph"),
     ("", "  notes link by [[wikilink]], code by import and call"),
-    ("", "  click a file there to open it here"),
+    ("arrows", "move to the nearest file that way"),
+    ("Enter", "open the file the cursor is on"),
+    ("1 2 3 4", "wikilinks / links / imports / calls"),
+    ("o  L  r", "orphans · all labels · lay out again"),
     ("", ""),
     ("", "SEARCH AND COMMANDS"),
     ("/", "search names and contents"),

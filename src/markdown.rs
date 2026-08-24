@@ -197,7 +197,9 @@ struct Renderer<'a> {
 
 impl Renderer<'_> {
     fn style(&self) -> Style {
-        *self.style_stack.last().unwrap()
+        // The stack always holds the base style, but there is no reason for a
+        // rendering bug to become a crash.
+        self.style_stack.last().copied().unwrap_or_default()
     }
 
     fn push_style(&mut self, f: impl FnOnce(Style) -> Style) {

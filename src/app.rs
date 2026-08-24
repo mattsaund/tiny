@@ -17,12 +17,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::config::{Config, Markers, Palette};
 use crate::editor::Editor;
 use crate::graph;
+use crate::graphview::{self, GraphView};
 use crate::highlight::Highlighter;
 use crate::media;
 use crate::project;
 use crate::search::{self, Hit, HitKind};
 use crate::tree::{Row, Tree};
-use crate::web;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -226,8 +226,8 @@ pub struct App {
     pub palette: Palette,
     pub highlighter: Highlighter,
     pub media: Option<MediaCache>,
-    /// The web view's server, once it has been opened at least once.
-    pub web: Option<web::Server>,
+    /// The graph, while it is being looked at.
+    pub graph_view: Option<GraphView>,
     pub status: String,
     pub should_quit: bool,
     pub last_edit_height: usize,
@@ -266,7 +266,7 @@ impl App {
             palette,
             highlighter,
             media: None,
-            web: None,
+            graph_view: None,
             status: warning.or(theme_warning).unwrap_or(opening),
             should_quit: false,
             last_edit_height: 20,
@@ -335,7 +335,7 @@ impl App {
     }
 
     /// Settings the graph is built with, derived from the live config so
-    /// `:set show_hidden true` changes the web view too.
+    /// `:set show_hidden true` changes the graph too.
     pub fn graph_options(&self) -> graph::Options {
         graph::Options {
             ignore: self.config.search_ignore.clone(),
@@ -345,34 +345,20 @@ impl App {
         }
     }
 
-    /// Start the web view if it is not already up, and point a browser at it.
-    fn open_web(&mut self) {
-        if self.web.is_none() {
-            let root = self.root().to_path_buf();
-            let options = self.graph_options();
-            match web::Server::start(root, options, self.config.web_port) {
-                Ok(s) => self.web = Some(s),
-                Err(e) => {
-                    self.status = format!("web view: {e:#}");
-                    return;
-                }
-            }
-        }
-        let url = self.web.as_ref().expect("just started").url();
-        self.status = if web::open_in_browser(&url) {
-            format!("web view at {url}")
+    /// Build the graph and hand the screen over to it.
+    fn open_graph(&mut self) {
+        let root = self.root().to_path_buf();
+        let options = self.graph_options();
+        let view = GraphView::build(&root, &options);
+        self.status = if view.graph.nodes.is_empty() {
+            "nothing to graph yet".into()
         } else {
-            // No desktop to hand it to; the address is still the answer.
-            format!("web view at {url} — open it yourself")
+            format!("graph — {}", view.summary())
         };
+        self.graph_view = Some(view);
     }
 
-    /// A file the web view asked tiny to open, if any.
-    pub fn take_web_open(&self) -> Option<PathBuf> {
-        self.web.as_ref()?.take_open_request()
-    }
-
-    /// Move the cursor to a path and start editing it. Used by the web view.
+    /// Move the cursor to a path and start editing it.
     pub fn open_path(&mut self, path: &Path) {
         if self.reveal(path) {
             if matches!(self.preview, Preview::Buffer { .. }) {
@@ -547,6 +533,11 @@ impl App {
     // ---- key dispatch -----------------------------------------------------
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        // The graph takes the whole screen while it is open, and every key
+        // with it.
+        if self.graph_view.is_some() {
+            return self.on_graph_key(key);
+        }
         // Take the mode out so handlers can own it without fighting the borrow
         // checker, then put back whatever they leave behind.
         match std::mem::replace(&mut self.mode, Mode::Normal) {
@@ -577,6 +568,30 @@ impl App {
         self.mode = Mode::Help(next);
     }
 
+    fn on_graph_key(&mut self, key: KeyEvent) {
+        let action = match self.graph_view.as_mut() {
+            Some(view) => view.on_key(key),
+            None => return,
+        };
+        match action {
+            graphview::Action::None => {}
+            graphview::Action::Close => {
+                self.graph_view = None;
+                self.status = "back to the tree".into();
+                return;
+            }
+            graphview::Action::Open(path) => {
+                self.graph_view = None;
+                self.open_path(&path);
+                return;
+            }
+        }
+        // The counts move as filters change, so keep them in front of you.
+        if let Some(view) = self.graph_view.as_ref() {
+            self.status = format!("graph — {}", view.summary());
+        }
+    }
+
     fn on_tree_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let page = self.last_tree_height.saturating_sub(1).max(1) as isize;
@@ -597,7 +612,7 @@ impl App {
             KeyCode::Char('/') => self.open_bar(BarKind::Search),
             KeyCode::Char(':') => self.open_bar(BarKind::Command),
             KeyCode::Char(',') | KeyCode::F(2) => self.open_settings(),
-            KeyCode::Char('w') => self.open_web(),
+            KeyCode::Char('w') => self.open_graph(),
             KeyCode::Char('n') => self.begin_prompt(PromptKind::NewFile),
             KeyCode::Char('N') => self.begin_prompt(PromptKind::NewDir),
             KeyCode::Char('r') => self.begin_prompt(PromptKind::Rename),
@@ -858,7 +873,7 @@ impl App {
                 Ok(String::new())
             }
             "graph" | "web" => {
-                self.open_web();
+                self.open_graph();
                 Ok(String::new())
             }
             "w" | "write" | "save" => {
@@ -961,9 +976,6 @@ impl App {
         }
         // A media size change invalidates whatever was drawn.
         self.media = None;
-        if let Some(server) = &self.web {
-            server.update_options(self.graph_options());
-        }
     }
 
     // ---- settings area ----------------------------------------------------
@@ -2595,7 +2607,9 @@ mod tests {
     fn help_opens_and_any_key_closes_it() {
         let (_td, mut app) = fixture();
         app.on_key(ch('?'));
-        let out = joined(&mut app);
+        // Tall enough for the whole keymap; the short-terminal case scrolls,
+        // and has a test of its own.
+        let out = screen(&mut app, 90, 44).join("\n");
         assert!(out.contains("Keys"), "{out}");
         assert!(out.contains("search names and contents"), "{out}");
         assert!(out.contains("draw the project as a graph"), "{out}");

@@ -7,6 +7,7 @@ mod app;
 mod config;
 mod editor;
 mod graph;
+mod graphview;
 mod highlight;
 mod markdown;
 mod media;
@@ -14,9 +15,6 @@ mod project;
 mod search;
 mod tree;
 mod ui;
-mod web;
-
-use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use crossterm::event::{self, Event, KeyEventKind};
@@ -107,38 +105,18 @@ fn real_main() -> Result<()> {
 }
 
 fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
-    // Draw only when something changed. The loop still has to wake up while
-    // the web view is open, so a click in the browser can move the cursor
-    // here; with no web view it just blocks on the keyboard.
-    let mut dirty = true;
     loop {
-        if dirty {
-            terminal.draw(|f| ui::draw(f, app))?;
-            dirty = false;
-        }
+        terminal.draw(|f| ui::draw(f, app))?;
         if app.should_quit {
             return Ok(());
         }
-        let wait = if app.web.is_some() {
-            Duration::from_millis(120)
-        } else {
-            Duration::from_secs(3600)
-        };
-        if event::poll(wait)? {
-            match event::read()? {
-                // Windows terminals report releases too; only presses, and the
-                // repeats from holding a key down, should reach the app.
-                Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
-                    app.on_key(k);
-                    dirty = true;
-                }
-                Event::Resize(..) => dirty = true,
-                _ => {}
+        match event::read()? {
+            // Windows terminals report releases too; only presses, and the
+            // repeats from holding a key down, should reach the app.
+            Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+                app.on_key(k)
             }
-        }
-        if let Some(path) = app.take_web_open() {
-            app.open_path(&path);
-            dirty = true;
+            _ => {}
         }
     }
 }

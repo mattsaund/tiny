@@ -81,8 +81,6 @@ pub struct Config {
     /// Everything else that is text opens straight in the editor.
     pub prose_extensions: Vec<String>,
 
-    /// Port for the web view. 0 lets the operating system pick a free one.
-    pub web_port: u16,
     /// A symbol defined in more files than this is too ambiguous to draw a
     /// call edge for. Names like `new` and `main` are everywhere.
     pub graph_max_ambiguity: usize,
@@ -122,7 +120,6 @@ impl Default for Config {
             .iter()
             .map(|s| s.to_string())
             .collect(),
-            web_port: 0,
             graph_max_ambiguity: 3,
             media_preview: true,
             media_height: 24,
@@ -227,7 +224,6 @@ impl Config {
             ("max_search_results", "cap on hits from one search"),
             ("prose_extensions", "wrapped, read-first file types"),
             ("search_ignore", "folders search never walks"),
-            ("web_port", "web view port; 0 picks a free one"),
             (
                 "graph_max_ambiguity",
                 "max definitions before a name is ignored",
@@ -267,7 +263,6 @@ impl Config {
             "max_search_results" => self.max_search_results.to_string(),
             "prose_extensions" => self.prose_extensions.join(" "),
             "search_ignore" => self.search_ignore.join(" "),
-            "web_port" => self.web_port.to_string(),
             "graph_max_ambiguity" => self.graph_max_ambiguity.to_string(),
             "media_preview" => self.media_preview.to_string(),
             "media_height" => self.media_height.to_string(),
@@ -320,11 +315,6 @@ impl Config {
             "max_search_results" => self.max_search_results = parse_num(v)?,
             "prose_extensions" => self.prose_extensions = parse_list(v),
             "search_ignore" => self.search_ignore = parse_list(v),
-            "web_port" => {
-                self.web_port = v
-                    .parse()
-                    .map_err(|_| anyhow!("web_port must be a number from 0 to 65535"))?
-            }
             "graph_max_ambiguity" => self.graph_max_ambiguity = parse_num(v)?,
             "media_preview" => self.media_preview = parse_bool(v)?,
             "media_height" => self.media_height = parse_num(v)?,
