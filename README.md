@@ -1,57 +1,22 @@
 # tiny
 
-A personal knowledge manager that lives entirely in the terminal. Files on the
-left, whatever you are hovering over on the right — notes and prose render,
-code opens in a micro-like editor, pictures draw. Press `w` for a graph of
-what links to what, notes and code alike — drawn in the terminal, like
-everything else here.
+Tiny is a personal knowledge management system (PKMS) and IDE that works entirely in the terminal. This program exists to serve as a full, terminal based project manager that is as lightweight as programs like micro. Tiny has a built in text/code editor, picture/video previewer, file manager, and file web viewer for projects.
 
-Everything it manages is a plain file in a plain folder. Nothing is locked in
-a database.
+Everything tiny manages and edits is non proprietary and not obfuscated.
+## Install:
 
-```
- / config   up/down pick · Enter jump · Esc close
-┌ 2 MATCHES ─────────────────────────────┐┌ utils.py  VIEW ───────────────────────┐
-│src/utils.py:6 def load_config(path: Pat││ 5                                     │
-│src/utils.py:7     """Read a JSON config││ 6 def load_config(path: Path) -> dict:│
-│                                        ││ 7     """Read a JSON config."""       │
-│                                        ││ 8     if not path.exists():           │
-│                                        ││ 9         return {}                   │
-└────────────────────────────────────────┘└───────────────────────────────────────┘
-```
-
-## Install
-
+**One Liner:**
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mattsaund/tiny/main/install.sh | sh
 ```
 
-Or from a checkout:
-
+**Checkout**:
 ```sh
 git clone https://github.com/mattsaund/tiny.git && cd tiny && sh install.sh
 ```
 
-Either way it offers to install Rust if you do not have it, builds, and drops
-`tiny` in `~/.local/bin`.
-
-Anything can be overridden with the environment:
-
-| variable      | does                                  |
-|---------------|---------------------------------------|
-| `TINY_REPO`   | git URL to clone (a local path works) |
-| `TINY_REF`    | branch or tag (default `main`)        |
-| `TINY_PREFIX` | where the binary lands                |
-
-That is also how to rehearse a change to the installer without pushing it —
-serve the script locally and point it at your own checkout:
-
-```sh
-python3 -m http.server 8771 &
-curl -fsSL http://127.0.0.1:8771/install.sh | TINY_REPO="$PWD" sh
-```
-
-## Use
+the installer will offer to install rust and its dependencies if you do not have them. builds and drops `tiny` in `~/.local/bin`.
+## Use (in terminal):
 
 ```sh
 tiny                      # this folder, or the project it sits inside
@@ -59,14 +24,10 @@ tiny ~/Desktop/project1   # that folder — created, with a project in it, if mi
 tiny ~/code/main.py       # that file's folder, with the file already in the editor
 ```
 
-Any folder you open without a project gets one: a `.tiny/` directory holding
-an optional per-project `tiny.conf`, and nothing else. It never writes a README
-or a welcome note into a folder that already has work in it. Turn the whole
-thing off with `auto_init = false`.
+Any foler you open without a config will get a `.tiny` directory holding an optional `tiny.conf` file for per-project configuration. you can turn off that setting in the global configuration (`auto_init = false`).
+## Controls and Commands:
 
-## Keys
-
-Press `?` inside for the same list.
+Press `?` in the program to see all controls.
 
 **Tree**
 
@@ -82,9 +43,7 @@ Press `?` inside for the same list.
 | `.`         | show or hide dotfiles                 |
 | `R` `F5`    | re-read the project from disk         |
 | `q`         | quit                                  |
-
-A new file's name may contain slashes — `journal/2026/aug.md` creates the
-folders on the way down.
+(When creating a new directory, you can type the entire desired filepath)
 
 **Search and commands**
 
@@ -96,12 +55,9 @@ folders on the way down.
 | `,` `F2`   | the settings area                          |
 | `Ctrl+F`   | search, from anywhere including the editor |
 | `Ctrl+P`   | commands, from anywhere                    |
-
-Search runs as you type. Results replace the tree, the preview follows the
-highlighted one, and `Enter` jumps to it with the cursor on the match.
+(autofill search results pop up while typing. on hover, the preview will show the contents. press enter to jump to it)
 
 Commands, with `Tab` to complete:
-
 ```
 :set tab_width 2              change a setting; :set <key> alone reports it
 :set theme.heading cyan bold  repaint without a restart
@@ -115,23 +71,17 @@ Commands, with `Tab` to complete:
 
 **Editor**
 
-| key                 | does                    |
-|---------------------|-------------------------|
-| `Ctrl+S`            | save                    |
-| `Ctrl+Z` `Ctrl+Y`   | undo / redo             |
-| `Ctrl+K`            | delete the current line |
-| `Ctrl+←` `Ctrl+→`   | move by word            |
-| `Esc`               | back to the tree        |
+| key               | does                    |
+| ----------------- | ----------------------- |
+| `Ctrl+S`          | save                    |
+| `Ctrl+Z` `Ctrl+Y` | undo / redo             |
+| `Ctrl+K`          | delete the current line |
+| `Ctrl+←` `Ctrl+→` | move by word            |
+| `Esc`             | back to the tree        |
 
-Notes open rendered; `e` switches to raw source. Code skips the rendered view.
-Unsaved buffers survive navigating away and back, are marked `*` in both panes,
-and quitting with unsaved work asks first.
+**Project Web**
 
-## The graph
-
-Press `w`, or run `:graph`. The whole screen becomes a map of the project,
-drawn with braille so the lines stay legible. Arrow keys move to the nearest
-file in that direction, `Enter` opens it in the editor, `Esc` goes back.
+Press `w`, or run `:graph`. The whole screen becomes a map of the project. Arrow keys move to the nearest file in that direction, `Enter` opens it in the editor, `Esc` goes back.
 
 | key       | does                                        |
 |-----------|---------------------------------------------|
@@ -153,42 +103,9 @@ Four kinds of connection, drawn together:
 | **import**    | `import utils`, `mod x;`, `use crate::x`, `from './lib.js'` |
 | **call**      | one file calling a function another defines       |
 
-**Imports and links are exact.** Calls are matched by name, using tree-sitter's
-tags queries — currently **Python, Rust and JavaScript**. Other languages still
-appear as files, they just have no outgoing call edges.
+## Config:
 
-Name matching is a heuristic, and it behaves like one:
-
-- Test code is left out — `test_*.py`, `*.spec.js`, anything under `tests/`, and
-  Rust's trailing `#[cfg(test)]` module. Test helpers are named `render`,
-  `fixture` and `plain`, and they collide with real names constantly.
-- A name defined in more files than `graph_max_ambiguity` (default 3) says
-  nothing about which was meant, so it draws no edge at all.
-- Declarations are not calls: `mod parser;` never resolves a `parser()`.
-
-What remains are common method names. Calling `.count()` on an iterator looks
-exactly like calling a `count()` your project defines, and without full type
-resolution nothing can tell them apart. If that noise gets in the way, press
-`4` and you are left with imports and links, which are exact.
-
-## Prose and plain text
-
-Markdown is not special-cased. Anything in `prose_extensions` — `.txt`, `.rst`,
-`.org`, `.log` and friends, plus `LICENSE`-style files with no extension — opens
-**wrapped and readable** rather than in a line-numbered editor, with
-`[[wikilinks]]` and bare URLs picked out. Press `e` for the raw source, exactly
-as with a note.
-
-Everything else that is text is code: straight into the editor, with line
-numbers and syntax highlighting. Move the line between them with
-`:set prose_extensions md txt csv`.
-
-## Design
-
-Silent by default. The shipped theme names no colour at all — tiny renders in
-whatever palette your terminal already uses, and meaning is carried by weight,
-underline and reverse video. No logos, no icons, no emoji. Syntax highlighting
-is the one place colour earns its keep, and its theme is configurable.
+The default config generated comes preloaded with these values. tiny also uses your specific terminal theme and palette. 
 
 Everything is configurable, including where the panes and bars sit:
 
@@ -201,13 +118,10 @@ borders         = true      # false for a plainer screen
 markers         = "arrows"  # or "ascii"
 ```
 
-## Config
+`~/.config/tiny/tiny.conf`, written on first run. A project may override it with its own `.tiny/tiny.conf`. Any field may be left out; the defaults fill in. `tiny --config` prints the path.
 
-`~/.config/tiny/tiny.conf`, written on first run. A project may override it
-with its own `.tiny/tiny.conf`. Any field may be left out; the defaults fill in.
-`tiny --config` prints the path.
+Theme entries are style specs, so a line can carry weight as well as color:
 
-Theme entries are style specs, so a line can carry weight as well as colour:
 `"bold"`, `"underline"`, `"white on black"`, `"#7dcfff bold"`, `"reverse"`.
 
 ```toml
@@ -238,12 +152,9 @@ marker       = "bold"
 
 ## Pictures and video
 
-Images are drawn as coloured half-blocks — each cell holds a `▀` whose
-foreground is the upper pixel and background the lower one. That works in any
-terminal with 24-bit colour, with no graphics protocol to detect.
+terminal needs to support 24-bit color to work with no graphics protocol.
 
-Video shows a poster frame, pulled with `ffmpeg` when it is installed. Without
-it the pane says so instead of pretending the feature is missing.
+Video shows a poster frame, pulled with `ffmpeg` when it is installed. 
 
 ## Source layout
 
@@ -263,34 +174,49 @@ it the pane says so instead of pretending the feature is missing.
 | `graphview.rs` | its layout and keys                                 |
 | `config.rs`    | `tiny.conf`, style specs, the settings index        |
 
-## Tests
+## Features:
+
+**Current**
+- Markdown text editor, easy editing like obsidian, perfectly viewable
+- plaintext editor (.txt), no formatting
+- pictures and videos viewer
+- web view to show project connections and links between files
+- full project searchbar and command caller
+
+**Future**
+- PDF Viewer/editor
+- code editor with syntax highlighting for all languages.
+- source control and github integration
+- local AI implementation
+- HTML Viewer with local web server
+- Window tiling manager allowing user to open up multiple windows in the tui. shift+arrow keys to move around to different windows. 
+- apt/brew install support
+- editable controls and keybinds (will be defaults)
+## Contributer Rules and Procedures:
+
+**AI Policy**
+
+I am open to AI and agentic coding, but the code written needs to follow specific guidelines:
+1. MUST be human readable, acceptable variable/function names.
+2. easily tracable, following a good program flow
+3. Contributer MUST look at/document code and code changes. you need to understand the code that is being written.
+
+**Tests**
 
 ```sh
 cargo test
 ```
 
-The suite renders real frames through ratatui's test backend, so navigation,
-editing, saving, search, commands and the settings area are covered without a
-terminal. To look at a project as tiny draws it:
+The suite renders real frames through ratatui's test backend, so navigation, editing, saving, search, commands and the settings area are covered without a terminal. To look at a project as tiny draws it:
 
 ```sh
 TINY_SHOT=path/to/project cargo test screenshot -- --ignored --nocapture
 ```
 
-## Next
+Issues and pull requests welcome. `cargo test` should pass and `cargo clippy` should be quiet before you open one; CI checks both, along with `cargo fmt`.
 
-TypeScript, Go and C in the call graph — each needs its grammar crate and a
-tags query, and the rest of the machinery already works for any language that
-has one.
+## Licence and Credits
 
-After that, a local model as a completion sidekick — local only, and silent
-unless asked.
-
-## Contributing
-
-Issues and pull requests welcome. `cargo test` should pass and `cargo clippy`
-should be quiet before you open one; CI checks both, along with `cargo fmt`.
-
-## Licence
+Created by Matthew Saunders https://msaunders.dev
 
 MIT. See [LICENSE](LICENSE).
