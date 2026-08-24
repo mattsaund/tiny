@@ -1771,7 +1771,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tinypkm"
+name = "tiny"
 version = "0.1.0"
 dependencies = [
  "anyhow",

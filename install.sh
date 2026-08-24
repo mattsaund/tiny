@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install tiny — a terminal knowledge manager.
 #
-#   curl -fsSL https://raw.githubusercontent.com/mattsaund/TinyPKM/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/mattsaund/tiny/main/install.sh | sh
 #
 # Works two ways: piped from the web, where it fetches the source itself, or
 # run from inside a checkout, where it builds what is already there.
@@ -13,7 +13,7 @@
 
 set -eu
 
-REPO="${TINY_REPO:-https://github.com/mattsaund/TinyPKM.git}"
+REPO="${TINY_REPO:-https://github.com/mattsaund/tiny.git}"
 REF="${TINY_REF:-main}"
 PREFIX="${TINY_PREFIX:-$HOME/.local/bin}"
 

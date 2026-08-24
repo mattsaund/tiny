@@ -1,12 +1,8 @@
 [package]
-name = "tinypkm"
+name = "tiny"
 description = "A terminal knowledge manager"
 version = "0.1.0"
 edition = "2024"
-
-[[bin]]
-name = "tiny"
-path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"

@@ -21,11 +21,33 @@ a database.
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mattsaund/TinyPKM/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mattsaund/tiny/main/install.sh | sh
 ```
 
-It offers to install Rust if you do not have it, builds, and drops `tiny` in
-`~/.local/bin`. From a checkout, `sh install.sh` builds what is already there.
+Or from a checkout:
+
+```sh
+git clone https://github.com/mattsaund/tiny.git && cd tiny && sh install.sh
+```
+
+Either way it offers to install Rust if you do not have it, builds, and drops
+`tiny` in `~/.local/bin`.
+
+Anything can be overridden with the environment:
+
+| variable      | does                                  |
+|---------------|---------------------------------------|
+| `TINY_REPO`   | git URL to clone (a local path works) |
+| `TINY_REF`    | branch or tag (default `main`)        |
+| `TINY_PREFIX` | where the binary lands                |
+
+That is also how to rehearse a change to the installer without pushing it —
+serve the script locally and point it at your own checkout:
+
+```sh
+python3 -m http.server 8771 &
+curl -fsSL http://127.0.0.1:8771/install.sh | TINY_REPO="$PWD" sh
+```
 
 ## Use
 
