@@ -2,5 +2,8 @@
 **/*.rs.bk
 *.pdb
 
-# TinyPKM per-project state (graph cache, session)
-.tinypkm/cache/
+# Per-project state. `.tiny/tiny.conf` is worth committing — it is how a
+# project overrides settings for everyone who opens it — but the marker and
+# any cache are local.
+.tiny/project.conf
+.tiny/cache/

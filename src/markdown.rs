@@ -66,6 +66,75 @@ fn scan_wikilinks(text: &str) -> Vec<(usize, usize, Option<String>)> {
     out
 }
 
+/// Render plain text: wrap long lines to the pane, keep the line structure
+/// the author chose, and pick out `[[wikilinks]]` and bare URLs.
+///
+/// Deliberately not markdown — a `.txt` file with a `#` at the start of a line
+/// means a hash, not a heading. Each source line wraps on its own, and
+/// continuations keep its indentation, so hand-made lists and tables survive.
+pub fn render_plain(source: &str, width: usize, pal: &Palette) -> Vec<Line<'static>> {
+    let width = width.max(8);
+    let mut out = Vec::new();
+    for line in source.lines() {
+        if line.trim().is_empty() {
+            out.push(Line::from(""));
+            continue;
+        }
+        let indent: String = line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let indent_w = indent.width().min(width.saturating_sub(4));
+        let body = &line[indent.len()..];
+
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for (s, e, target) in scan_wikilinks(body) {
+            let slice = &body[s..e];
+            if target.is_some() {
+                spans.push(Span::styled(slice.to_string(), pal.link));
+            } else {
+                spans.extend(scan_urls(slice, pal));
+            }
+        }
+        let first = vec![Span::styled(indent.clone(), pal.text)];
+        let cont = vec![Span::raw(" ".repeat(indent_w))];
+        out.extend(wrap(&spans, width, first, cont));
+    }
+    while out.last().is_some_and(is_blank) {
+        out.pop();
+    }
+    out
+}
+
+/// Split a run of plain text so bare `http(s)://` URLs get the link style.
+fn scan_urls(text: &str, pal: &Palette) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("http") {
+        if !rest[at..].starts_with("http://") && !rest[at..].starts_with("https://") {
+            // Not a scheme, just the letters. Emit up to here and carry on.
+            let (before, after) = rest.split_at(at + 4);
+            out.push(Span::styled(before.to_string(), pal.text));
+            rest = after;
+            continue;
+        }
+        if at > 0 {
+            out.push(Span::styled(rest[..at].to_string(), pal.text));
+        }
+        let tail = &rest[at..];
+        // A URL ends at whitespace; trailing sentence punctuation is not part
+        // of it, which is what makes "see https://x.com." behave.
+        let end = tail.find(char::is_whitespace).unwrap_or(tail.len());
+        let url = tail[..end].trim_end_matches(['.', ',', ')', ']', '>', ';', ':']);
+        out.push(Span::styled(url.to_string(), pal.link));
+        rest = &tail[url.len()..];
+    }
+    if !rest.is_empty() {
+        out.push(Span::styled(rest.to_string(), pal.text));
+    }
+    out
+}
+
 pub fn render(source: &str, width: usize, pal: &Palette, hl: &Highlighter) -> Vec<Line<'static>> {
     let width = width.max(8);
     let mut opts = Options::empty();
@@ -655,6 +724,98 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    /// Render as plain text and flatten to strings.
+    fn flat(source: &str, width: usize) -> Vec<String> {
+        let pal = Palette::default();
+        render_plain(source, width, &pal)
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn plain_text_wraps_but_keeps_the_authors_line_breaks() {
+        let src = "alpha bravo charlie delta echo foxtrot\n\nsecond paragraph\n";
+        let out = flat(src, 20);
+        for l in &out {
+            assert!(l.width() <= 20, "{l:?}");
+        }
+        assert_eq!(out.iter().filter(|l| l.trim().is_empty()).count(), 1);
+        assert!(out.last().unwrap().contains("second paragraph"));
+    }
+
+    #[test]
+    fn plain_text_is_not_treated_as_markdown() {
+        // A hash in a .txt file is a hash, not a heading.
+        let out = flat("# not a heading\n- not a bullet\n", 40);
+        assert_eq!(out[0], "# not a heading");
+        assert_eq!(out[1], "- not a bullet");
+    }
+
+    #[test]
+    fn wrapped_plain_lines_keep_their_indentation() {
+        let out = flat(
+            "    a deeply indented line that has to wrap somewhere\n",
+            24,
+        );
+        assert!(out.len() > 1);
+        assert!(out[0].starts_with("    "));
+        assert!(
+            out[1].starts_with("    "),
+            "the continuation lines up under the first: {:?}",
+            out[1]
+        );
+    }
+
+    #[test]
+    fn plain_text_picks_out_wikilinks_and_urls() {
+        let pal = Palette::default();
+        let lines = render_plain("see [[design]] at https://example.com/spec now", 80, &pal);
+        let linked: Vec<&str> = lines[0]
+            .spans
+            .iter()
+            .filter(|s| s.style == pal.link)
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(linked, ["[[design]]", "https://example.com/spec"]);
+    }
+
+    #[test]
+    fn a_url_does_not_swallow_the_punctuation_after_it() {
+        let pal = Palette::default();
+        let lines = render_plain("go to https://example.com/x. then stop", 80, &pal);
+        let linked: Vec<&str> = lines[0]
+            .spans
+            .iter()
+            .filter(|s| s.style == pal.link)
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(linked, ["https://example.com/x"]);
+        let all: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(
+            all, "go to https://example.com/x. then stop",
+            "nothing lost"
+        );
+    }
+
+    #[test]
+    fn the_word_http_alone_is_not_a_link() {
+        let pal = Palette::default();
+        let lines = render_plain("we discussed http and https at length", 80, &pal);
+        assert!(lines[0].spans.iter().all(|s| s.style != pal.link));
+    }
+
+    #[test]
+    fn empty_plain_input_renders_nothing() {
+        assert!(flat("", 40).is_empty());
+        assert!(flat("\n\n\n", 40).is_empty());
     }
 
     #[test]

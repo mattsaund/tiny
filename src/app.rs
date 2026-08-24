@@ -16,11 +16,13 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::{Config, Markers, Palette};
 use crate::editor::Editor;
+use crate::graph;
 use crate::highlight::Highlighter;
 use crate::media;
 use crate::project;
 use crate::search::{self, Hit, HitKind};
 use crate::tree::{Row, Tree};
+use crate::web;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -105,19 +107,77 @@ pub enum Mode {
     Normal,
     Prompt(Prompt),
     Confirm(Confirm),
-    Help,
+    /// The keymap, with a scroll offset for terminals too short for it.
+    Help(usize),
     Bar(Bar),
     Settings(Settings),
+}
+
+/// How a text file wants to be shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextKind {
+    /// Rendered markdown.
+    Markdown,
+    /// Wrapped prose — notes, licences, logs. Read first, edited on demand.
+    Prose,
+    /// Source. Straight into the editor, with line numbers.
+    Code,
+}
+
+impl TextKind {
+    /// Prose and markdown open to be read; code opens to be typed into.
+    pub fn reads_first(self) -> bool {
+        self != TextKind::Code
+    }
+}
+
+/// Extensionless files that are prose by convention rather than by suffix.
+const PROSE_NAMES: &[&str] = &[
+    "LICENCE",
+    "LICENSE",
+    "COPYING",
+    "NOTICE",
+    "AUTHORS",
+    "CONTRIBUTORS",
+    "CHANGELOG",
+    "CHANGES",
+    "README",
+    "TODO",
+];
+
+pub fn text_kind(path: &Path, prose_exts: &[String]) -> TextKind {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+    {
+        // Markdown is checked first: it is also in the prose list by default,
+        // but it has a renderer of its own.
+        Some(e) if matches!(e.as_str(), "md" | "markdown" | "mdown" | "mkd") => TextKind::Markdown,
+        Some(e) if prose_exts.iter().any(|p| p.eq_ignore_ascii_case(&e)) => TextKind::Prose,
+        Some(_) => TextKind::Code,
+        None => {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_uppercase())
+                .unwrap_or_default();
+            if PROSE_NAMES.contains(&name.as_str()) {
+                TextKind::Prose
+            } else {
+                TextKind::Code
+            }
+        }
+    }
 }
 
 /// What the preview pane is showing for the current selection.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Preview {
-    /// A text file with an open buffer. Markdown renders when the tree has
-    /// focus and shows raw source while being edited.
+    /// A text file with an open buffer. Notes and prose render when the tree
+    /// has focus and show raw source while being edited.
     Buffer {
         path: PathBuf,
-        markdown: bool,
+        kind: TextKind,
     },
     /// A picture or a video, drawn as half-blocks.
     Media {
@@ -166,6 +226,8 @@ pub struct App {
     pub palette: Palette,
     pub highlighter: Highlighter,
     pub media: Option<MediaCache>,
+    /// The web view's server, once it has been opened at least once.
+    pub web: Option<web::Server>,
     pub status: String,
     pub should_quit: bool,
     pub last_edit_height: usize,
@@ -204,6 +266,7 @@ impl App {
             palette,
             highlighter,
             media: None,
+            web: None,
             status: warning.or(theme_warning).unwrap_or(opening),
             should_quit: false,
             last_edit_height: 20,
@@ -268,6 +331,56 @@ impl App {
         match self.config.markers {
             Markers::Arrows => ("▾ ", "▸ ", "  "),
             Markers::Ascii => ("- ", "+ ", "  "),
+        }
+    }
+
+    /// Settings the graph is built with, derived from the live config so
+    /// `:set show_hidden true` changes the web view too.
+    pub fn graph_options(&self) -> graph::Options {
+        graph::Options {
+            ignore: self.config.search_ignore.clone(),
+            show_hidden: self.config.show_hidden,
+            prose_extensions: self.config.prose_extensions.clone(),
+            max_ambiguity: self.config.graph_max_ambiguity,
+        }
+    }
+
+    /// Start the web view if it is not already up, and point a browser at it.
+    fn open_web(&mut self) {
+        if self.web.is_none() {
+            let root = self.root().to_path_buf();
+            let options = self.graph_options();
+            match web::Server::start(root, options, self.config.web_port) {
+                Ok(s) => self.web = Some(s),
+                Err(e) => {
+                    self.status = format!("web view: {e:#}");
+                    return;
+                }
+            }
+        }
+        let url = self.web.as_ref().expect("just started").url();
+        self.status = if web::open_in_browser(&url) {
+            format!("web view at {url}")
+        } else {
+            // No desktop to hand it to; the address is still the answer.
+            format!("web view at {url} — open it yourself")
+        };
+    }
+
+    /// A file the web view asked tiny to open, if any.
+    pub fn take_web_open(&self) -> Option<PathBuf> {
+        self.web.as_ref()?.take_open_request()
+    }
+
+    /// Move the cursor to a path and start editing it. Used by the web view.
+    pub fn open_path(&mut self, path: &Path) {
+        if self.reveal(path) {
+            if matches!(self.preview, Preview::Buffer { .. }) {
+                self.focus_editor();
+            }
+            self.status = format!("opened {}", display_name(path));
+        } else {
+            self.status = format!("{} is not in this project", display_name(path));
         }
     }
 
@@ -346,7 +459,7 @@ impl App {
         if self.buffers.contains_key(path) {
             return Preview::Buffer {
                 path: path.to_path_buf(),
-                markdown: is_markdown(path),
+                kind: text_kind(path, &self.config.prose_extensions),
             };
         }
         let meta = match fs::metadata(path) {
@@ -379,7 +492,7 @@ impl App {
                     );
                     Preview::Buffer {
                         path: path.to_path_buf(),
-                        markdown: is_markdown(path),
+                        kind: text_kind(path, &self.config.prose_extensions),
                     }
                 }
                 _ => Preview::Binary {
@@ -437,7 +550,7 @@ impl App {
         // Take the mode out so handlers can own it without fighting the borrow
         // checker, then put back whatever they leave behind.
         match std::mem::replace(&mut self.mode, Mode::Normal) {
-            Mode::Help => {} // any key dismisses
+            Mode::Help(scroll) => self.on_help_key(scroll, key),
             Mode::Prompt(p) => self.on_prompt_key(p, key),
             Mode::Confirm(c) => self.on_confirm_key(c, key),
             Mode::Bar(b) => self.on_bar_key(b, key),
@@ -447,6 +560,21 @@ impl App {
                 Focus::Editor => self.on_editor_key(key),
             },
         }
+    }
+
+    /// Arrows scroll the keymap; anything else puts it away.
+    fn on_help_key(&mut self, scroll: usize, key: KeyEvent) {
+        let page = self.last_tree_height.max(1);
+        let next = match key.code {
+            KeyCode::Up | KeyCode::Char('k') => scroll.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => scroll + 1,
+            KeyCode::PageUp => scroll.saturating_sub(page),
+            KeyCode::PageDown => scroll + page,
+            KeyCode::Home | KeyCode::Char('g') => 0,
+            KeyCode::End | KeyCode::Char('G') => usize::MAX,
+            _ => return,
+        };
+        self.mode = Mode::Help(next);
     }
 
     fn on_tree_key(&mut self, key: KeyEvent) {
@@ -469,13 +597,14 @@ impl App {
             KeyCode::Char('/') => self.open_bar(BarKind::Search),
             KeyCode::Char(':') => self.open_bar(BarKind::Command),
             KeyCode::Char(',') | KeyCode::F(2) => self.open_settings(),
+            KeyCode::Char('w') => self.open_web(),
             KeyCode::Char('n') => self.begin_prompt(PromptKind::NewFile),
             KeyCode::Char('N') => self.begin_prompt(PromptKind::NewDir),
             KeyCode::Char('r') => self.begin_prompt(PromptKind::Rename),
             KeyCode::Char('d') => self.begin_delete(),
             KeyCode::Char('.') => self.toggle_hidden(),
             KeyCode::Char('R') | KeyCode::F(5) => self.refresh(),
-            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('?') => self.mode = Mode::Help(0),
             KeyCode::Char('q') | KeyCode::Esc => self.request_quit(),
             _ => {}
         }
@@ -707,7 +836,7 @@ impl App {
                 ed.goto(line, col);
             }
         } else {
-            self.read_mode = matches!(self.preview, Preview::Buffer { markdown: true, .. })
+            self.read_mode = matches!(self.preview, Preview::Buffer { kind, .. } if kind.reads_first())
                 || matches!(self.preview, Preview::Media { .. });
         }
     }
@@ -728,6 +857,10 @@ impl App {
                 self.open_settings();
                 Ok(String::new())
             }
+            "graph" | "web" => {
+                self.open_web();
+                Ok(String::new())
+            }
             "w" | "write" | "save" => {
                 self.save_active();
                 Ok(String::new())
@@ -742,7 +875,7 @@ impl App {
                 Ok(String::new())
             }
             "help" => {
-                self.mode = Mode::Help;
+                self.mode = Mode::Help(0);
                 Ok(String::new())
             }
             "reload" | "refresh" => {
@@ -828,6 +961,9 @@ impl App {
         }
         // A media size change invalidates whatever was drawn.
         self.media = None;
+        if let Some(server) = &self.web {
+            server.update_options(self.graph_options());
+        }
     }
 
     // ---- settings area ----------------------------------------------------
@@ -1031,10 +1167,10 @@ impl App {
 
     fn focus_editor(&mut self) {
         match &self.preview {
-            Preview::Buffer { markdown, .. } => {
+            Preview::Buffer { kind, .. } => {
                 // Markdown opens rendered; code goes straight into the editor,
                 // since there is nothing else to show for it.
-                self.read_mode = *markdown;
+                self.read_mode = kind.reads_first();
                 self.focus = Focus::Editor;
                 self.status = if self.read_mode {
                     "reading — e to edit, Esc back".into()
@@ -1293,16 +1429,6 @@ impl App {
 
 // ---- free helpers ---------------------------------------------------------
 
-fn is_markdown(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_lowercase)
-            .as_deref(),
-        Some("md" | "markdown" | "mdown" | "mkd")
-    )
-}
-
 fn binary_kind(path: &Path) -> &'static str {
     match path
         .extension()
@@ -1367,8 +1493,8 @@ pub fn split_args(line: &str) -> Vec<String> {
 /// Fill in the rest of a command name, or a setting name after `set`.
 fn complete_command(b: &mut Bar) {
     const COMMANDS: &[&str] = &[
-        "set", "replace", "config", "settings", "write", "save", "quit", "help", "reload", "new",
-        "mkdir", "init",
+        "set", "replace", "config", "settings", "graph", "web", "write", "save", "quit", "help",
+        "reload", "new", "mkdir", "init",
     ];
     let args = split_args(&b.input);
     let trailing_space = b.input.ends_with(' ');
@@ -1691,6 +1817,92 @@ mod tests {
             out.contains(" *"),
             "unsaved work is marked with an asterisk"
         );
+    }
+
+    // ---- plain text -------------------------------------------------------
+
+    #[test]
+    fn file_kinds_are_classified_by_extension_then_by_name() {
+        let prose: Vec<String> = ["md", "txt", "rst"].iter().map(|s| s.to_string()).collect();
+        let k = |p: &str| text_kind(Path::new(p), &prose);
+        assert_eq!(k("a.md"), TextKind::Markdown);
+        assert_eq!(k("a.MD"), TextKind::Markdown, "case does not matter");
+        assert_eq!(k("a.txt"), TextKind::Prose);
+        assert_eq!(k("a.rst"), TextKind::Prose);
+        assert_eq!(k("a.py"), TextKind::Code);
+        assert_eq!(k("a.csv"), TextKind::Code);
+        // Extensionless files are code unless they are prose by convention.
+        assert_eq!(k("LICENSE"), TextKind::Prose);
+        assert_eq!(k("COPYING"), TextKind::Prose);
+        assert_eq!(k("Makefile"), TextKind::Code);
+        assert_eq!(k("script"), TextKind::Code);
+    }
+
+    #[test]
+    fn a_text_file_opens_wrapped_and_readable_not_in_the_editor() {
+        let (td, mut app) = fixture();
+        let long = "a long line of prose that will certainly need to wrap because it keeps going";
+        fs::write(td.path().join("notes.txt"), format!("{long}\n")).unwrap();
+        app.on_key(ch('R'));
+        select(&mut app, "notes.txt");
+
+        let out = joined(&mut app);
+        assert!(out.contains("READ"), "prose reads first:\n{out}");
+        assert!(!out.contains(" 1 "), "no line numbers on prose:\n{out}");
+        for line in screen(&mut app, 90, 24) {
+            assert!(line.chars().count() == 90);
+        }
+        // Wrapped, not clipped: the last word of the line still made it.
+        assert!(
+            out.contains("keeps going"),
+            "the tail of the line was lost:\n{out}"
+        );
+    }
+
+    #[test]
+    fn e_switches_plain_text_into_the_editor_and_back_out() {
+        let (td, mut app) = fixture();
+        fs::write(td.path().join("notes.txt"), "first line\n").unwrap();
+        app.on_key(ch('R'));
+        select(&mut app, "notes.txt");
+        app.on_key(k(KeyCode::Enter));
+        assert!(app.read_mode);
+
+        app.on_key(ch('e'));
+        assert!(!app.read_mode);
+        type_str(&mut app, "X");
+        assert!(app.active_buffer().unwrap().lines()[0].starts_with('X'));
+        app.on_key(ctrl('s'));
+        assert_eq!(
+            fs::read_to_string(td.path().join("notes.txt")).unwrap(),
+            "Xfirst line\n"
+        );
+    }
+
+    #[test]
+    fn a_code_file_still_opens_straight_into_the_editor() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "main.py");
+        app.on_key(k(KeyCode::Enter));
+        assert!(!app.read_mode, "code is for typing into");
+        assert!(
+            joined(&mut app).contains(" 1 "),
+            "and keeps its line numbers"
+        );
+    }
+
+    #[test]
+    fn prose_extensions_are_configurable() {
+        let (td, mut app) = fixture();
+        fs::write(td.path().join("a.csv"), "x,y\n").unwrap();
+        app.on_key(ch('R'));
+        select(&mut app, "a.csv");
+        assert!(joined(&mut app).contains("VIEW"), "csv is code by default");
+
+        command(&mut app, "set prose_extensions md txt csv");
+        app.on_key(ch('R'));
+        select(&mut app, "a.csv");
+        assert!(joined(&mut app).contains("READ"), "now it reads as prose");
     }
 
     // ---- preview dispatch -------------------------------------------------
@@ -2386,7 +2598,42 @@ mod tests {
         let out = joined(&mut app);
         assert!(out.contains("Keys"), "{out}");
         assert!(out.contains("search names and contents"), "{out}");
+        assert!(out.contains("draw the project as a graph"), "{out}");
         app.on_key(ch('x'));
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn help_scrolls_on_a_terminal_too_short_for_it() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('?'));
+        let top = screen(&mut app, 80, 16).join("\n");
+        assert!(top.contains("TREE"), "starts at the top:\n{top}");
+
+        for _ in 0..12 {
+            app.on_key(k(KeyCode::Down));
+        }
+        assert!(
+            matches!(app.mode, Mode::Help(_)),
+            "arrows scroll, not close"
+        );
+        let lower = screen(&mut app, 80, 16).join("\n");
+        assert_ne!(top, lower, "the view moved");
+
+        // The point of scrolling: the end of the list is reachable at all.
+        app.on_key(k(KeyCode::End));
+        let bottom = screen(&mut app, 80, 16).join("\n");
+        assert!(
+            bottom.contains("quit"),
+            "the last entry is reachable:\n{bottom}"
+        );
+        assert!(
+            !bottom.contains("move the cursor"),
+            "and the top has scrolled off"
+        );
+
+        // Anything that is not a scroll key still puts it away.
+        app.on_key(ch('z'));
         assert!(matches!(app.mode, Mode::Normal));
     }
 

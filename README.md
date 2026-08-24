@@ -1,8 +1,9 @@
 # tiny
 
-A personal knowledge manager that lives entirely in the terminal. Markdown
-files on the left, whatever you are hovering over on the right — notes render,
-code opens in a micro-like editor, pictures draw.
+A personal knowledge manager that lives entirely in the terminal. Files on the
+left, whatever you are hovering over on the right — notes and prose render,
+code opens in a micro-like editor, pictures draw. Press `w` and the project
+opens in a browser as a graph of what links to what, notes and code alike.
 
 Everything it manages is a plain file in a plain folder. Nothing is locked in
 a database.
@@ -88,6 +89,7 @@ folders on the way down.
 
 | key        | does                                       |
 |------------|--------------------------------------------|
+| `w`        | open the web view in a browser             |
 | `/`        | search names and contents across the project |
 | `:`        | commands                                   |
 | `,` `F2`   | the settings area                          |
@@ -104,6 +106,7 @@ Commands, with `Tab` to complete:
 :set theme.heading cyan bold  repaint without a restart
 :replace old new              find-replace across the project, after confirming
 :replace "old thing" "new"    quote anything with spaces in it
+:graph  :web                  open the web view
 :config                       open the settings area
 :w  :q  :wq                   save, quit
 :help  :reload  :init
@@ -122,6 +125,55 @@ Commands, with `Tab` to complete:
 Notes open rendered; `e` switches to raw source. Code skips the rendered view.
 Unsaved buffers survive navigating away and back, are marked `*` in both panes,
 and quitting with unsaved work asks first.
+
+## The web view
+
+Press `w`, or run `:graph`. tiny serves a page on loopback that draws the
+project as a graph you can pan, zoom and drag. **Click a file there and the
+terminal jumps to it**, which is the point — the graph is a way of moving
+around the project, not a picture of it.
+
+Four kinds of connection, drawn together:
+
+| edge          | comes from                                        |
+|---------------|---------------------------------------------------|
+| **wikilink**  | `[[another-note]]`, in markdown *and* plain text  |
+| **md link**   | `[text](../notes/spec.md)` — relative, not URLs   |
+| **import**    | `import utils`, `mod helpers;`, `from './lib.js'` |
+| **call**      | one file calling a function another defines       |
+
+**Imports and links are exact.** Calls are matched by name, using tree-sitter's
+tags queries — currently **Python, Rust and JavaScript**. Other languages still
+appear as files, they just have no outgoing call edges.
+
+Name matching is a heuristic, and it behaves like one:
+
+- Test code is left out — `test_*.py`, `*.spec.js`, anything under `tests/`, and
+  Rust's trailing `#[cfg(test)]` module. Test helpers are named `render`,
+  `fixture` and `plain`, and they collide with real names constantly.
+- A name defined in more files than `graph_max_ambiguity` (default 3) says
+  nothing about which was meant, so it draws no edge at all.
+- Declarations are not calls: `mod parser;` never resolves a `parser()`.
+
+What remains are common method names. Calling `.count()` on an iterator looks
+exactly like calling a `count()` your project defines, and without full type
+resolution nothing can tell them apart. If that noise gets in the way, untick
+**calls** in the page and you are left with imports and links, which are exact.
+
+The page is self-contained — no CDN, no network — and the server binds to
+`127.0.0.1` only. It refuses any path that points outside the project.
+
+## Prose and plain text
+
+Markdown is not special-cased. Anything in `prose_extensions` — `.txt`, `.rst`,
+`.org`, `.log` and friends, plus `LICENSE`-style files with no extension — opens
+**wrapped and readable** rather than in a line-numbered editor, with
+`[[wikilinks]]` and bare URLs picked out. Press `e` for the raw source, exactly
+as with a note.
+
+Everything else that is text is code: straight into the editor, with line
+numbers and syntax highlighting. Move the line between them with
+`:set prose_extensions md txt csv`.
 
 ## Design
 
@@ -160,6 +212,9 @@ max_search_results = 500
 search_ignore      = [".git", "target", "node_modules", ".venv", "__pycache__"]
 media_preview      = true
 media_height       = 24
+prose_extensions   = ["md", "txt", "rst", "org", "log"]
+web_port           = 0     # 0 lets the OS pick a free port
+graph_max_ambiguity = 3    # definitions before a name stops linking
 
 [theme]
 text         = "default"
@@ -197,6 +252,8 @@ it the pane says so instead of pretending the feature is missing.
 | `markdown.rs`  | markdown → styled terminal lines, wikilink scanning |
 | `highlight.rs` | syntax highlighting via syntect                     |
 | `media.rs`     | pictures and video frames as half-blocks            |
+| `graph.rs`     | the link graph: wikilinks, imports, calls           |
+| `web.rs`       | the loopback server behind the web view            |
 | `config.rs`    | `tiny.conf`, style specs, the settings index        |
 
 ## Tests
@@ -215,10 +272,9 @@ TINY_SHOT=path/to/project cargo test screenshot -- --ignored --nocapture
 
 ## Next
 
-The web view. `[[wikilinks]]` are already parsed out of notes
-(`markdown::wikilinks`); still to come are tree-sitter parsing of source files
-for import and call edges, and a local web page that draws both kinds of link
-together, so you can trace code through the graph.
+TypeScript, Go and C in the call graph — each needs its grammar crate and a
+tags query, and the rest of the machinery already works for any language that
+has one.
 
 After that, a local model as a completion sidekick — local only, and silent
 unless asked.

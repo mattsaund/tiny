@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Bar, BarKind, Focus, Mode, Preview, Settings};
+use crate::app::{App, Bar, BarKind, Focus, Mode, Preview, Settings, TextKind};
 use crate::config::{Config, Palette, Position, Side};
 use crate::markdown;
 use crate::search::HitKind;
@@ -95,7 +95,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_preview(f, app, preview_area);
 
     match &app.mode {
-        Mode::Help => draw_help(f, area, &pal),
+        Mode::Help(scroll) => draw_help(f, area, &pal, *scroll),
         Mode::Settings(s) => {
             let s = s.clone();
             draw_settings(f, app, area, &s);
@@ -144,7 +144,7 @@ fn pane<'a>(f: &mut Frame, area: Rect, title: Vec<Span<'a>>, focused: bool, app:
 
 fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     let pal = app.palette;
-    let focused = app.focus == Focus::Tree && matches!(app.mode, Mode::Normal | Mode::Help);
+    let focused = app.focus == Focus::Tree && matches!(app.mode, Mode::Normal | Mode::Help(_));
     let title = vec![
         Span::raw(" "),
         Span::styled(
@@ -326,7 +326,7 @@ fn emphasize(text: &str, col: usize, len: usize, pal: Palette) -> Vec<Span<'stat
 
 fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
     let pal = app.palette;
-    let focused = app.focus == Focus::Editor && matches!(app.mode, Mode::Normal | Mode::Help);
+    let focused = app.focus == Focus::Editor && matches!(app.mode, Mode::Normal | Mode::Help(_));
 
     let (name, dirty) = match &app.preview {
         Preview::Buffer { path, .. } => (label(path), app.is_dirty(path)),
@@ -337,7 +337,7 @@ fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
         Preview::Empty => ("nothing selected".to_string(), false),
     };
     let tag = match &app.preview {
-        Preview::Buffer { markdown: true, .. } if !focused || app.read_mode => "READ",
+        Preview::Buffer { kind, .. } if kind.reads_first() && (!focused || app.read_mode) => "READ",
         Preview::Buffer { .. } if focused => "EDIT",
         Preview::Buffer { .. } => "VIEW",
         Preview::Media { .. } => "VIEW",
@@ -369,11 +369,11 @@ fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     match app.preview.clone() {
-        Preview::Buffer { path, markdown } => {
+        Preview::Buffer { path, kind } => {
             // Rendered while the tree drives the cursor, or while reading;
             // raw source once you are actually editing.
-            if markdown && (!focused || app.read_mode) {
-                draw_markdown(f, app, area, inner, &path);
+            if kind.reads_first() && (!focused || app.read_mode) {
+                draw_reading(f, app, area, inner, &path, kind);
             } else {
                 draw_editor(f, app, inner, &path, focused);
             }
@@ -468,7 +468,14 @@ fn draw_media(
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn draw_markdown(f: &mut Frame, app: &mut App, area: Rect, inner: Rect, path: &std::path::Path) {
+fn draw_reading(
+    f: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    inner: Rect,
+    path: &std::path::Path,
+    kind: TextKind,
+) {
     let pal = app.palette;
     let Some(ed) = app.buffers.get(path) else {
         return;
@@ -476,7 +483,12 @@ fn draw_markdown(f: &mut Frame, app: &mut App, area: Rect, inner: Rect, path: &s
     // Render from the buffer, not from disk, so unsaved edits show up the
     // moment you step back out of the editor.
     let source = ed.to_text();
-    let lines = markdown::render(&source, inner.width as usize, &pal, &app.highlighter);
+    let width = inner.width as usize;
+    let lines = match kind {
+        TextKind::Markdown => markdown::render(&source, width, &pal, &app.highlighter),
+        // Prose keeps the author's line structure and just wraps what is long.
+        _ => markdown::render_plain(&source, width, &pal),
+    };
     app.preview_len = lines.len();
 
     let height = inner.height as usize;
@@ -685,7 +697,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             let hints = match (&app.mode, app.focus) {
                 (Mode::Settings(_), _) => "up/down pick · Enter change · ^S write · Esc close",
                 (Mode::Bar(_), _) => "Esc close",
-                (_, Focus::Tree) => "/ search · : commands · n new · d delete · ? help · q quit",
+                (_, Focus::Tree) => "/ search · w web · : commands · n new · ? help · q quit",
                 (_, Focus::Editor) if app.read_mode => "up/down scroll · e edit · Esc back",
                 (_, Focus::Editor) => "^S save · ^Z undo · ^K cut line · Esc back",
             };
@@ -744,6 +756,11 @@ const HELP: &[(&str, &str)] = &[
     (".", "show or hide dotfiles"),
     ("R  F5", "re-read the project from disk"),
     ("", ""),
+    ("", "WEB VIEW"),
+    ("w", "draw the project as a graph in a browser"),
+    ("", "  notes link by [[wikilink]], code by import and call"),
+    ("", "  click a file there to open it here"),
+    ("", ""),
     ("", "SEARCH AND COMMANDS"),
     ("/", "search names and contents"),
     (":", "commands — :set :replace :config"),
@@ -763,8 +780,10 @@ const HELP: &[(&str, &str)] = &[
     ("q  Ctrl+Q", "quit"),
 ];
 
-fn draw_help(f: &mut Frame, area: Rect, pal: &Palette) {
-    let popup = centred(area, 58, HELP.len() as u16 + 2);
+fn draw_help(f: &mut Frame, area: Rect, pal: &Palette, scroll: usize) {
+    let popup = centred(area, 62, HELP.len() as u16 + 2);
+    // Short terminals cannot show the whole keymap at once.
+    let scrolls = (popup.height as usize).saturating_sub(2) < HELP.len();
     f.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -773,12 +792,23 @@ fn draw_help(f: &mut Frame, area: Rect, pal: &Palette) {
             " Keys ",
             pal.text.add_modifier(Modifier::BOLD),
         )))
-        .title_bottom(Line::from(Span::styled(" any key to close ", pal.dim)));
+        .title_bottom(Line::from(Span::styled(
+            if scrolls {
+                " up/down · any other key closes "
+            } else {
+                " any key to close "
+            },
+            pal.dim,
+        )));
     let inner = block.inner(popup);
     f.render_widget(block, popup);
 
+    let height = inner.height as usize;
+    let scroll = scroll.min(HELP.len().saturating_sub(height));
     let lines: Vec<Line> = HELP
         .iter()
+        .skip(scroll)
+        .take(height)
         .map(|(keys, desc)| {
             if keys.is_empty() {
                 Line::from(Span::styled(desc.to_string(), pal.heading))

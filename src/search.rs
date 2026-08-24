@@ -207,7 +207,7 @@ fn read_text(path: &Path) -> Result<String> {
 }
 
 /// Every candidate file under `root`, in sorted directory order.
-fn walk(root: &Path, opts: &Opts) -> Vec<PathBuf> {
+pub fn walk(root: &Path, opts: &Opts) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {

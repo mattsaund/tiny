@@ -1,0 +1,418 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>tiny — project graph</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff; --fg: #101010; --dim: #6b6b6b; --line: #c9c9c9;
+    --panel: rgba(255,255,255,.92); --edge: #9a9a9a; --hot: #101010;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0b0b; --fg: #ededed; --dim: #8b8b8b; --line: #333333;
+      --panel: rgba(16,16,16,.92); --edge: #6a6a6a; --hot: #ffffff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow: hidden;
+  }
+  canvas { display: block; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+
+  .panel {
+    position: fixed; background: var(--panel); border: 1px solid var(--line);
+    padding: 10px 12px; backdrop-filter: blur(6px);
+  }
+  #controls { top: 12px; left: 12px; max-width: 260px; }
+  #legend   { bottom: 12px; left: 12px; }
+  #detail   { top: 12px; right: 12px; max-width: 300px; display: none; }
+
+  h1 { font-size: 13px; margin: 0 0 8px; font-weight: 700; letter-spacing: .04em; }
+  .muted { color: var(--dim); }
+  label { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 1px 0; }
+  input[type=search] {
+    width: 100%; margin-bottom: 8px; padding: 4px 6px;
+    background: transparent; color: var(--fg);
+    border: 1px solid var(--line); font: inherit;
+  }
+  input[type=search]:focus { outline: 1px solid var(--fg); }
+  .row { display: flex; justify-content: space-between; gap: 12px; }
+  .key { display: inline-block; width: 34px; }
+  svg.sample { vertical-align: middle; }
+  #detail .defs { margin-top: 6px; max-height: 180px; overflow: auto; }
+  #detail code { color: var(--dim); display: block; }
+  .hint { margin-top: 8px; font-size: 12px; }
+</style>
+
+<canvas id="c"></canvas>
+
+<div class="panel" id="controls">
+  <h1>PROJECT GRAPH</h1>
+  <input type="search" id="find" placeholder="filter files…" autocomplete="off">
+  <label><input type="checkbox" data-kind="wikilink" checked> wikilinks</label>
+  <label><input type="checkbox" data-kind="link" checked> md links</label>
+  <label><input type="checkbox" data-kind="import" checked> imports</label>
+  <label><input type="checkbox" data-kind="call" checked> calls</label>
+  <label><input type="checkbox" id="orphans"> unconnected files</label>
+  <div class="hint muted" id="stats"></div>
+</div>
+
+<div class="panel" id="legend">
+  <div class="row"><span><svg class="sample" width="34" height="8"><line x1="0" y1="4" x2="34" y2="4" stroke="currentColor" stroke-width="2"/></svg></span><span class="muted">import</span></div>
+  <div class="row"><span><svg class="sample" width="34" height="8"><line x1="0" y1="4" x2="34" y2="4" stroke="currentColor" stroke-width="1"/></svg></span><span class="muted">wikilink</span></div>
+  <div class="row"><span><svg class="sample" width="34" height="8"><line x1="0" y1="4" x2="34" y2="4" stroke="currentColor" stroke-width="1" stroke-dasharray="4 3"/></svg></span><span class="muted">call</span></div>
+  <div class="row"><span><svg class="sample" width="34" height="8"><line x1="0" y1="4" x2="34" y2="4" stroke="currentColor" stroke-width="1" stroke-dasharray="1 3"/></svg></span><span class="muted">md link</span></div>
+  <div class="hint muted">click a file to open it in tiny</div>
+</div>
+
+<div class="panel" id="detail"></div>
+
+<script>
+"use strict";
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const detail = document.getElementById("detail");
+const stats = document.getElementById("stats");
+const find = document.getElementById("find");
+
+let nodes = [], edges = [], adj = new Map();
+let view = { x: 0, y: 0, k: 1 };
+let hover = null, dragging = null, panning = null, movedWhileDown = false;
+let showOrphans = false, query = "";
+const enabled = { wikilink: true, link: true, import: true, call: true };
+
+// ---- data -----------------------------------------------------------------
+
+async function load() {
+  let g;
+  try {
+    g = await fetch("graph.json", { cache: "no-store" }).then(r => r.json());
+  } catch (e) {
+    stats.textContent = "tiny is no longer running";
+    return;
+  }
+  // Keep the position of any file that survived, so a refresh does not
+  // scatter a layout you have already read.
+  const previous = new Map(nodes.map(n => [n.rel, n]));
+  const cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2;
+  nodes = (g.nodes || []).map((n, i) => {
+    const old = previous.get(n.rel);
+    return Object.assign({}, n, old
+      ? { x: old.x, y: old.y, vx: old.vx, vy: old.vy, pinned: old.pinned }
+      : ringStart(i, (g.nodes || []).length, cx, cy));
+  });
+  edges = g.edges || [];
+
+  const index = new Map(nodes.map((n, i) => [i, n]));
+  adj = new Map(nodes.map(n => [n.rel, new Set()]));
+  for (const e of edges) {
+    const a = index.get(e.from), b = index.get(e.to);
+    if (!a || !b) continue;
+    adj.get(a.rel).add(b.rel);
+    adj.get(b.rel).add(a.rel);
+    e.a = a; e.b = b;
+  }
+  for (const n of nodes) n.degree = adj.get(n.rel).size;
+
+  const shown = nodes.filter(visible).length;
+  stats.innerHTML = `${shown} of ${nodes.length} files · ${edges.length} links`
+    + (g.orphans ? `<br>${g.orphans} unconnected` : "")
+    + (g.languages ? `<br>calls traced in ${g.languages.join(", ")}` : "");
+  heat = 1;
+}
+
+// Start on a circle rather than all at one point, which the repulsion alone
+// takes a long time to untangle.
+function ringStart(i, total, cx, cy) {
+  const a = (i / Math.max(total, 1)) * Math.PI * 2;
+  const r = 60 + Math.min(total, 400) * 0.7;
+  return { x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, vx: 0, vy: 0, pinned: false };
+}
+
+// ---- what is on screen ----------------------------------------------------
+
+function edgeVisible(e) {
+  return enabled[e.kind] && visible(e.a) && visible(e.b);
+}
+
+function visible(n) {
+  if (!n) return false;
+  if (query && !n.rel.toLowerCase().includes(query)) return false;
+  if (!showOrphans) {
+    // A file counts as connected only through an edge kind still switched on.
+    const live = edges.some(e => enabled[e.kind] && (e.a === n || e.b === n));
+    if (!live) return false;
+  }
+  return true;
+}
+
+// ---- layout ---------------------------------------------------------------
+
+let heat = 1;
+const REPULSION = 9000, SPRING = 0.015, REST = 110, DAMP = 0.86, CENTER = 0.0016;
+
+function simulate() {
+  if (heat < 0.004) return;
+  const live = nodes.filter(visible);
+  const n = live.length;
+  if (!n) return;
+  const cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2;
+
+  for (let i = 0; i < n; i++) {
+    const a = live[i];
+    for (let j = i + 1; j < n; j++) {
+      const b = live[j];
+      let dx = a.x - b.x, dy = a.y - b.y;
+      let d2 = dx * dx + dy * dy;
+      if (d2 < 1) { d2 = 1; dx = (Math.random() - 0.5); dy = (Math.random() - 0.5); }
+      if (d2 > 640000) continue;           // far apart: ignore, it is O(n^2)
+      const f = REPULSION / d2;
+      const d = Math.sqrt(d2);
+      const fx = (dx / d) * f, fy = (dy / d) * f;
+      a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+    }
+  }
+
+  for (const e of edges) {
+    if (!edgeVisible(e)) continue;
+    const dx = e.b.x - e.a.x, dy = e.b.y - e.a.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const f = (d - REST) * SPRING;
+    const fx = (dx / d) * f, fy = (dy / d) * f;
+    e.a.vx += fx; e.a.vy += fy; e.b.vx -= fx; e.b.vy -= fy;
+  }
+
+  for (const a of live) {
+    a.vx += (cx - a.x) * CENTER;
+    a.vy += (cy - a.y) * CENTER;
+    if (a.pinned || a === dragging) { a.vx = a.vy = 0; continue; }
+    a.vx *= DAMP; a.vy *= DAMP;
+    a.x += a.vx * heat; a.y += a.vy * heat;
+  }
+  heat *= 0.994;
+}
+
+// ---- drawing --------------------------------------------------------------
+
+function css(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function radius(n) {
+  return 4 + Math.min(Math.sqrt(n.degree || 0) * 2.4, 12);
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width = w * dpr; canvas.height = h * dpr;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.save();
+  ctx.translate(view.x, view.y);
+  ctx.scale(view.k, view.k);
+
+  const fg = css("--fg"), dim = css("--dim"), edgeCol = css("--edge"), bg = css("--bg");
+  const near = hover ? adj.get(hover.rel) : null;
+
+  for (const e of edges) {
+    if (!edgeVisible(e)) continue;
+    const related = !hover || e.a === hover || e.b === hover;
+    ctx.save();
+    ctx.globalAlpha = hover ? (related ? 1 : 0.12) : 0.7;
+    ctx.strokeStyle = related && hover ? fg : edgeCol;
+    ctx.lineWidth = (e.kind === "import" ? 2 : 1) + Math.min((e.count - 1) * 0.25, 1.5);
+    if (e.kind === "call") ctx.setLineDash([4, 3]);
+    else if (e.kind === "link") ctx.setLineDash([1, 3]);
+    else ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(e.a.x, e.a.y);
+    ctx.lineTo(e.b.x, e.b.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  const labelAll = view.k > 0.75 || nodes.filter(visible).length < 60;
+  for (const n of nodes) {
+    if (!visible(n)) continue;
+    const isNear = near && near.has(n.rel);
+    const focus = !hover || n === hover || isNear;
+    const r = radius(n);
+    ctx.globalAlpha = focus ? 1 : 0.15;
+
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    // Filled for notes, hollow for code: shape carries the kind, not colour.
+    if (n.kind === "note" || n.kind === "prose") {
+      ctx.fillStyle = n === hover ? fg : dim;
+      ctx.fill();
+    } else {
+      ctx.fillStyle = bg; ctx.fill();
+      ctx.strokeStyle = n === hover ? fg : dim;
+      ctx.lineWidth = n.kind === "code" ? 1.6 : 1;
+      ctx.setLineDash(n.kind === "other" ? [2, 2] : []);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    if (labelAll || n === hover || isNear) {
+      ctx.fillStyle = n === hover ? fg : dim;
+      ctx.font = `${n === hover ? 700 : 400} 11px ui-monospace, Menlo, monospace`;
+      ctx.textAlign = "center";
+      ctx.fillText(n.name, n.x, n.y + r + 12);
+    }
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+function frame() {
+  simulate();
+  draw();
+  requestAnimationFrame(frame);
+}
+
+// ---- interaction ----------------------------------------------------------
+
+function toWorld(ev) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: (ev.clientX - r.left - view.x) / view.k,
+    y: (ev.clientY - r.top - view.y) / view.k,
+  };
+}
+
+function nodeAt(p) {
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const n = nodes[i];
+    if (!visible(n)) continue;
+    if (Math.hypot(n.x - p.x, n.y - p.y) <= radius(n) + 5) return n;
+  }
+  return null;
+}
+
+canvas.addEventListener("mousemove", ev => {
+  const p = toWorld(ev);
+  if (dragging) {
+    movedWhileDown = true;
+    dragging.x = p.x; dragging.y = p.y; dragging.pinned = true;
+    heat = Math.max(heat, 0.35);
+    return;
+  }
+  if (panning) {
+    movedWhileDown = true;
+    view.x += ev.clientX - panning.x;
+    view.y += ev.clientY - panning.y;
+    panning = { x: ev.clientX, y: ev.clientY };
+    return;
+  }
+  const was = hover;
+  hover = nodeAt(p);
+  if (hover !== was) showDetail(hover);
+});
+
+canvas.addEventListener("mousedown", ev => {
+  movedWhileDown = false;
+  const n = nodeAt(toWorld(ev));
+  if (n) dragging = n;
+  else panning = { x: ev.clientX, y: ev.clientY };
+  canvas.classList.add("dragging");
+});
+
+window.addEventListener("mouseup", async ev => {
+  // A press that did not move is a click, and a click opens the file.
+  if (dragging && !movedWhileDown) await open(dragging.rel);
+  dragging = null; panning = null;
+  canvas.classList.remove("dragging");
+});
+
+canvas.addEventListener("dblclick", ev => {
+  const n = nodeAt(toWorld(ev));
+  if (n) { n.pinned = false; heat = Math.max(heat, 0.5); }
+});
+
+canvas.addEventListener("wheel", ev => {
+  ev.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  const factor = Math.exp(-ev.deltaY * 0.0015);
+  const k = Math.min(4, Math.max(0.15, view.k * factor));
+  // Zoom about the pointer, so the thing under it stays put.
+  view.x = mx - (mx - view.x) * (k / view.k);
+  view.y = my - (my - view.y) * (k / view.k);
+  view.k = k;
+}, { passive: false });
+
+async function open(rel) {
+  try {
+    await fetch("open", { method: "POST", body: rel });
+    flash(`opened ${rel}`);
+  } catch (e) {
+    flash("tiny is not listening");
+  }
+}
+
+let flashTimer = null;
+function flash(text) {
+  stats.dataset.saved = stats.dataset.saved || stats.innerHTML;
+  stats.textContent = text;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => {
+    stats.innerHTML = stats.dataset.saved || "";
+    delete stats.dataset.saved;
+  }, 1600);
+}
+
+function showDetail(n) {
+  if (!n) { detail.style.display = "none"; return; }
+  const links = edges.filter(e => enabled[e.kind] && (e.a === n || e.b === n));
+  const out = links.filter(e => e.a === n), incoming = links.filter(e => e.b === n);
+  const list = es => es.length
+    ? es.map(e => `<code>${e.kind} · ${escapeHtml(e.label)} → ${escapeHtml((e.a === n ? e.b : e.a).name)}</code>`).join("")
+    : `<code class="muted">none</code>`;
+  detail.innerHTML = `<h1>${escapeHtml(n.name)}</h1>`
+    + `<div class="muted">${escapeHtml(n.rel)}</div>`
+    + `<div class="defs"><div class="muted" style="margin-top:8px">out (${out.length})</div>${list(out)}`
+    + `<div class="muted" style="margin-top:8px">in (${incoming.length})</div>${list(incoming)}`
+    + (n.defines && n.defines.length
+        ? `<div class="muted" style="margin-top:8px">defines</div><code>${n.defines.map(escapeHtml).join(", ")}</code>`
+        : "")
+    + `</div>`;
+  detail.style.display = "block";
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+for (const box of document.querySelectorAll("[data-kind]")) {
+  box.addEventListener("change", () => {
+    enabled[box.dataset.kind] = box.checked;
+    heat = Math.max(heat, 0.4);
+  });
+}
+document.getElementById("orphans").addEventListener("change", ev => {
+  showOrphans = ev.target.checked;
+  heat = Math.max(heat, 0.4);
+});
+find.addEventListener("input", () => {
+  query = find.value.trim().toLowerCase();
+  heat = Math.max(heat, 0.3);
+});
+
+window.addEventListener("resize", () => { heat = Math.max(heat, 0.2); });
+
+load();
+// The project changes under you while you are looking at it.
+setInterval(load, 4000);
+frame();
+</script>
