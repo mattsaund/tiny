@@ -18,8 +18,8 @@
 //!  └─ two panes, side decided by config
 //!      ├─ draw_tree  or  draw_results   (results replace the tree while searching)
 //!      └─ draw_preview
-//!           ├─ draw_reading   rendered markdown or wrapped prose
-//!           ├─ draw_editor    raw source, with the real cursor
+//!           ├─ draw_reading   rendered, for a preview with no cursor in it
+//!           ├─ draw_editor    the file with the real cursor in it
 //!           └─ draw_media     pictures and poster frames
 //!  └─ draw_help / draw_settings    overlays, drawn last so they sit on top
 //! ```
@@ -304,7 +304,7 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(marker, marker_style),
             Span::styled(row.name.clone(), name_style),
         ];
-        if app.is_dirty(&row.path) {
+        if app.dirty_here_or_below(&row.path) {
             spans.push(Span::styled(" *", pal.marker));
         }
         if i == app.selected {
@@ -449,8 +449,10 @@ fn emphasize(text: &str, col: usize, len: usize, pal: Palette) -> Vec<Span<'stat
 /// drawing functions, and builds the title that names the file and its state.
 ///
 /// The `READ` / `EDIT` / `VIEW` tag encodes the same rule the key handling
-/// uses: prose and markdown open rendered and only show raw source once you
-/// have deliberately pressed `e`, while code goes straight into the editor.
+/// uses: prose and markdown open rendered and only take the keyboard once you
+/// have deliberately pressed Enter, while code goes straight into the editor.
+/// `EDIT` on markdown is still formatted — see [`live_rows`] — so the tag says
+/// which keyboard you have, not whether there is any formatting on screen.
 fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
     let pal = app.palette;
     let focused = app.focus == Focus::Editor && matches!(app.mode, Mode::Normal | Mode::Help(_));
@@ -464,7 +466,6 @@ fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
         Preview::Empty => ("nothing selected".to_string(), false),
     };
     let tag = match &app.preview {
-        Preview::Buffer { kind, .. } if kind.reads_first() && (!focused || app.read_mode) => "READ",
         Preview::Buffer { .. } if focused => "EDIT",
         Preview::Buffer { .. } => "VIEW",
         Preview::Media { .. } => "VIEW",
@@ -497,12 +498,13 @@ fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
 
     match app.preview.clone() {
         Preview::Buffer { path, kind } => {
-            // Rendered while the tree drives the cursor, or while reading;
-            // raw source once you are actually editing.
-            if kind.reads_first() && (!focused || app.read_mode) {
+            // Rendered while the tree still has the keyboard — the preview is
+            // a picture of the file then, with no cursor in it. The moment it
+            // is focused it becomes the editor, markdown formatting and all.
+            if kind.reads_first() && !focused {
                 draw_reading(f, app, area, inner, &path, kind);
             } else {
-                draw_editor(f, app, inner, &path, focused);
+                draw_editor(f, app, inner, &path, kind, focused);
             }
         }
         Preview::Media { path, kind, size } => draw_media(f, app, inner, &path, kind, size),
@@ -603,8 +605,12 @@ fn draw_media(
 
 /// Rendered markdown, or wrapped prose, with a scroll indicator.
 ///
+/// Only ever drawn for a preview the keyboard has not reached yet: focus the
+/// pane and it becomes the editor. Nothing here has a cursor, which is exactly
+/// why markdown can be rendered whole — there is no block to leave raw.
+///
 /// Renders from the *buffer* rather than from disk, which is what makes
-/// unsaved edits appear in the rendered view the moment you press Esc.
+/// unsaved edits show up here the moment you step back out to the tree.
 ///
 /// The full document is rendered every frame and then sliced to the visible
 /// window. That is more work than it needs to be, but the render is cheap at
@@ -679,7 +685,14 @@ fn draw_reading(
 /// reversed span. That means converting the character-indexed cursor column
 /// into a *display width* offset, accounting for the horizontal scroll — which
 /// is what the `before` / `skipped` width subtraction is doing.
-fn draw_editor(f: &mut Frame, app: &mut App, inner: Rect, path: &std::path::Path, focused: bool) {
+fn draw_editor(
+    f: &mut Frame,
+    app: &mut App,
+    inner: Rect,
+    path: &std::path::Path,
+    kind: TextKind,
+    focused: bool,
+) {
     let pal = app.palette;
     if !app.buffers.contains_key(path) {
         return;
@@ -693,58 +706,213 @@ fn draw_editor(f: &mut Frame, app: &mut App, inner: Rect, path: &std::path::Path
         0
     };
     let text_w = (inner.width as usize).saturating_sub(gutter);
+    let live = kind == TextKind::Markdown && app.buffers[path].line_count() <= LIVE_LIMIT;
 
     // Scrolling needs the pane size, so it is resolved here rather than in the
-    // key handler, which has no idea how big the window is.
+    // key handler, which has no idea how big the window is. Live preview does
+    // its own vertical scrolling in drawn rows rather than source lines, since
+    // the two stop being the same thing once a block is formatted.
     let (scroll_y, scroll_x, cur_line, cur_col) = {
         let ed = app.buffers.get_mut(path).expect("checked above");
-        ed.sync_scroll(text_w.saturating_sub(1), height);
+        ed.sync_scroll(text_w.saturating_sub(1), if live { 0 } else { height });
         (ed.scroll_y, ed.scroll_x, ed.cursor_line, ed.cursor_col)
     };
+
+    let (rows, top) = if live {
+        live_rows(app, path, text_w, height, scroll_y, cur_line)
+    } else {
+        let ed = &app.buffers[path];
+        let rows = (scroll_y..ed.line_count()).map(Row::Raw).collect();
+        (rows, 0)
+    };
+    if live {
+        // Keep the anchor honest for the next frame: the source line at the
+        // top of the pane is what `Editor` scrolls by.
+        let line = rows.get(top).and_then(Row::line).unwrap_or(0);
+        app.buffers.get_mut(path).expect("checked above").scroll_y = line;
+    }
+
     let ed = &app.buffers[path];
     app.preview_len = ed.line_count();
 
+    // Raw rows are one contiguous run — the block the cursor is in — so a
+    // single highlight window covers all of them.
+    let raw: Vec<usize> = rows
+        .iter()
+        .skip(top)
+        .take(height)
+        .filter_map(Row::raw_line)
+        .collect();
     let first_line = ed.lines().first().map(String::as_str).unwrap_or("");
     let syntax = app.highlighter.syntax_for_path(path, first_line).clone();
-    let highlighted = app
-        .highlighter
-        .highlight_window(ed.lines(), &syntax, scroll_y, height);
+    let highlighted = match (raw.first(), raw.last()) {
+        (Some(&a), Some(&b)) => app
+            .highlighter
+            .highlight_window(ed.lines(), &syntax, a, b + 1 - a),
+        _ => Vec::new(),
+    };
+    let piece_of = |n: usize| raw.first().and_then(|a| highlighted.get(n - a));
 
     let mut lines: Vec<Line> = Vec::with_capacity(height);
-    for (i, pieces) in highlighted.into_iter().enumerate() {
-        let lineno = scroll_y + i;
+    let mut cursor_row = None;
+    for (i, row) in rows.iter().skip(top).take(height).enumerate() {
         let mut spans: Vec<Span> = Vec::new();
         if gutter > 0 {
-            let style = if lineno == cur_line && focused {
-                pal.text
-            } else {
-                pal.dim
+            // A formatted block wears its first source line and nothing else:
+            // its rows do not correspond to source lines one for one, and a
+            // made-up number is worse than a blank.
+            let (label, style) = match row.line() {
+                Some(n) => (
+                    format!("{:>w$} ", n + 1, w = gutter - 1),
+                    if n == cur_line && focused {
+                        pal.text
+                    } else {
+                        pal.dim
+                    },
+                ),
+                None => (" ".repeat(gutter), pal.dim),
             };
-            spans.push(Span::styled(
-                format!("{:>w$} ", lineno + 1, w = gutter - 1),
-                style,
-            ));
+            spans.push(Span::styled(label, style));
         }
-        spans.extend(clip_pieces(&pieces, scroll_x, text_w, pal));
+        match row {
+            Row::Raw(n) => {
+                if *n == cur_line {
+                    cursor_row = Some(i);
+                }
+                match piece_of(*n) {
+                    Some(pieces) => spans.extend(clip_pieces(pieces, scroll_x, text_w, pal)),
+                    None => spans.push(Span::raw("")),
+                }
+            }
+            Row::Made { content, .. } => spans.extend(content.spans.iter().cloned()),
+        }
         lines.push(Line::from(spans));
     }
     f.render_widget(Paragraph::new(lines).style(pal.text), inner);
 
     if focused {
         // Place the real terminal cursor, so it blinks where the user expects.
+        // It is always in a raw block, so the column arithmetic is the plain
+        // one — display width of the text before it, less the horizontal
+        // scroll.
         let line = ed.lines().get(cur_line).map(String::as_str).unwrap_or("");
         let before: String = line.chars().take(cur_col).collect();
         let skipped: String = line.chars().take(scroll_x).collect();
         let vis = before.width().saturating_sub(skipped.width());
         let x = inner.x + gutter as u16 + vis as u16;
-        let y = inner.y + (cur_line.saturating_sub(scroll_y)) as u16;
+        let y = match cursor_row {
+            Some(r) => inner.y + r as u16,
+            None if live => return,
+            None => inner.y + (cur_line.saturating_sub(scroll_y)) as u16,
+        };
         if x < inner.x + inner.width && y < inner.y + inner.height {
             f.set_cursor_position((x, y));
         }
     }
 }
 
-/// Apply the horizontal scroll to one highlighted line and clip it to width.
+/// Markdown longer than this is edited raw.
+///
+/// Live preview re-renders every block outside the cursor's on each keystroke,
+/// which is linear in the file. That is nothing for a note and noticeable for
+/// a generated document, so past this length the editor stops formatting
+/// rather than getting slow.
+const LIVE_LIMIT: usize = 4000;
+
+/// One drawn row of a markdown buffer being edited.
+enum Row {
+    /// A source line, drawn raw: the block the cursor is in.
+    Raw(usize),
+    /// A rendered line. `line` carries the block's first source line on its
+    /// first row and `None` after, so the gutter numbers the block once.
+    Made {
+        line: Option<usize>,
+        content: Line<'static>,
+    },
+}
+
+impl Row {
+    /// The source line to number this row with, if any.
+    fn line(&self) -> Option<usize> {
+        match self {
+            Row::Raw(n) => Some(*n),
+            Row::Made { line, .. } => *line,
+        }
+    }
+
+    fn raw_line(&self) -> Option<usize> {
+        match self {
+            Row::Raw(n) => Some(*n),
+            Row::Made { .. } => None,
+        }
+    }
+}
+
+/// Lay a markdown buffer out for editing: every block formatted except the one
+/// the cursor is in, which is shown as it was typed.
+///
+/// This is the Obsidian trick, and the reason it works is that a block is the
+/// unit of both. Formatting is a property of the whole block — a fence, a
+/// table, a list — so showing "the line under the cursor" raw and the rest of
+/// its block formatted would render half-syntax. The cursor unformats what it
+/// is inside, and the moment it leaves, the block comes back.
+///
+/// Returns the rows and the index of the first one to draw. Rows are built for
+/// the whole buffer, then a window is chosen: the drawn height of a block is
+/// not known until it is rendered, so there is nothing to scroll by until the
+/// layout exists. [`LIVE_LIMIT`] is what keeps that affordable.
+fn live_rows(
+    app: &App,
+    path: &std::path::Path,
+    width: usize,
+    height: usize,
+    scroll_y: usize,
+    cur_line: usize,
+) -> (Vec<Row>, usize) {
+    let pal = app.palette;
+    let ed = &app.buffers[path];
+    let mut rows: Vec<Row> = Vec::new();
+    let mut top = None;
+    let mut cursor_row = 0;
+
+    for b in markdown::blocks(ed.lines()) {
+        if b.contains(cur_line) {
+            for n in b.start..b.end {
+                if n == cur_line {
+                    cursor_row = rows.len();
+                }
+                if n >= scroll_y && top.is_none() {
+                    top = Some(rows.len());
+                }
+                rows.push(Row::Raw(n));
+            }
+            continue;
+        }
+        if b.start >= scroll_y && top.is_none() {
+            top = Some(rows.len());
+        }
+        let made =
+            markdown::render_block(&ed.lines()[b.start..b.end], width, &pal, &app.highlighter);
+        for (i, content) in made.into_iter().enumerate() {
+            rows.push(Row::Made {
+                line: (i == 0).then_some(b.start),
+                content,
+            });
+        }
+    }
+
+    // The anchor is a source line, so it lands wherever that line's block
+    // begins; from there the cursor has to be pulled into view in row space.
+    let mut top = top.unwrap_or(0).min(rows.len().saturating_sub(1));
+    if cursor_row < top {
+        top = cursor_row;
+    } else if height > 0 && cursor_row >= top + height {
+        top = cursor_row + 1 - height;
+    }
+    (rows, top)
+}
+
+/// Apply the horizontal scroll to one highlighted line and clip it to width./// Apply the horizontal scroll to one highlighted line and clip it to width.
 ///
 /// Walks the styled pieces twice over: first discarding `scroll_x` characters
 /// from the left, then accumulating until the display width runs out. Both
@@ -808,11 +976,12 @@ fn clip_pieces<'a>(
 /// What is drawn is decided in three steps: `place` works out which boxes fit
 /// and where, `route` draws the line between each pair of them, and then the
 /// boxes are stamped over the top.
-fn draw_map(f: &mut Frame, app: &App, area: Rect) {
-    let Some(view) = app.project_map.as_ref() else {
+fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
+    if app.project_map.is_none() {
         return;
-    };
+    }
     let pal = app.palette;
+    let markers = app.config.markers;
 
     // The picture, then a strip describing whatever the cursor is on.
     let detail_h = if area.height > 14 { 6 } else { 0 };
@@ -821,16 +990,36 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Min(5), Constraint::Length(detail_h)])
         .split(area);
 
-    let title = vec![
-        Span::raw(" "),
-        Span::styled("PROJECT MAP", pal.text.add_modifier(Modifier::BOLD)),
-        Span::styled(format!("  {}", view.summary()), pal.dim),
-        Span::raw(" "),
-    ];
-    let mut block = Block::default()
-        .borders(Borders::ALL)
+    // The border is fixed, so the pane inside it can be measured before the
+    // block that will carry the titles exists — and the titles need the
+    // layout, which needs the size.
+    let bordered = || Block::default().borders(Borders::ALL);
+    let inner = bordered().inner(rows[0]);
+    if inner.width < 8 || inner.height < 3 {
+        f.render_widget(bordered().border_style(pal.border_focus), rows[0]);
+        return;
+    }
+
+    // Two borrows, in order: laying the picture out writes `pos` back, then
+    // the frame around it is read-only. The one-way rule bends exactly as far
+    // as `last_tree_cols` already bends it.
+    let placement = app
+        .project_map
+        .as_mut()
+        .expect("checked above")
+        .place(inner.width, inner.height);
+    let view = app.project_map.as_ref().expect("checked above");
+    let selected = view.selected;
+    let near = view.neighbours(selected);
+
+    let mut block = bordered()
         .border_style(pal.border_focus)
-        .title(Line::from(title));
+        .title(Line::from(vec![
+            Span::raw(" "),
+            Span::styled("PROJECT MAP", pal.text.add_modifier(Modifier::BOLD)),
+            Span::styled(format!("  {}", view.summary()), pal.dim),
+            Span::raw(" "),
+        ]));
     if view.filtering || !view.filter.is_empty() {
         block = block.title_bottom(Line::from(vec![
             Span::styled(" / ", pal.text.add_modifier(Modifier::REVERSED)),
@@ -845,54 +1034,49 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
             pal.dim,
         )));
     }
-    let inner = block.inner(rows[0]);
+    if placement.offscreen > 0 {
+        // A map cut off at the edge must not read as a finished picture. The
+        // view follows the cursor, so moving it is what reaches the rest.
+        block = block.title_bottom(
+            Line::from(Span::styled(
+                format!(" {} more — arrow to reach them ", placement.offscreen),
+                pal.dim,
+            ))
+            .right_aligned(),
+        );
+    }
     f.render_widget(block, rows[0]);
-    if inner.width < 8 || inner.height < 3 {
-        return;
-    }
 
-    let selected = view.selected;
-    let near = view.neighbours(selected);
-
-    // Who gets their preferred slot: the file under the cursor, then whatever
-    // it connects to, then everything else. When the grid runs out, it is the
-    // far-away files that go missing rather than the one being looked at.
-    let mut order: Vec<usize> = Vec::new();
-    let visible = view.visible_indices();
-    if view.node_visible(selected) {
-        order.push(selected);
-    }
-    order.extend(visible.iter().copied().filter(|i| near.contains(i)));
-    order.extend(
-        visible
-            .iter()
-            .copied()
-            .filter(|i| *i != selected && !near.contains(i)),
-    );
-
-    let placed = view.place(inner.width, inner.height, &order);
-    // Index into `placed` by node, so edge routing can find both ends fast.
+    // Index into the placed boxes by node, so link routing can find both ends
+    // fast. A node with no entry is scrolled off the view.
     let mut slot_of: HashMap<usize, usize> = HashMap::new();
-    for (n, p) in placed.iter().enumerate() {
+    for (n, p) in placement.boxes.iter().enumerate() {
         slot_of.insert(p.node, n);
     }
 
-    let glyphs = Glyphs::for_markers(app.config.markers);
+    let glyphs = Glyphs::for_markers(markers);
     let mut ink = Ink::new(inner.width as usize, inner.height as usize);
 
-    // Lines first, so a box always sits on top of whatever runs past it.
-    for e in &view.graph.edges {
-        if !view.edge_visible(e) {
-            continue;
-        }
-        let (Some(&a), Some(&b)) = (slot_of.get(&e.from), slot_of.get(&e.to)) else {
+    // Lines first, so a box always sits on top of whatever runs past it. One
+    // line per pair of files, however many symbols they share — the parallel
+    // bundles were most of what made this unreadable.
+    for l in view.links() {
+        let (Some(&a), Some(&b)) = (slot_of.get(&l.a), slot_of.get(&l.b)) else {
             continue;
         };
-        let hot = e.from == selected || e.to == selected;
-        route(&mut ink, &placed[a], &placed[b], hot, &glyphs);
+        let hot = l.a == selected || l.b == selected;
+        let (a, b) = (&placement.boxes[a], &placement.boxes[b]);
+        // Routing twice for a mutual link retraces the same path and lands an
+        // arrowhead on each end, which is exactly what "both ways" looks like.
+        if l.a_to_b {
+            route(&mut ink, a, b, hot, &glyphs);
+        }
+        if l.b_to_a {
+            route(&mut ink, b, a, hot, &glyphs);
+        }
     }
 
-    for p in &placed {
+    for p in &placement.boxes {
         let style = if p.node == selected {
             InkStyle::Selected
         } else if near.contains(&p.node) {
@@ -908,6 +1092,15 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
         );
     }
 
+    for g in &placement.folders {
+        let files = if g.files == 1 { "file" } else { "files" };
+        ink.write(
+            0,
+            g.row as i32,
+            &format!("{}  {} {files}", g.label, g.files),
+            InkStyle::Folder,
+        );
+    }
     f.render_widget(Paragraph::new(ink.render(&glyphs, &pal)), inner);
 
     if detail_h > 0 {
@@ -918,6 +1111,10 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
 /// How brightly one cell of the graph is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InkStyle {
+    /// A folder heading. Not part of the picture — it names the group of
+    /// boxes under it — so it is written into the grid rather than over the
+    /// finished row, and a line running past it keeps the cells it had.
+    Folder,
     /// Everything not connected to the cursor.
     Far,
     /// The file under the cursor, and the lines reaching it.
@@ -1072,6 +1269,13 @@ impl Ink {
         }
     }
 
+    /// Write a run of text starting at a cell, clipped at the right edge.
+    fn write(&mut self, x: i32, y: i32, text: &str, style: InkStyle) {
+        for (i, c) in text.chars().enumerate() {
+            self.put(x + i as i32, y, c, style);
+        }
+    }
+
     /// Turn the grid into one `Line` per row, merging neighbouring cells that
     /// share a style so a row is a handful of spans rather than one per column.
     fn render(&self, g: &Glyphs, pal: &Palette) -> Vec<Line<'static>> {
@@ -1079,6 +1283,7 @@ impl Ink {
             InkStyle::Selected => pal.text.add_modifier(Modifier::REVERSED),
             InkStyle::Near => pal.text.add_modifier(Modifier::BOLD),
             InkStyle::Far => pal.text,
+            InkStyle::Folder => pal.heading,
         };
         let mut out = Vec::with_capacity(self.h);
         for y in 0..self.h {
@@ -1181,7 +1386,7 @@ fn route(ink: &mut Ink, a: &Placed, b: &Placed, hot: bool, g: &Glyphs) {
         ink.hline(by, mid, bx, hot);
     }
     // The arrowhead says which way the connection runs, which is the whole
-    // difference between "imports" and "is imported by".
+    // difference between "calls" and "is called by".
     if let Some(i) = ink.at(bx, by) {
         ink.text[i] = Some((arrow, if hot { InkStyle::Near } else { InkStyle::Far }));
         ink.hot[i] |= hot;
@@ -1199,13 +1404,12 @@ fn node_word(kind: crate::graph::NodeKind) -> &'static str {
     }
 }
 
-/// Human-readable name for an edge kind. Also labels the `1`-`4` toggles, so
+/// Human-readable name for an edge kind. Also labels the `1`-`3` toggles, so
 /// the words on screen match the words in the help and the README.
 fn kind_word(kind: EdgeKind) -> &'static str {
     match kind {
         EdgeKind::Wikilink => "wikilink",
         EdgeKind::Link => "link",
-        EdgeKind::Import => "import",
         EdgeKind::Call => "call",
     }
 }
@@ -1223,26 +1427,21 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
     };
     let (out, incoming) = view.connections(view.selected);
 
-    // Which edge kinds are switched on, as the 1-4 keys see them.
-    let toggles: Vec<Span> = [
-        EdgeKind::Wikilink,
-        EdgeKind::Link,
-        EdgeKind::Import,
-        EdgeKind::Call,
-    ]
-    .iter()
-    .enumerate()
-    .flat_map(|(i, k)| {
-        let on = view.kinds[crate::projectmap::kind_index(*k)];
-        [
-            Span::styled(
-                format!("{}:{} ", i + 1, kind_word(*k)),
-                if on { pal.text } else { pal.dim },
-            ),
-            Span::raw(""),
-        ]
-    })
-    .collect();
+    // Which edge kinds are switched on, as the 1-3 keys see them.
+    let toggles: Vec<Span> = [EdgeKind::Wikilink, EdgeKind::Link, EdgeKind::Call]
+        .iter()
+        .enumerate()
+        .flat_map(|(i, k)| {
+            let on = view.kinds[crate::projectmap::kind_index(*k)];
+            [
+                Span::styled(
+                    format!("{}:{} ", i + 1, kind_word(*k)),
+                    if on { pal.text } else { pal.dim },
+                ),
+                Span::raw(""),
+            ]
+        })
+        .collect();
 
     let summarise = |edges: &[&crate::graph::Edge], outgoing: bool| {
         if edges.is_empty() {
@@ -1411,7 +1610,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 let line = Line::from(vec![
                     Span::styled(format!(" {}", app.status), pal.text),
                     Span::styled(
-                        "   arrows move | Enter open | 1-4 kinds | o unconnected | / filter | Esc back",
+                        "   arrows move | Enter open | 1-3 kinds | o unconnected | / filter | Esc back",
                         pal.dim,
                     ),
                 ]);
@@ -1422,7 +1621,6 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 (Mode::Settings(_), _) => "up/down pick | Enter change | ^S write | Esc close",
                 (Mode::Bar(_), _) => "Esc close",
                 (_, Focus::Tree) => "/ search | m map | n new | q quit",
-                (_, Focus::Editor) if app.read_mode => "up/down scroll | e edit | Esc back",
                 (_, Focus::Editor) => "^S save | ^Z undo | ^K cut line | Esc back",
             };
             let pos = position_readout(app);
@@ -1450,7 +1648,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 /// the tree cursor's position in the row list.
 fn position_readout(app: &App) -> String {
     match app.active_buffer() {
-        Some(ed) if app.focus == Focus::Editor && !app.read_mode => {
+        Some(ed) if app.focus == Focus::Editor => {
             format!("{}:{} ", ed.cursor_line + 1, ed.cursor_col + 1)
         }
         _ => format!("{}/{} ", app.selected + 1, app.rows.len()),
@@ -1515,6 +1713,16 @@ fn draw_keybinds(f: &mut Frame, app: &App, area: Rect, kb: &Keybinds) {
         .unwrap_or(0);
     let scroll = keep_visible(cursor_row, height, rows.len());
 
+    // Both columns are measured, not written down: an action with a long name
+    // or three keys on it widens the column instead of running into the one
+    // after it. A capture in progress shows `…`, which is never the widest.
+    let name_w = actions.iter().map(|a| a.name().width()).max().unwrap_or(0);
+    let keys_w = actions
+        .iter()
+        .map(|a| app.keymap.spec(*a).width())
+        .max()
+        .unwrap_or(0);
+
     let width = inner.width as usize;
     let mut lines: Vec<Line> = Vec::with_capacity(height);
     for (n, row) in rows.iter().enumerate().skip(scroll).take(height) {
@@ -1533,9 +1741,9 @@ fn draw_keybinds(f: &mut Frame, app: &App, area: Rect, kb: &Keybinds) {
                     app.keymap.spec(*action)
                 };
                 vec![
-                    Span::styled(format!("  {:<20}", action.name()), pal.dim),
+                    Span::styled(format!("  {:<w$}  ", action.name(), w = name_w), pal.dim),
                     Span::styled(
-                        format!("{keys:<18}"),
+                        format!("{keys:<keys_w$}  "),
                         if changed {
                             pal.text.add_modifier(Modifier::BOLD)
                         } else {
@@ -1588,13 +1796,12 @@ fn centred(area: Rect, w: u16, h: u16) -> Rect {
     }
 }
 
-/// The left half of the `?` window: every key, as `(keys, description)` pairs.
-///
-/// An empty `keys` makes the row a section heading, and a pair of empty
-/// strings is a spacer. This and [`COMMANDS`] are the user-facing source of
-/// truth for the bindings — if you add a key in `app`, add it here too, and to
-/// the table in the README.
 /// One row of the keys half of `?`.
+///
+/// Descriptions are labels, not sentences. The window has to hold every
+/// binding at once, and its width is set by the longest of them, so a phrase
+/// here costs a column on every other row. The README is where the prose
+/// lives; this is the thing you glance at.
 enum KeyRow {
     Heading(&'static str),
     /// A gap between sections.
@@ -1611,74 +1818,74 @@ use KeyRow::{Blank, Bound, Fixed, Heading};
 
 const KEYS: &[KeyRow] = &[
     Heading("TREE"),
-    Bound(&[Action::TreeUp, Action::TreeDown], "move the cursor"),
-    Bound(&[Action::TreeOpen], "open or close a folder, edit a file"),
-    Bound(&[Action::TreeInto], "open a folder, or step inside"),
-    Bound(&[Action::TreeOut], "close a folder, or go to its parent"),
-    Bound(&[Action::TreeFirst], "first entry"),
-    Bound(&[Action::TreeLast], "last entry"),
-    Bound(&[Action::TreeNew], "new — a dot in the name makes a file"),
-    Bound(&[Action::TreeRename], "rename"),
+    Bound(&[Action::TreeUp, Action::TreeDown], "move"),
     Bound(
-        &[Action::TreeCopy, Action::TreePaste],
-        "copy | paste into this folder",
+        &[Action::TreeJumpUp, Action::TreeJumpDown],
+        "five at a time",
     ),
-    Bound(&[Action::TreeDelete], "delete (asks first) — also *delete"),
-    Bound(&[Action::TreeHidden], "show or hide dotfiles"),
-    Bound(&[Action::TreeRefresh], "re-read from disk — also *reload"),
-    Bound(&[Action::ToggleTreePane], "fold the tree away, and back"),
+    Bound(&[Action::TreeOpen], "open or close"),
+    Bound(&[Action::TreeInto, Action::TreeOut], "in | out"),
+    // Kept apart from `TreeLast`: together their key lists are wide enough to
+    // stretch the whole column, and width is what the window is short of.
+    Bound(&[Action::TreeFirst], "top"),
+    Bound(&[Action::TreeLast], "bottom"),
+    Bound(&[Action::TreeNew], "new — dot makes a file"),
+    Bound(&[Action::TreeRename], "rename"),
+    Bound(&[Action::TreeCopy, Action::TreePaste], "copy | paste"),
+    Bound(&[Action::Save], "save — a folder saves all"),
+    Bound(&[Action::TreeDelete], "delete"),
+    Bound(
+        &[Action::TreeHidden, Action::TreeRefresh],
+        "dotfiles | re-read",
+    ),
+    Bound(&[Action::ToggleTreePane], "fold the tree away"),
     Blank,
     Heading("PROJECT MAP"),
-    Bound(&[Action::TreeMap], "the map: boxes and lines"),
-    Bound(
-        &[Action::MapUp, Action::MapDown],
-        "the nearest file up or down",
-    ),
+    Bound(&[Action::TreeMap], "open the map"),
+    Bound(&[Action::MapUp, Action::MapDown], "nearest, up | down"),
     Bound(
         &[Action::MapLeft, Action::MapRight],
-        "the nearest file left or right",
+        "nearest, left | right",
     ),
-    Bound(&[Action::MapOpen], "open the file the cursor is on"),
+    Bound(&[Action::MapOpen], "open it"),
     Bound(
-        &[
-            Action::MapWikilinks,
-            Action::MapLinks,
-            Action::MapImports,
-            Action::MapCalls,
-        ],
-        "wikilinks | links | imports | calls",
+        &[Action::MapWikilinks, Action::MapLinks, Action::MapCalls],
+        "wikilinks | links | calls",
     ),
     Bound(
-        &[Action::MapOrphans, Action::MapRelayout],
-        "unconnected files | lay out again",
+        &[Action::MapOrphans, Action::MapReload],
+        "orphans | rebuild",
     ),
     Blank,
     Heading("THE BAR"),
-    Bound(&[Action::TreeBar], "search names and contents"),
-    Fixed("*", "…or a star first, for a command"),
-    Bound(
-        &[Action::Bar, Action::CommandBar],
-        "the same two, from the editor",
-    ),
-    Bound(&[Action::TreeSettings], "settings, and the keybinds"),
+    Bound(&[Action::TreeBar], "search"),
+    Fixed("*", "star first = a command"),
+    Bound(&[Action::Bar, Action::CommandBar], "same, from the editor"),
+    Bound(&[Action::TreeSettings], "settings and keybinds"),
     Blank,
     Heading("PREVIEW"),
-    Bound(
-        &[Action::ReadUp, Action::ReadDown],
-        "scroll a note or a picture",
-    ),
-    Fixed("wheel", "one line at a time, in either pane"),
-    Bound(&[Action::ReadEdit], "switch to raw editing"),
-    Bound(&[Action::EditorBack], "back to the tree"),
+    Bound(&[Action::ViewUp, Action::ViewDown], "scroll a picture"),
+    Fixed("wheel", "one line a notch"),
     Blank,
     Heading("EDITOR"),
+    Bound(&[Action::EditorBack], "back to the tree"),
     Bound(&[Action::Save], "save"),
     Bound(&[Action::EditorUndo, Action::EditorRedo], "undo | redo"),
-    Bound(&[Action::EditorDeleteLine], "delete the current line"),
+    Bound(&[Action::EditorDeleteLine], "delete the line"),
     Bound(
         &[Action::EditorWordLeft, Action::EditorWordRight],
-        "move by word",
+        "by word",
     ),
+    // One action per row: paired, their key lists are wide enough to set the
+    // field for the whole table, and width is what this window is short of.
+    Bound(
+        &[Action::EditorJumpUp, Action::EditorJumpDown],
+        "five lines",
+    ),
+    Bound(&[Action::EditorLineStart], "start of the line"),
+    Bound(&[Action::EditorLineEnd], "end of the line"),
+    Bound(&[Action::EditorDocStart], "first line"),
+    Bound(&[Action::EditorDocEnd], "last line"),
     Blank,
     Bound(&[Action::TreeQuit, Action::Quit], "quit"),
 ];
@@ -1709,30 +1916,30 @@ fn key_rows(keymap: &Keymap) -> Vec<(String, String)> {
 /// Written with the star, because that is what reaches them — there is one bar
 /// and this is how you tell it you meant a command. Anything added to
 /// `App::run_command` belongs here, and in `complete_command`'s list too.
+///
+/// One line per command, not per variation: the quoting rule for `*replace`
+/// and the dotted theme keys `*set` accepts are in the README rather than
+/// here, where they would have widened the window for everyone.
 const COMMANDS: &[(&str, &str)] = &[
     ("", "FILES"),
-    ("*copy a to b", "copy a file or a whole folder"),
-    ("*delete", "delete what the cursor is on"),
-    ("*delete notes/old.md", "…or any path in the project"),
-    ("*new notes/today.md", "make a file"),
-    ("*mkdir notes", "make a folder"),
+    ("*copy a to b", "a file or a folder"),
+    ("*delete path", "bare = the cursor's"),
+    ("*new notes/x.md", "a file"),
+    ("*mkdir notes", "a folder"),
     ("", ""),
     ("", "MOVING"),
-    ("*line 42", "jump to a line — *42 does too"),
+    ("*line 42", "jump — *42 works too"),
     ("*map", "the project map"),
-    ("*reload", "re-read the project from disk"),
+    ("*reload", "re-read from disk"),
     ("", ""),
     ("", "CHANGING THINGS"),
-    ("*replace old new", "across every file, after confirming"),
-    ("*replace \"a b\" \"c d\"", "quote anything with spaces"),
+    ("*replace old new", "across every file"),
     ("*set tab_width 2", "change a setting"),
-    ("*set theme.heading cyan", "repaint without a restart"),
-    ("*config", "settings, and every keybinding"),
+    ("*config", "settings and keybinds"),
     ("", ""),
     ("", "LEAVING"),
     ("*w  *q  *wq", "save | quit | both"),
     ("*help", "this window"),
-    ("", ""),
 ];
 
 /// The keymap overlay. Scrollable, because the full list does not fit a short

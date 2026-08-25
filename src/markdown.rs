@@ -184,6 +184,152 @@ fn scan_urls(text: &str, pal: &Palette) -> Vec<Span<'static>> {
     out
 }
 
+/// One markdown block: a run of source lines that renders as a unit.
+///
+/// The unit the live editor swaps between formatted and raw. `end` is
+/// exclusive, and the blocks of a file tile it completely — every source line
+/// belongs to exactly one — so a cursor line always names a block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Block {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Block {
+    pub fn contains(&self, line: usize) -> bool {
+        line >= self.start && line < self.end
+    }
+}
+
+/// Split markdown source into the blocks the live editor formats one at a time.
+///
+/// Four rules, in order of precedence:
+///
+/// 1. A fenced code block runs from its opening fence to the matching closing
+///    one, blank lines and all. Splitting inside a fence would render half a
+///    code block, which is not a code block.
+/// 2. A blank line is its own block, so the gap between paragraphs survives.
+/// 3. An ATX heading is its own block. CommonMark lets a heading interrupt a
+///    paragraph, so `text / # Heading / text` is three blocks even with no
+///    blank lines around it — otherwise editing the heading would unformat the
+///    paragraphs either side of it.
+/// 4. Anything else groups with the non-blank lines next to it.
+///
+/// Deliberately *not* a rule: a `---` under a line of text stays with it.
+/// That is a setext heading, and pulling the underline into its own block
+/// would turn a title into a paragraph plus a horizontal rule.
+pub fn blocks(lines: &[String]) -> Vec<Block> {
+    let mut out: Vec<Block> = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut fence: Option<(char, usize)> = None;
+    let mut i = 0;
+
+    let close = |out: &mut Vec<Block>, start: &mut Option<usize>, at: usize| {
+        if let Some(s) = start.take() {
+            out.push(Block { start: s, end: at });
+        }
+    };
+
+    while i < lines.len() {
+        let line = &lines[i];
+        if let Some((ch, len)) = fence {
+            if closes_fence(line, ch, len) {
+                fence = None;
+                out.push(Block {
+                    start: start.take().expect("a fence opened a block"),
+                    end: i + 1,
+                });
+            }
+            i += 1;
+            continue;
+        }
+        if let Some((ch, len)) = opens_fence(line) {
+            close(&mut out, &mut start, i);
+            fence = Some((ch, len));
+            start = Some(i);
+            i += 1;
+            continue;
+        }
+        if line.trim().is_empty() {
+            close(&mut out, &mut start, i);
+            out.push(Block {
+                start: i,
+                end: i + 1,
+            });
+            i += 1;
+            continue;
+        }
+        if is_atx_heading(line) {
+            close(&mut out, &mut start, i);
+            out.push(Block {
+                start: i,
+                end: i + 1,
+            });
+            i += 1;
+            continue;
+        }
+        start.get_or_insert(i);
+        i += 1;
+    }
+    // An unclosed fence, or the last paragraph, runs to the end of the file.
+    close(&mut out, &mut start, lines.len());
+    out
+}
+
+/// The fence character and its length, for a line that opens a code fence.
+/// Up to three leading spaces, then three or more backticks or tildes.
+fn opens_fence(line: &str) -> Option<(char, usize)> {
+    let trimmed = line.trim_start();
+    if line.len() - trimmed.len() > 3 {
+        return None;
+    }
+    let ch = trimmed.chars().next()?;
+    if ch != '`' && ch != '~' {
+        return None;
+    }
+    let len = trimmed.chars().take_while(|c| *c == ch).count();
+    (len >= 3).then_some((ch, len))
+}
+
+/// Whether a line closes an open fence: the same character, at least as many
+/// of them, and nothing else on the line.
+fn closes_fence(line: &str, ch: char, len: usize) -> bool {
+    let trimmed = line.trim();
+    trimmed.chars().count() >= len && trimmed.chars().all(|c| c == ch) && trimmed.starts_with(ch)
+}
+
+/// `# Heading` through `###### Heading`, and a bare `#` on its own.
+fn is_atx_heading(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if line.len() - trimmed.len() > 3 {
+        return false;
+    }
+    let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+    (1..=6).contains(&hashes)
+        && trimmed
+            .chars()
+            .nth(hashes)
+            .is_none_or(|c| c.is_whitespace())
+}
+
+/// Render one block of source, as [`blocks`] carved it out.
+///
+/// A blank-line block renders to nothing — [`render`] trims trailing blanks —
+/// so it comes back as one empty line instead, because the gap between two
+/// paragraphs is a row on the screen and has to stay one.
+pub fn render_block(
+    lines: &[String],
+    width: usize,
+    pal: &Palette,
+    hl: &Highlighter,
+) -> Vec<Line<'static>> {
+    let made = render(&lines.join("\n"), width, pal, hl);
+    if made.is_empty() {
+        return vec![Line::default()];
+    }
+    made
+}
+
 /// Render markdown to styled lines fitted to `width`.
 ///
 /// The enabled extensions are strikethrough, tables, task lists and footnotes
@@ -879,6 +1025,109 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    fn lines_of(src: &str) -> Vec<String> {
+        src.lines().map(str::to_string).collect()
+    }
+
+    /// Blocks as `(start, end)` pairs, for readable assertions.
+    fn split(src: &str) -> Vec<(usize, usize)> {
+        blocks(&lines_of(src))
+            .into_iter()
+            .map(|b| (b.start, b.end))
+            .collect()
+    }
+
+    #[test]
+    fn every_source_line_belongs_to_exactly_one_block() {
+        let src = "# Title\n\npara one\nstill one\n\n- a\n- b\n\n```rs\n\ncode\n```\n";
+        let lines = lines_of(src);
+        let bs = blocks(&lines);
+        let mut covered = vec![0usize; lines.len()];
+        for b in &bs {
+            for c in covered.iter_mut().take(b.end).skip(b.start) {
+                *c += 1;
+            }
+        }
+        assert!(
+            covered.iter().all(|c| *c == 1),
+            "blocks must tile the file: {covered:?}"
+        );
+        for (n, _) in lines.iter().enumerate() {
+            assert!(bs.iter().any(|b| b.contains(n)), "line {n} has no block");
+        }
+    }
+
+    #[test]
+    fn a_fence_is_one_block_however_many_blank_lines_are_in_it() {
+        let src = "before\n\n```python\nx = 1\n\ny = 2\n```\n\nafter\n";
+        let bs = split(src);
+        assert!(
+            bs.contains(&(2, 7)),
+            "the fence and everything in it is one block: {bs:?}"
+        );
+    }
+
+    #[test]
+    fn an_unclosed_fence_runs_to_the_end_of_the_file() {
+        let src = "para\n\n```\nstill code\nand more\n";
+        let bs = split(src);
+        assert_eq!(bs.last(), Some(&(2, 5)), "{bs:?}");
+    }
+
+    #[test]
+    fn a_heading_is_its_own_block_even_with_no_blank_line_round_it() {
+        let bs = split("text above\n# Heading\ntext below\n");
+        assert_eq!(bs, [(0, 1), (1, 2), (2, 3)]);
+    }
+
+    #[test]
+    fn a_setext_underline_stays_with_the_line_it_underlines() {
+        // `---` after text is an H2, not a horizontal rule. Splitting it off
+        // would turn the title into a paragraph and a stray line.
+        let bs = split("Title\n---\n\nbody\n");
+        assert_eq!(bs[0], (0, 2), "{bs:?}");
+    }
+
+    #[test]
+    fn a_hash_that_is_not_a_heading_does_not_split() {
+        // Seven hashes is not a heading, and neither is one with no space.
+        let bs = split("a\n####### seven\n#nospace\nb\n");
+        assert_eq!(bs, [(0, 4)], "{bs:?}");
+    }
+
+    #[test]
+    fn a_blank_line_block_still_renders_as_a_row() {
+        let pal = Palette::default();
+        let hl = Highlighter::new();
+        let out = render_block(&[String::new()], 40, &pal, &hl);
+        assert_eq!(out.len(), 1, "the gap between paragraphs is a row");
+    }
+
+    #[test]
+    fn a_block_renders_the_same_alone_as_it_does_in_the_file() {
+        let pal = Palette::default();
+        let hl = Highlighter::new();
+        let text = |ls: &[Line]| {
+            ls.iter()
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let whole = render("# Title\n\n- a\n- b\n", 40, &pal, &hl);
+        let heading = render_block(&lines_of("# Title"), 40, &pal, &hl);
+        let list = render_block(&lines_of("- a\n- b"), 40, &pal, &hl);
+        assert_eq!(
+            text(&heading),
+            text(&whole)[..2],
+            "the heading and its rule"
+        );
+        assert_eq!(text(&list), text(&whole)[3..], "the list");
     }
 
     #[test]

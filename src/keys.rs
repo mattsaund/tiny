@@ -46,8 +46,9 @@ pub enum Context {
     /// Chords that work from any pane. Checked before the pane's own set.
     Global,
     Tree,
-    /// A note or picture being read, rather than typed into.
-    Read,
+    /// A preview with no text buffer behind it — a picture, a directory, a
+    /// binary. There is nothing to type into, so the arrows scroll the view.
+    View,
     /// The editor, and the one key that leaves it.
     Editor,
     Map,
@@ -58,7 +59,7 @@ impl Context {
         match self {
             Context::Global => "ANYWHERE",
             Context::Tree => "TREE",
-            Context::Read => "READING",
+            Context::View => "VIEWING",
             Context::Editor => "EDITOR",
             Context::Map => "PROJECT MAP",
         }
@@ -84,6 +85,8 @@ pub enum Action {
     TreeDown,
     TreeFirst,
     TreeLast,
+    TreeJumpUp,
+    TreeJumpDown,
     TreePageUp,
     TreePageDown,
     TreeOpen,
@@ -103,14 +106,13 @@ pub enum Action {
     TreeBar,
     TreeQuit,
     // Reading
-    ReadUp,
-    ReadDown,
-    ReadTop,
-    ReadBottom,
-    ReadPageUp,
-    ReadPageDown,
-    ReadEdit,
-    ReadBar,
+    ViewUp,
+    ViewDown,
+    ViewTop,
+    ViewBottom,
+    ViewPageUp,
+    ViewPageDown,
+    ViewBar,
     // Editor
     EditorBack,
     EditorUndo,
@@ -118,6 +120,10 @@ pub enum Action {
     EditorDeleteLine,
     EditorWordLeft,
     EditorWordRight,
+    EditorJumpUp,
+    EditorJumpDown,
+    EditorLineStart,
+    EditorLineEnd,
     EditorDocStart,
     EditorDocEnd,
     // Map
@@ -131,10 +137,9 @@ pub enum Action {
     MapPrevious,
     MapFilter,
     MapOrphans,
-    MapRelayout,
+    MapReload,
     MapWikilinks,
     MapLinks,
-    MapImports,
     MapCalls,
 }
 
@@ -194,14 +199,28 @@ const TABLE: &[Row] = &[
         Context::Tree,
         "tree.first",
         "first entry",
-        "shift+up I home",
+        "shift+up I",
     ),
     (
         Action::TreeLast,
         Context::Tree,
         "tree.last",
         "last entry",
-        "shift+down K end",
+        "shift+down K",
+    ),
+    (
+        Action::TreeJumpUp,
+        Context::Tree,
+        "tree.jump_up",
+        "five entries up",
+        "ctrl+up",
+    ),
+    (
+        Action::TreeJumpDown,
+        Context::Tree,
+        "tree.jump_down",
+        "five entries down",
+        "ctrl+down",
     ),
     (
         Action::TreePageUp,
@@ -291,7 +310,7 @@ const TABLE: &[Row] = &[
         Action::TreeRefresh,
         Context::Tree,
         "tree.refresh",
-        "re-read from disk",
+        "re-read from disk — also *reload",
         "f5",
     ),
     (
@@ -306,7 +325,7 @@ const TABLE: &[Row] = &[
         Context::Tree,
         "tree.settings",
         "the settings area",
-        ", f2",
+        ",",
     ),
     (
         Action::TreeMap,
@@ -330,58 +349,51 @@ const TABLE: &[Row] = &[
         "q esc",
     ),
     (
-        Action::ReadUp,
-        Context::Read,
-        "read.up",
+        Action::ViewUp,
+        Context::View,
+        "view.up",
         "scroll up",
         "up i",
     ),
     (
-        Action::ReadDown,
-        Context::Read,
-        "read.down",
+        Action::ViewDown,
+        Context::View,
+        "view.down",
         "scroll down",
         "down k",
     ),
     (
-        Action::ReadTop,
-        Context::Read,
-        "read.top",
+        Action::ViewTop,
+        Context::View,
+        "view.top",
         "to the top",
-        "shift+up I home",
+        "shift+up I",
     ),
     (
-        Action::ReadBottom,
-        Context::Read,
-        "read.bottom",
+        Action::ViewBottom,
+        Context::View,
+        "view.bottom",
         "to the bottom",
-        "shift+down K end",
+        "shift+down K",
     ),
     (
-        Action::ReadPageUp,
-        Context::Read,
-        "read.page_up",
+        Action::ViewPageUp,
+        Context::View,
+        "view.page_up",
         "a screen up",
         "pageup",
     ),
     (
-        Action::ReadPageDown,
-        Context::Read,
-        "read.page_down",
+        Action::ViewPageDown,
+        Context::View,
+        "view.page_down",
         "a screen down",
         "pagedown",
     ),
     (
-        Action::ReadEdit,
-        Context::Read,
-        "read.edit",
-        "edit the raw source",
-        "e",
-    ),
-    (
-        Action::ReadBar,
-        Context::Read,
-        "read.bar",
+        Action::ViewBar,
+        Context::View,
+        "view.bar",
         "the search bar",
         "/",
     ),
@@ -428,18 +440,46 @@ const TABLE: &[Row] = &[
         "ctrl+right",
     ),
     (
+        Action::EditorJumpUp,
+        Context::Editor,
+        "editor.jump_up",
+        "five lines up",
+        "ctrl+up",
+    ),
+    (
+        Action::EditorJumpDown,
+        Context::Editor,
+        "editor.jump_down",
+        "five lines down",
+        "ctrl+down",
+    ),
+    (
+        Action::EditorLineStart,
+        Context::Editor,
+        "editor.line_start",
+        "to the start of the line",
+        "shift+left",
+    ),
+    (
+        Action::EditorLineEnd,
+        Context::Editor,
+        "editor.line_end",
+        "to the end of the line",
+        "shift+right",
+    ),
+    (
         Action::EditorDocStart,
         Context::Editor,
         "editor.start",
         "to the first line",
-        "ctrl+home",
+        "shift+up",
     ),
     (
         Action::EditorDocEnd,
         Context::Editor,
         "editor.end",
         "to the last line",
-        "ctrl+end",
+        "shift+down",
     ),
     (
         Action::MapClose,
@@ -512,10 +552,10 @@ const TABLE: &[Row] = &[
         "o",
     ),
     (
-        Action::MapRelayout,
+        Action::MapReload,
         Context::Map,
-        "map.relayout",
-        "lay it out again",
+        "map.reload",
+        "build the map again",
         "r",
     ),
     (
@@ -533,18 +573,11 @@ const TABLE: &[Row] = &[
         "2",
     ),
     (
-        Action::MapImports,
-        Context::Map,
-        "map.imports",
-        "draw imports",
-        "3",
-    ),
-    (
         Action::MapCalls,
         Context::Map,
         "map.calls",
         "draw calls",
-        "4",
+        "3",
     ),
 ];
 
@@ -966,7 +999,7 @@ mod tests {
         let map = Keymap::default();
         let k = ev(KeyCode::Char('k'), KeyModifiers::NONE);
         assert_eq!(map.resolve(Context::Tree, &k), Some(Action::TreeDown));
-        assert_eq!(map.resolve(Context::Read, &k), Some(Action::ReadDown));
+        assert_eq!(map.resolve(Context::View, &k), Some(Action::ViewDown));
         // The editor has no bare-letter bindings: there, k is the letter k.
         assert_eq!(map.resolve(Context::Editor, &k), None);
     }
@@ -975,7 +1008,7 @@ mod tests {
     fn the_global_chords_reach_every_context() {
         let map = Keymap::default();
         let save = ev(KeyCode::Char('s'), KeyModifiers::CONTROL);
-        for ctx in [Context::Tree, Context::Read, Context::Editor] {
+        for ctx in [Context::Tree, Context::View, Context::Editor] {
             assert_eq!(map.resolve(ctx, &save), Some(Action::Save));
         }
     }

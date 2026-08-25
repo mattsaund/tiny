@@ -4,10 +4,16 @@
 //!
 //!   - **Notes.** `[[wikilinks]]` and relative markdown links, resolved
 //!     against the files in the project.
-//!   - **Code.** Imports, which are exact, and calls, which are matched by
-//!     name: if one file calls `load_config` and another defines it, that is
-//!     an edge. Definitions and references come from tree-sitter's tags
-//!     queries, so this works the same way for every language that ships one.
+//!   - **Code.** Calls, matched by name: if one file calls `load_config` and
+//!     another defines it, that is an edge. Definitions and references come
+//!     from tree-sitter's tags queries, so this works the same way for every
+//!     language that ships one.
+//!
+//! Both are connections you can point at in the text. An `import` on its own
+//! is not: it says a file is *available*, not that anything in it is used, and
+//! wiring every module to every module it merely mentions is what turned this
+//! picture into a hairball. Import a module and call nothing from it and the
+//! map stays quiet.
 //!
 //! Call matching is a heuristic and behaves like one. A name defined in many
 //! files is ambiguous — `new`, `main`, `get` — so past `max_ambiguity`
@@ -21,19 +27,19 @@
 //! 1. **Walk.** `search::walk` lists the files — the same traversal search
 //!    uses, so the two always agree on what the project contains.
 //! 2. **Collect.** Each file becomes a [`Node`] plus a private `Facts` record:
-//!    what it defines, what it calls, what it links to, what it imports.
-//!    Notes are scanned for links; source is parsed for symbols and imports.
+//!    what it defines, what it calls, and what it links to. Notes are
+//!    scanned for links; source is parsed for symbols.
 //! 3. **Index.** Two lookup tables are built — `by_rel` (path to node) and
 //!    `by_stem` (bare filename to nodes) — plus `definers`, mapping each
 //!    symbol to the files that define it.
-//! 4. **Resolve.** Every recorded link, import and call is turned into an
+//! 4. **Resolve.** Every recorded link and call is turned into an
 //!    [`Edge`] where a target can be found. Identical edges are merged and
 //!    counted, which is why the map is keyed by `(from, to, kind, label)`.
 //!
 //! # Exact edges and guessed ones
 //!
-//! Wikilinks, markdown links and imports are *resolved*: they name a target,
-//! and either it exists or no edge is drawn. Call edges are *guessed*: they
+//! Wikilinks and markdown links are *resolved*: they name a target, and
+//! either it exists or no edge is drawn. Call edges are *guessed*: they
 //! match a called name against every file that defines that name, with no
 //! scope analysis, no type information, and no import following.
 //!
@@ -53,11 +59,11 @@
 //!
 //! # Adding a language
 //!
-//! Four steps: add the `tree-sitter-*` crate, add a `LazyLock<Option<...>>`
-//! beside [`PYTHON`], add a [`Lang`] variant with its extensions in
-//! [`lang_of`] and a [`tags_for`] arm, and add an arm to [`collect_imports`]
-//! for its import syntax. Then add the name to [`supported_languages`], which
-//! is what the graph view tells the user it can trace.
+//! Three steps: add the `tree-sitter-*` crate, add a `LazyLock<Option<...>>`
+//! beside [`PYTHON`], and add a [`Lang`] variant with its extensions in
+//! [`lang_of`] and a [`tags_for`] arm. Then add the name to
+//! [`supported_languages`], which is what the map tells the user it can
+//! trace.
 //!
 //! A language with no tags query still appears in the graph as a node — it
 //! just has no call edges. That is what [`is_sourcelike`] is for.
@@ -78,7 +84,7 @@ pub enum NodeKind {
     /// Other prose — `.txt`, `.rst`, `.org`. Wikilinks only; a `[a](b)` in a
     /// text file is not a link.
     Prose,
-    /// Source. Parsed for symbols and imports where a grammar exists.
+    /// Source. Parsed for symbols where a grammar exists.
     Code,
     /// Everything else. Drawn as a node, never scanned.
     Other,
@@ -90,8 +96,6 @@ pub enum EdgeKind {
     Wikilink,
     /// A relative markdown link, `[text](../notes/x.md)`.
     Link,
-    /// One source file importing another.
-    Import,
     /// One source file calling a function another defines.
     Call,
 }
@@ -206,7 +210,7 @@ static JAVASCRIPT: LazyLock<Option<TagsConfiguration>> = LazyLock::new(|| {
 
 /// Languages with a tree-sitter grammar compiled in. Adding one means adding
 /// a variant here and wiring it through [`lang_of`], [`tags_for`] and
-/// [`collect_imports`].
+/// [`tags_for`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Lang {
     Python,
@@ -260,8 +264,6 @@ struct Facts {
     calls: BTreeMap<String, usize>,
     /// Wikilink and markdown-link targets, as written.
     links: Vec<(String, EdgeKind)>,
-    /// Import targets, as written in the source.
-    imports: Vec<String>,
 }
 
 /// Build the whole graph for a project. See the module docs for the four
@@ -312,7 +314,9 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
                     {
                         let body = strip_tests(lang, &text);
                         collect_symbols(&mut ctx, lang, body, &mut f);
-                        collect_imports(lang, body, &mut f);
+                        if lang == Lang::Rust {
+                            collect_path_calls(body, &mut f);
+                        }
                     }
                 }
                 NodeKind::Other => {}
@@ -354,16 +358,6 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
                 && to != from
             {
                 *edges.entry((from, to, *kind, target.clone())).or_insert(0) += 1;
-            }
-        }
-
-        for target in &f.imports {
-            if let Some(to) = resolve_link(target, root, from_dir.as_deref(), &by_rel, &by_stem)
-                && to != from
-            {
-                *edges
-                    .entry((from, to, EdgeKind::Import, target.clone()))
-                    .or_insert(0) += 1;
             }
         }
 
@@ -588,98 +582,46 @@ fn collect_symbols(ctx: &mut TagsContext, lang: Lang, text: &str, f: &mut Facts)
     }
 }
 
-/// Whether a string is a bare identifier. Guards the import scanners against
-/// picking up braces, wildcards and other syntax as a module name.
-fn is_ident(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_')
-}
-
-/// Imports, read line by line. Exact where it matters and quiet where it is
-/// not sure — an unresolvable target simply produces no edge.
+/// Rust calls written through a path — `helpers::compute()`, `Config::load()`.
 ///
-/// Text scanning rather than tree-sitter, because import *statements* are
-/// trivially recognisable per language while extracting a usable path from the
-/// parse tree differs wildly between grammars. The cost is that an import
-/// inside a comment or a string counts; the benefit is about thirty lines
-/// instead of three more queries.
+/// A gap in the shipped Rust tags query, and not a small one: it tags a bare
+/// `compute()` as a call and says nothing about `helpers::compute()`, which is
+/// how a Rust file nearly always reaches into another one. Without this, the
+/// map of a Rust project is almost empty.
 ///
-/// Each language keeps only what can name a file in this project:
-///
-/// - **Python** — the module path from `import a.b` or `from a.b import c`,
-///   with dots turned into slashes and leading relative dots stripped.
-/// - **Rust** — `mod name;` declares the file, `use crate::name` reaches into
-///   it. Only the first path segment after the prefix is taken, since that is
-///   the part that names a sibling module.
-/// - **JavaScript** — only relative specifiers. A bare `from 'react'` is a
-///   package, not a file here.
-fn collect_imports(lang: Lang, text: &str, f: &mut Facts) {
-    for raw in text.lines() {
-        let line = raw.trim();
-        match lang {
-            Lang::Python => {
-                // `import a.b` / `from a.b import c`
-                let module = if let Some(rest) = line.strip_prefix("from ") {
-                    rest.split_whitespace().next()
-                } else if let Some(rest) = line.strip_prefix("import ") {
-                    rest.split([',', ' ']).next()
-                } else {
-                    None
-                };
-                if let Some(m) = module {
-                    let m = m.trim_start_matches('.');
-                    if !m.is_empty() {
-                        f.imports.push(m.replace('.', "/"));
-                    }
-                }
-            }
-            Lang::Rust => {
-                let rest = line.strip_prefix("pub ").unwrap_or(line);
-                // `mod name;` declares the file; `use crate::name` reaches into
-                // it. Both name a sibling, and most files only do the second.
-                if let Some(rest) = rest.strip_prefix("mod ")
-                    && let Some(name) = rest.strip_suffix(';')
-                {
-                    if is_ident(name.trim()) {
-                        f.imports.push(name.trim().to_string());
-                    }
-                } else if let Some(rest) = rest.strip_prefix("use ") {
-                    for prefix in ["crate::", "super::", "self::"] {
-                        if let Some(tail) = rest.strip_prefix(prefix) {
-                            let first = tail
-                                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                                .next()
-                                .unwrap_or("");
-                            if is_ident(first) {
-                                f.imports.push(first.to_string());
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-            Lang::JavaScript => {
-                // Only relative specifiers name a file in this project.
-                for marker in ["from ", "require("] {
-                    let Some(at) = line.find(marker) else {
-                        continue;
-                    };
-                    let rest = &line[at + marker.len()..];
-                    let rest = rest.trim_start();
-                    let Some(quote) = rest.chars().next() else {
-                        continue;
-                    };
-                    if quote != '\'' && quote != '"' {
-                        continue;
-                    }
-                    if let Some(end) = rest[1..].find(quote) {
-                        let spec = &rest[1..1 + end];
-                        if spec.starts_with('.') {
-                            f.imports.push(spec.to_string());
-                        }
-                    }
-                }
-            }
+/// Text scanning rather than a second tree-sitter query, for the same reason
+/// the language list is short: this is thirty lines against a whole query to
+/// compile and keep in step with the grammar. The cost is that a call written
+/// inside a comment or a string counts. It is bounded by what happens next —
+/// a name only becomes an edge if some file in the project defines it, and
+/// `max_ambiguity` throws out the names too common to mean anything.
+fn collect_path_calls(text: &str, f: &mut Facts) {
+    let bytes = text.as_bytes();
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut i = 0;
+    while let Some(at) = text[i..].find("::") {
+        let start = i + at + 2;
+        let mut end = start;
+        while end < bytes.len() && is_word(bytes[end]) {
+            end += 1;
         }
+        i = start.max(i + at + 1);
+        if end == start {
+            continue; // `::<T>`, `::*`, or a stray pair of colons
+        }
+        // Only a call, not a `use` path or a type: the parenthesis is what
+        // says something is being invoked. Turbofish sits between the two.
+        let mut after = end;
+        if bytes.get(after) == Some(&b':') && bytes.get(after + 1) == Some(&b':') {
+            continue; // a longer path; the last segment is the call
+        }
+        while bytes.get(after) == Some(&b' ') {
+            after += 1;
+        }
+        if bytes.get(after) == Some(&b'(') {
+            *f.calls.entry(text[start..end].to_string()).or_insert(0) += 1;
+        }
+        i = end;
     }
 }
 
@@ -895,7 +837,7 @@ mod tests {
     // ---- python -----------------------------------------------------------
 
     #[test]
-    fn python_imports_and_calls_both_become_edges() {
+    fn a_call_becomes_an_edge() {
         let td = tempfile::tempdir().unwrap();
         write(
             td.path(),
@@ -908,11 +850,6 @@ mod tests {
             "import utils\n\ndef main():\n    cfg = utils.load_config('x')\n    return utils.parse(cfg)\n",
         );
         let g = graph(&td);
-        assert!(
-            has(&g, "main.py", "utils.py", EdgeKind::Import),
-            "import edge missing: {:?}",
-            edges(&g)
-        );
         let calls: Vec<String> = g
             .edges
             .iter()
@@ -921,6 +858,25 @@ mod tests {
             .collect();
         assert!(calls.contains(&"load_config".to_string()), "{calls:?}");
         assert!(calls.contains(&"parse".to_string()), "{calls:?}");
+    }
+
+    #[test]
+    fn importing_a_module_without_calling_it_is_not_an_edge() {
+        let td = tempfile::tempdir().unwrap();
+        write(
+            td.path(),
+            "utils.py",
+            "def load_config(path):\n    return {}\n",
+        );
+        // The import says `utils` is available. Nothing here uses it, and
+        // "available" is not a connection worth a line on the map.
+        write(
+            td.path(),
+            "main.py",
+            "import utils\n\ndef main():\n    return 1\n",
+        );
+        let g = graph(&td);
+        assert!(g.edges.is_empty(), "{:?}", edges(&g));
     }
 
     #[test]
@@ -937,13 +893,13 @@ mod tests {
     }
 
     #[test]
-    fn from_imports_resolve_through_a_package_path() {
+    fn a_call_reaches_into_a_package() {
         let td = tempfile::tempdir().unwrap();
         write(td.path(), "pkg/core.py", "def run():\n    pass\n");
         write(td.path(), "app.py", "from pkg.core import run\nrun()\n");
         let g = graph(&td);
         assert!(
-            has(&g, "app.py", "pkg/core.py", EdgeKind::Import),
+            has(&g, "app.py", "pkg/core.py", EdgeKind::Call),
             "{:?}",
             edges(&g)
         );
@@ -984,14 +940,14 @@ mod tests {
         );
         let g = graph(&td);
         assert!(
-            has(&g, "src/main.rs", "src/helpers.rs", EdgeKind::Import),
-            "mod edge missing: {:?}",
+            has(&g, "src/main.rs", "src/helpers.rs", EdgeKind::Call),
+            "`mod helpers` alone would not do it; calling `compute` does: {:?}",
             edges(&g)
         );
     }
 
     #[test]
-    fn javascript_relative_imports_become_edges() {
+    fn a_javascript_call_across_a_relative_import_is_an_edge() {
         let td = tempfile::tempdir().unwrap();
         write(
             td.path(),
@@ -1005,7 +961,7 @@ mod tests {
         );
         let g = graph(&td);
         assert!(
-            has(&g, "app.js", "lib.js", EdgeKind::Import),
+            has(&g, "app.js", "lib.js", EdgeKind::Call),
             "{:?}",
             edges(&g)
         );
@@ -1018,8 +974,9 @@ mod tests {
         write(td.path(), "react.js", "// not the real one\n");
         let g = graph(&td);
         assert!(
-            !has(&g, "app.js", "react.js", EdgeKind::Import),
-            "a bare specifier means node_modules, not this file"
+            g.edges.is_empty(),
+            "a bare specifier means node_modules, not this file: {:?}",
+            edges(&g)
         );
     }
 
@@ -1100,8 +1057,8 @@ mod tests {
         );
         let g = graph(&td);
         assert!(
-            has(&g, "src/app.rs", "src/search.rs", EdgeKind::Import),
-            "`use crate::search` names a sibling: {:?}",
+            has(&g, "src/app.rs", "src/search.rs", EdgeKind::Call),
+            "`use crate::search` only points the way; `search::count()` is the link: {:?}",
             edges(&g)
         );
     }

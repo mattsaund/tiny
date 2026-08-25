@@ -1,9 +1,12 @@
 //! The project map, drawn in the terminal.
 //!
-//! Nodes are laid out once with a force simulation and then stay put — a
-//! settled picture you can read, rather than an animation that never stops
-//! moving. Each file is drawn as a box with its name in it, and the
-//! connections between them as lines, the way anyone would draw this on paper.
+//! Every file in the project is a box with its name in it, and the connections
+//! between them are lines, the way anyone would draw this on paper. The boxes
+//! are grouped by the folder they live in, under a heading naming it.
+//!
+//! Folders are not boxes. They are not selectable, nothing connects to one,
+//! and opening one does nothing — a folder is *where files are*, and the
+//! heading is how the picture says so.
 //!
 //! Navigation is spatial: the arrow keys move to the nearest file in that
 //! direction, so the graph is something you walk around rather than a list
@@ -17,27 +20,24 @@
 //! asking [`ProjectMap::node_visible`] and [`ProjectMap::edge_visible`] at draw
 //! time, so toggling an edge kind is instant and reversible.
 //!
-//! # Why the layout is not animated
+//! # Why the layout is not force-directed
 //!
-//! Force-directed graphs usually animate, and the animation is usually the
-//! worst part of them: things drift while you are trying to read a label.
-//! [`ProjectMap::layout`] runs the simulation to completion in one go and then
-//! stops. The result is a still picture. `r` re-runs it, and since the seed is
-//! fixed the same project always settles the same way.
+//! It used to be. A spring-electrical simulation gathers connected files into
+//! clusters, which sounds right and reads badly: a file's position comes from
+//! wherever the forces converged, so it moves when an unrelated edge changes,
+//! and a project with a densely-called module settles into a hairball with the
+//! interesting structure buried in the middle of it.
 //!
-//! This also fits the event loop, which blocks on input and has no tick — an
-//! animation would need a timer thread and a redraw signal that do not exist.
+//! Grouping by folder gives up the clustering and gets back something worth
+//! more — a position you can predict. `src/app.rs` is under the `src/`
+//! heading, in alphabetical order, on every machine and after every edit.
 //!
 //! # Coordinates
 //!
-//! Positions are in an abstract space centred on the origin, with **y running
-//! upwards** like a graph and unlike a terminal. It is why `Up` calls
-//! `move_towards(0.0, 1.0)` and looks backwards at first glance.
-//!
-//! [`ProjectMap::place`] is what turns that continuous space into the whole
-//! character cells a box can actually occupy. It is kept here, next to the
-//! layout it depends on, rather than in `ui`: it is geometry, it is worth
-//! testing on its own, and `ui` only needs the answer.
+//! [`ProjectMap::place`] does the whole layout and writes `pos` as it goes, in
+//! **grid** units — one per box, not one per character — with **y running
+//! upwards**, which is why `Up` calls `move_towards(0.0, 1.0)`. Navigation
+//! then walks the picture exactly as it is drawn.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -60,21 +60,28 @@ pub enum Intent {
     Close,
     /// Open this file in the editor, closing the map.
     Open(PathBuf),
+    /// Read the project again and draw a fresh map of it. The layout is
+    /// deterministic, so redrawing the same files is a no-op — what this is
+    /// for is picking up files and links that changed on disk.
+    Rebuild,
 }
 
 /// The link graph plus everything about how it is currently being looked at.
 pub struct ProjectMap {
     /// Built once and never modified. All filtering is applied at read time.
     pub graph: Graph,
+    /// The project folder the map is of. Nothing above it is ever walked, so
+    /// this is the whole extent of the picture.
+    root: PathBuf,
     /// Laid-out position of each node, parallel to `graph.nodes`.
     pub pos: Vec<(f64, f64)>,
     /// Index of the node under the cursor. May point at something currently
     /// filtered out, which is why [`ProjectMap::selected_node`] checks
     /// visibility and [`ProjectMap::ensure_selection`] repairs it.
     pub selected: usize,
-    /// Which edge kinds to draw: wikilink, link, import, call. Indexed by
-    /// [`kind_index`], and bound to the `1`-`4` keys.
-    pub kinds: [bool; 4],
+    /// Which edge kinds to draw: wikilink, link, call. Indexed by
+    /// [`kind_index`], and bound to the `1`-`3` keys.
+    pub kinds: [bool; 3],
     /// Show files with no visible connections. Off by default, because a big
     /// project's unconnected files crowd out the structure you came to see.
     pub show_orphans: bool,
@@ -85,14 +92,13 @@ pub struct ProjectMap {
     pub filtering: bool,
 }
 
-/// Position of an edge kind in [`ProjectMap::kinds`], and in the `1`-`4` key
+/// Position of an edge kind in [`ProjectMap::kinds`], and in the `1`-`3` key
 /// bindings. `pub` because `ui` needs it to draw the toggle row.
 pub fn kind_index(kind: EdgeKind) -> usize {
     match kind {
         EdgeKind::Wikilink => 0,
         EdgeKind::Link => 1,
-        EdgeKind::Import => 2,
-        EdgeKind::Call => 3,
+        EdgeKind::Call => 2,
     }
 }
 
@@ -131,6 +137,49 @@ impl Placed {
     }
 }
 
+/// One folder's heading: the strip of dim text naming the folder whose files
+/// sit under it. Folders are not nodes — you cannot select one, and nothing
+/// connects to one. They are how the files are arranged, and the heading is
+/// what says so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Folder {
+    /// Written with a trailing slash, so it cannot be mistaken for a file.
+    pub label: String,
+    pub row: u16,
+    /// How many files sit under it, for the count beside the name.
+    pub files: usize,
+}
+
+/// One drawn connection between two files, in whichever directions it runs.
+/// `a` is always the lower node index, so a pair has exactly one entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Link {
+    pub a: usize,
+    pub b: usize,
+    pub a_to_b: bool,
+    pub b_to_a: bool,
+}
+
+/// Everything `ui` needs to draw one frame of the map.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Placement {
+    pub boxes: Vec<Placed>,
+    pub folders: Vec<Folder>,
+    /// How many visible files did not fit on the pane. Non-zero means the
+    /// picture is cut off and the view has to say so rather than looking
+    /// complete — moving the cursor is what reaches them.
+    pub offscreen: usize,
+}
+
+/// The folder part of a project-relative path, `""` for a file in the root.
+/// Always forward-slashed, because `Node::rel` is.
+fn folder_of(rel: &str) -> &str {
+    match rel.rfind('/') {
+        Some(i) => &rel[..i],
+        None => "",
+    }
+}
+
 /// Longest file name drawn inside a box before it is shortened.
 ///
 /// Every slot on the grid is the same size, so one very long name would
@@ -152,7 +201,8 @@ pub fn label_of(name: &str) -> String {
 }
 
 impl ProjectMap {
-    /// Build the graph, lay it out, and put the cursor somewhere sensible.
+    /// Build the graph and put the cursor somewhere sensible. Laying it out
+    /// is `place`'s job, and happens per frame against the pane it has.
     ///
     /// Everything expensive happens here, synchronously — this is what `w`
     /// costs.
@@ -161,14 +211,19 @@ impl ProjectMap {
         let mut view = Self {
             pos: vec![(0.0, 0.0); graph.nodes.len()],
             graph,
+            root: root.to_path_buf(),
             selected: 0,
-            kinds: [true; 4],
+            kinds: [true; 3],
             show_orphans: false,
             filter: String::new(),
             filtering: false,
         };
-        view.layout();
         view.select_first_visible();
+        // `pos` is written by `place`, which only runs when a frame is drawn.
+        // Seed it against a nominal pane so the arrow keys mean something if a
+        // key ever arrives before the first draw; the first frame overwrites
+        // this with the real geometry.
+        view.place(100, 30);
         view
     }
 
@@ -264,188 +319,206 @@ impl ProjectMap {
 
     // ---- layout -----------------------------------------------------------
 
-    /// Settle the graph with a force simulation: nodes push apart, edges pull
-    /// together, and everything drifts gently towards the middle.
+    /// Lay the visible files out on the pane and say where every box goes.
     ///
-    /// A standard spring-electrical model, run to a stop rather than animated:
+    /// Files are grouped by the folder they live in, and the folders run down
+    /// the pane in path order — root first, then alphabetically. That is the
+    /// whole layout: no simulation, no settling, no seed. A project map is
+    /// something you consult, and you consult it by name, so a file's position
+    /// should be predictable from the tree you already know rather than from
+    /// wherever a force converged.
     ///
-    /// - **Repulsion** — every pair of nodes pushes apart with an inverse-square
-    ///   force, so nothing overlaps. This is the O(n²) part, capped by ignoring
-    ///   pairs further apart than 800 units.
-    /// - **Springs** — each edge pulls its endpoints towards `REST` distance,
-    ///   which is what gathers connected files into clusters.
-    /// - **Centring** — a weak pull towards the origin stops disconnected
-    ///   components drifting off to infinity, since nothing else attracts them.
-    /// - **Damping and cooling** — velocity is scaled by `DAMP` each step and
-    ///   `heat` decays, so motion converges instead of oscillating.
+    /// Within a folder the order is the walk order, which is alphabetical. It
+    /// is not the crossing-minimal order, and that is deliberate: a layout you
+    /// can predict beats one with fewer line crossings that moves a file every
+    /// time an edge changes.
     ///
-    /// The constants are tuned for *reading*, not compactness: `REST` is large
-    /// because each dot needs room for a filename beside it, not just for the
-    /// dot.
-    ///
-    /// Two details that matter more than they look:
-    ///
-    /// - Nodes start on a **ring**, not at a point. From a single point,
-    ///   repulsion alone takes an enormous number of iterations to untangle.
-    /// - The jitter comes from a seeded [`Lcg`], so layout is **deterministic**.
-    ///   The same project always draws the same way, which is the difference
-    ///   between a picture you can learn and one you have to re-read.
-    ///
-    /// Iteration count falls as the graph grows: a rough layout of 500 files
-    /// beats a slow one, and the cost per iteration is already quadratic.
-    /// Snap the settled layout onto whole character cells, as boxes that do
-    /// not overlap.
-    ///
-    /// The force simulation puts connected files near each other, but in
-    /// continuous space, where boxes three rows tall would sit on top of one
-    /// another. This lays a coarse grid of same-sized slots over the picture
-    /// and moves each box to the nearest free one — which keeps the clustering
-    /// the simulation found while guaranteeing that every box is readable and
-    /// every gap between two of them is a real gap.
-    ///
-    /// `order` decides who gets their first choice; see the loop below.
-    pub fn place(&self, width: u16, height: u16, order: &[usize]) -> Vec<Placed> {
+    /// `pos` is refreshed here rather than at build time, because it *is* the
+    /// picture — the arrow keys move between boxes exactly as they are drawn,
+    /// which is why this takes `&mut self`.
+    pub fn place(&mut self, width: u16, height: u16) -> Placement {
+        let empty = Placement::default();
         let visible = self.visible_indices();
         if visible.is_empty() || width < 6 || height < Placed::HEIGHT {
-            return Vec::new();
+            return empty;
         }
 
         // One slot size for everything, so the grid is a grid. The widest name
         // on screen sets it, plus two borders and a two-column gutter for the
-        // lines to run down.
+        // lines to run down. Two columns and two rows of gutter around every
+        // box: one is not enough, because a line travelling past a box would
+        // run flush against its border and the eye reads that as the box
+        // having grown a tail.
         let widest = visible
             .iter()
             .map(|i| label_of(&self.graph.nodes[*i].name).chars().count())
             .max()
             .unwrap_or(1);
-        // Two columns and two rows of gutter around every box. One is not
-        // enough: a line travelling past a box would run flush against its
-        // border, and the eye reads that as the box having grown a tail.
         let slot_w = (widest + 6).max(8) as u16;
         let slot_h = Placed::HEIGHT + 2;
         let cols = (width / slot_w).max(1);
-        let rows = (height / slot_h).max(1);
 
-        // The raw extent of the settled layout, not `bounds` — the padding
-        // that gives the old dot picture some air is dead space here, where a
-        // wasted column is a whole box that did not fit.
-        let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
-        for &i in &visible {
-            let (x, y) = self.pos[i];
-            x0 = x0.min(x);
-            x1 = x1.max(x);
-            y0 = y0.min(y);
-            y1 = y1.max(y);
-        }
-        let (dx, dy) = ((x1 - x0).max(1e-6), (y1 - y0).max(1e-6));
+        // Walk the whole layout first, unbounded by the pane, so scrolling has
+        // something to scroll through.
+        let mut boxes: Vec<Placed> = Vec::new();
+        let mut folders: Vec<Folder> = Vec::new();
+        // Which heading each box belongs to, so a heading whose files all fall
+        // off the bottom goes with them instead of standing over nothing.
+        let mut under: Vec<usize> = Vec::new();
+        let groups = self.folder_groups(&visible);
+        let mut row: u16 = 0;
+        let mut slot_row: usize = 0;
 
-        let mut taken = vec![false; (cols as usize) * (rows as usize)];
-        let mut out = Vec::new();
-        // `order` is most-wanted first, so the selected file and its
-        // neighbours get their preferred slot and everything else fits around
-        // them. A file with nowhere left to go is simply not drawn.
-        for &i in order {
-            let (px, py) = self.pos[i];
-            let want_c = (((px - x0) / dx) * (cols - 1) as f64).round() as i64;
-            let want_r = (((y1 - py) / dy) * (rows - 1) as f64).round() as i64;
-            let Some((c, r)) = nearest_free(&taken, cols, rows, want_c, want_r) else {
-                continue;
-            };
-            taken[r as usize * cols as usize + c as usize] = true;
-            let name = label_of(&self.graph.nodes[i].name);
-            out.push(Placed {
-                node: i,
-                col: c * slot_w,
-                row: r * slot_h,
-                width: name.chars().count() as u16 + 2,
+        for (dir, members) in &groups {
+            // Always headed, even when there is only one: the top heading names
+            // the project folder, which is where the map starts and how far it
+            // goes. A picture with no heading would not say either.
+            folders.push(Folder {
+                label: if dir.is_empty() {
+                    format!("{}/", self.root_label())
+                } else {
+                    format!("{dir}/")
+                },
+                row,
+                files: members.len(),
             });
+            row += 1;
+            for (n, &i) in members.iter().enumerate() {
+                let (c, r) = ((n % cols as usize) as u16, (n / cols as usize) as u16);
+                let name = label_of(&self.graph.nodes[i].name);
+                boxes.push(Placed {
+                    node: i,
+                    col: c * slot_w,
+                    row: row + r * slot_h,
+                    width: name.chars().count() as u16 + 2,
+                });
+                under.push(folders.len() - 1);
+                // Grid coordinates, not character ones: navigation should step
+                // box to box, and a box is far wider than it is tall.
+                self.pos[i] = (c as f64, -((slot_row + r as usize) as f64));
+            }
+            let used = members.len().div_ceil(cols as usize) as u16;
+            // No extra gap: the slot already carries two rows of gutter under
+            // its bottom row, which is the space between one folder and the
+            // next heading.
+            row += used * slot_h;
+            slot_row += used as usize + 1;
         }
-        out
+
+        // Follow the cursor rather than offering a scroll key: the arrow keys
+        // already walk the map, so the view goes where the cursor goes.
+        let total = row;
+        let wanted = boxes.len();
+        let scroll = self.scroll_to(&boxes, height, total);
+        let mut kept = vec![false; folders.len()];
+        let mut n = 0;
+        boxes.retain_mut(|p| {
+            let group = under[n];
+            n += 1;
+            match p.row.checked_sub(scroll) {
+                Some(r) if r + Placed::HEIGHT <= height => {
+                    p.row = r;
+                    kept[group] = true;
+                    true
+                }
+                _ => false,
+            }
+        });
+        let mut group = 0;
+        folders.retain_mut(|g| {
+            let showing = kept[group];
+            group += 1;
+            match g.row.checked_sub(scroll) {
+                Some(r) if r < height && showing => {
+                    g.row = r;
+                    true
+                }
+                _ => false,
+            }
+        });
+        let offscreen = wanted - boxes.len();
+        Placement {
+            boxes,
+            folders,
+            offscreen,
+        }
     }
 
-    pub fn layout(&mut self) {
-        let n = self.graph.nodes.len();
-        if n == 0 {
-            return;
+    /// How far down to shift the picture so the selected box is on screen.
+    fn scroll_to(&self, boxes: &[Placed], height: u16, total: u16) -> u16 {
+        if total <= height {
+            return 0;
         }
-        // Tuned for reading rather than compactness: nodes need room for a
-        // filename beside them, not just for the dot.
-        const REPULSION: f64 = 16_000.0;
-        const SPRING: f64 = 0.013;
-        const REST: f64 = 170.0;
-        const DAMP: f64 = 0.86;
-        const CENTER: f64 = 0.0016;
+        let Some(p) = boxes.iter().find(|p| p.node == self.selected) else {
+            return 0;
+        };
+        // Keep the folder heading above the cursor's row visible where it can
+        // be: a box with no folder over it is a box you cannot place.
+        p.bottom()
+            .saturating_sub(height)
+            .min(total.saturating_sub(height))
+            .min(p.row.saturating_sub(1))
+    }
 
-        // Start on a ring rather than a point, which repulsion alone takes a
-        // very long time to untangle. Deterministic, so the same project
-        // always lays out the same way.
-        let radius = 60.0 + (n as f64) * 0.7;
-        let mut rng = Lcg::new(0x5eed_1234);
-        for (i, p) in self.pos.iter_mut().enumerate() {
-            let a = (i as f64 / n as f64) * std::f64::consts::TAU;
-            *p = (
-                a.cos() * radius + rng.jitter(),
-                a.sin() * radius + rng.jitter(),
-            );
+    /// The visible files, split by the folder they live in: root first, then
+    /// the rest in path order. Never empty when `visible` is not.
+    fn folder_groups(&self, visible: &[usize]) -> Vec<(String, Vec<usize>)> {
+        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        for &i in visible {
+            let dir = folder_of(&self.graph.nodes[i].rel).to_string();
+            match groups.iter_mut().find(|(d, _)| *d == dir) {
+                Some((_, members)) => members.push(i),
+                None => groups.push((dir, vec![i])),
+            }
         }
-        if n == 1 {
-            self.pos[0] = (0.0, 0.0);
-            return;
-        }
+        // Root files first — they are the front door of a project — then
+        // every folder by path, so `src` always sits in the same place.
+        groups.sort_by(|a, b| {
+            a.0.is_empty()
+                .cmp(&b.0.is_empty())
+                .reverse()
+                .then(a.0.cmp(&b.0))
+        });
+        groups
+    }
 
-        // Big graphs get fewer passes: the cost is quadratic in nodes, and a
-        // rough layout of 500 files beats a slow one.
-        let iterations = (20_000 / n).clamp(80, 400);
-        let mut vel = vec![(0.0f64, 0.0f64); n];
-        let mut heat = 1.0f64;
+    /// What to call the project folder itself in a heading.
+    fn root_label(&self) -> String {
+        self.root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ".".to_string())
+    }
 
-        for _ in 0..iterations {
-            for i in 0..n {
-                for j in (i + 1)..n {
-                    let (mut dx, mut dy) =
-                        (self.pos[i].0 - self.pos[j].0, self.pos[i].1 - self.pos[j].1);
-                    let mut d2 = dx * dx + dy * dy;
-                    if d2 < 1.0 {
-                        // Exactly coincident: nudge them apart deterministically.
-                        d2 = 1.0;
-                        dx = rng.jitter();
-                        dy = rng.jitter();
-                    }
-                    if d2 > 640_000.0 {
-                        continue; // far enough to ignore
-                    }
-                    let d = d2.sqrt();
-                    let f = REPULSION / d2;
-                    let (fx, fy) = (dx / d * f, dy / d * f);
-                    vel[i].0 += fx;
-                    vel[i].1 += fy;
-                    vel[j].0 -= fx;
-                    vel[j].1 -= fy;
+    /// Every drawn connection, with all the edges between a pair of files
+    /// merged into one.
+    ///
+    /// Two files that share a dozen function names are one connection, not a
+    /// dozen parallel lines. The lines were the tangle: the graph is keyed per
+    /// symbol so that the detail strip can name them, but the picture only has
+    /// to say *that* they are connected and which way it runs.
+    pub fn links(&self) -> Vec<Link> {
+        let mut out: Vec<Link> = Vec::new();
+        for e in &self.graph.edges {
+            if !self.edge_visible(e) {
+                continue;
+            }
+            let (a, b) = (e.from.min(e.to), e.from.max(e.to));
+            let forward = e.from == a;
+            match out.iter_mut().find(|l| l.a == a && l.b == b) {
+                Some(l) => {
+                    l.a_to_b |= forward;
+                    l.b_to_a |= !forward;
                 }
+                None => out.push(Link {
+                    a,
+                    b,
+                    a_to_b: forward,
+                    b_to_a: !forward,
+                }),
             }
-
-            for e in &self.graph.edges {
-                let (a, b) = (e.from, e.to);
-                let (dx, dy) = (self.pos[b].0 - self.pos[a].0, self.pos[b].1 - self.pos[a].1);
-                let d = dx.hypot(dy).max(0.001);
-                let f = (d - REST) * SPRING;
-                let (fx, fy) = (dx / d * f, dy / d * f);
-                vel[a].0 += fx;
-                vel[a].1 += fy;
-                vel[b].0 -= fx;
-                vel[b].1 -= fy;
-            }
-
-            for (i, v) in vel.iter_mut().enumerate() {
-                v.0 += -self.pos[i].0 * CENTER;
-                v.1 += -self.pos[i].1 * CENTER;
-                v.0 *= DAMP;
-                v.1 *= DAMP;
-                self.pos[i].0 += v.0 * heat;
-                self.pos[i].1 += v.1 * heat;
-            }
-            heat *= 0.995;
         }
+        out
     }
 
     // ---- moving around ----------------------------------------------------
@@ -554,13 +627,12 @@ impl ProjectMap {
             }
             Action::MapWikilinks => self.toggle_kind(0),
             Action::MapLinks => self.toggle_kind(1),
-            Action::MapImports => self.toggle_kind(2),
-            Action::MapCalls => self.toggle_kind(3),
+            Action::MapCalls => self.toggle_kind(2),
             Action::MapOrphans => {
                 self.show_orphans = !self.show_orphans;
                 self.ensure_selection();
             }
-            Action::MapRelayout => self.layout(),
+            Action::MapReload => return Intent::Rebuild,
             _ => {}
         }
         Intent::None
@@ -602,12 +674,10 @@ impl ProjectMap {
     /// One-line summary for the pane title.
     pub fn summary(&self) -> String {
         let shown = self.visible_indices().len();
-        let links = self
-            .graph
-            .edges
-            .iter()
-            .filter(|e| self.edge_visible(e))
-            .count();
+        // Connections, not edges: the picture draws one line per pair of
+        // files, so counting per-symbol edges here would promise lines that
+        // are not there.
+        let links = self.links().len();
         let hidden = self.graph.nodes.len() - shown;
         let mut out = format!("{shown}/{} files | {links} links", self.graph.nodes.len());
         if hidden > 0 {
@@ -626,70 +696,6 @@ impl ProjectMap {
     pub fn languages(&self) -> &[String] {
         &self.graph.languages
     }
-}
-
-/// A tiny linear congruential generator, so layouts are reproducible and
-/// there is no random-number dependency.
-///
-/// Deliberately not a good PRNG — it only has to break ties between coincident
-/// nodes and scatter the starting ring slightly. Determinism is the feature;
-/// statistical quality is irrelevant here.
-struct Lcg(u64);
-
-impl Lcg {
-    fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-    fn next(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1);
-        self.0
-    }
-    /// A small offset in roughly [-1, 1].
-    fn jitter(&mut self) -> f64 {
-        ((self.next() >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
-    }
-}
-
-/// The free slot closest to `(want_c, want_r)`, searched in rings outwards.
-///
-/// Ring by ring rather than by true distance: it is close enough to look right,
-/// and it stops at the first hit instead of scoring every slot on the grid.
-/// `None` when the whole grid is full.
-fn nearest_free(
-    taken: &[bool],
-    cols: u16,
-    rows: u16,
-    want_c: i64,
-    want_r: i64,
-) -> Option<(u16, u16)> {
-    let free = |c: i64, r: i64| -> bool {
-        c >= 0
-            && r >= 0
-            && c < cols as i64
-            && r < rows as i64
-            && !taken[r as usize * cols as usize + c as usize]
-    };
-    if free(want_c, want_r) {
-        return Some((want_c as u16, want_r as u16));
-    }
-    let reach = (cols.max(rows)) as i64;
-    for ring in 1..=reach {
-        for dr in -ring..=ring {
-            for dc in -ring..=ring {
-                // Only the edge of the ring; the inside was covered already.
-                if dr.abs() != ring && dc.abs() != ring {
-                    continue;
-                }
-                if free(want_c + dc, want_r + dr) {
-                    return Some(((want_c + dc) as u16, (want_r + dr) as u16));
-                }
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -747,13 +753,17 @@ mod tests {
             .collect()
     }
 
-    // ---- layout -----------------------------------------------------------
+    // ---- laying the files out ---------------------------------------------
 
-    // ---- placing boxes ----------------------------------------------------
-
-    /// Everything visible, most-wanted first, the way `ui` asks for it.
-    fn order_of(view: &ProjectMap) -> Vec<usize> {
-        view.visible_indices()
+    /// Which folder heading each placed box sits under, by relative path.
+    fn folder_of_box(place: &Placement, p: &Placed) -> String {
+        place
+            .folders
+            .iter()
+            .filter(|g| g.row < p.row)
+            .max_by_key(|g| g.row)
+            .map(|g| g.label.clone())
+            .unwrap_or_default()
     }
 
     #[test]
@@ -761,15 +771,15 @@ mod tests {
         let (_td, mut view) = fixture();
         view.show_orphans = true;
         let (w, h) = (80u16, 30u16);
-        let placed = view.place(w, h, &order_of(&view));
-        assert!(!placed.is_empty(), "something should fit in 80x30");
+        let place = view.place(w, h);
+        assert!(!place.boxes.is_empty(), "something should fit in 80x30");
 
-        for p in &placed {
+        for p in &place.boxes {
             assert!(p.right() <= w, "{p:?} runs off the right of {w}");
             assert!(p.bottom() <= h, "{p:?} runs off the bottom of {h}");
         }
-        for (i, a) in placed.iter().enumerate() {
-            for b in &placed[i + 1..] {
+        for (i, a) in place.boxes.iter().enumerate() {
+            for b in &place.boxes[i + 1..] {
                 let apart = a.right() <= b.col
                     || b.right() <= a.col
                     || a.bottom() <= b.row
@@ -781,8 +791,8 @@ mod tests {
 
     #[test]
     fn a_box_is_wide_enough_for_the_name_it_holds() {
-        let (_td, view) = fixture();
-        for p in view.place(80, 30, &order_of(&view)) {
+        let (_td, mut view) = fixture();
+        for p in view.place(80, 30).boxes {
             let name = label_of(&view.graph.nodes[p.node].name);
             assert_eq!(
                 p.width as usize,
@@ -793,22 +803,138 @@ mod tests {
     }
 
     #[test]
-    fn the_file_asked_for_first_is_the_one_that_fits() {
+    fn files_sit_under_the_heading_for_the_folder_they_live_in() {
         let (_td, mut view) = fixture();
         view.show_orphans = true;
-        // A pane with room for a single box: whoever leads the order gets it.
-        let wanted = view.visible_indices()[2];
-        let mut order = vec![wanted];
-        order.extend(view.visible_indices().into_iter().filter(|i| *i != wanted));
-        let placed = view.place(20, 5, &order);
-        assert_eq!(placed.len(), 1, "only one slot");
-        assert_eq!(placed[0].node, wanted);
+        let place = view.place(90, 40);
+        assert_eq!(place.offscreen, 0, "the fixture fits in 90x40");
+
+        for p in &place.boxes {
+            let rel = view.graph.nodes[p.node].rel.clone();
+            let want = format!("{}/", folder_of(&rel));
+            assert_eq!(
+                folder_of_box(&place, p),
+                want,
+                "{rel} is filed under the wrong heading"
+            );
+        }
+        let labels: Vec<&str> = place.folders.iter().map(|g| g.label.as_str()).collect();
+        assert_eq!(labels, ["notes/", "src/"], "folders run in path order");
+        assert_eq!(place.folders[0].files, 3, "three notes");
+    }
+
+    #[test]
+    fn a_project_with_no_folders_still_names_its_root() {
+        let td = tempfile::tempdir().unwrap();
+        write(td.path(), "design.md", "see [[architecture]]\n");
+        write(td.path(), "architecture.md", "back to [[design]]\n");
+        let mut view = ProjectMap::build(td.path(), &graph::Options::default());
+        let place = view.place(90, 40);
+        let root = td.path().file_name().unwrap().to_string_lossy().to_string();
+        assert_eq!(
+            place
+                .folders
+                .iter()
+                .map(|g| g.label.clone())
+                .collect::<Vec<_>>(),
+            [format!("{root}/")],
+            "the project folder is the one heading"
+        );
+    }
+
+    #[test]
+    fn root_files_come_before_the_folders() {
+        let (td, _) = fixture();
+        write(td.path(), "README.md", "see [[design]]\n");
+        let mut view = ProjectMap::build(td.path(), &graph::Options::default());
+        let place = view.place(90, 40);
+        let labels: Vec<&str> = place.folders.iter().map(|g| g.label.as_str()).collect();
+        assert!(
+            !labels[0].starts_with("notes/") && !labels[0].starts_with("src/"),
+            "the project's own files head the map, not a subfolder: {labels:?}"
+        );
+        assert_eq!(&labels[1..], ["notes/", "src/"]);
+    }
+
+    #[test]
+    fn nothing_on_the_map_comes_from_outside_the_project() {
+        let outer = tempfile::tempdir().unwrap();
+        write(outer.path(), "secret.md", "not part of it\n");
+        let root = outer.path().join("project");
+        write(
+            &root,
+            "notes.md",
+            "escape to [[secret]] and [../secret.md](x)\n",
+        );
+        write(&root, "inside.md", "see [[notes]]\n");
+
+        let mut view = ProjectMap::build(&root, &graph::Options::default());
+        view.show_orphans = true;
+        for n in &view.graph.nodes {
+            assert!(
+                root.join(&n.rel).starts_with(&root),
+                "{} is not in the project",
+                n.rel
+            );
+        }
+        assert_eq!(view.graph.nodes.len(), 2, "only the two files under it");
+        assert!(
+            !view.graph.nodes.iter().any(|n| n.rel.contains("secret")),
+            "a link pointing above the project folder reaches nothing"
+        );
+        assert!(
+            view.place(90, 40).folders.len() == 1,
+            "one folder: the root"
+        );
     }
 
     #[test]
     fn a_pane_too_small_for_any_box_places_nothing() {
-        let (_td, view) = fixture();
-        assert!(view.place(4, 2, &order_of(&view)).is_empty());
+        let (_td, mut view) = fixture();
+        assert!(view.place(4, 2).boxes.is_empty());
+    }
+
+    #[test]
+    fn a_layout_taller_than_the_pane_says_what_it_left_out() {
+        let (_td, mut view) = fixture();
+        view.show_orphans = true;
+        let tall = view.place(90, 40);
+        let short = view.place(90, 8);
+        assert_eq!(tall.offscreen, 0);
+        assert!(short.offscreen > 0, "five files do not fit in eight rows");
+        assert_eq!(
+            short.boxes.len() + short.offscreen,
+            tall.boxes.len(),
+            "every file is either drawn or counted"
+        );
+    }
+
+    #[test]
+    fn a_heading_never_stands_over_files_that_were_left_out() {
+        let (_td, mut view) = fixture();
+        view.show_orphans = true;
+        let place = view.place(90, 8);
+        for g in &place.folders {
+            assert!(
+                place.boxes.iter().any(|p| p.row > g.row),
+                "{} has no files under it",
+                g.label
+            );
+        }
+    }
+
+    #[test]
+    fn the_view_follows_the_cursor_past_the_bottom() {
+        let (_td, mut view) = fixture();
+        view.show_orphans = true;
+        // The last file in walk order is the furthest down the layout.
+        let last = *view.visible_indices().last().unwrap();
+        view.selected = last;
+        let place = view.place(90, 8);
+        assert!(
+            place.boxes.iter().any(|p| p.node == last),
+            "the selected file is scrolled into view"
+        );
     }
 
     #[test]
@@ -826,14 +952,17 @@ mod tests {
 
     #[test]
     fn every_node_gets_a_position_and_none_are_stacked() {
-        let (_td, view) = fixture();
+        let (_td, mut view) = fixture();
+        view.show_orphans = true;
+        view.place(90, 40);
         assert_eq!(view.pos.len(), view.graph.nodes.len());
         assert!(view.pos.iter().all(|(x, y)| x.is_finite() && y.is_finite()));
         for i in 0..view.pos.len() {
             for j in (i + 1)..view.pos.len() {
                 let d = (view.pos[i].0 - view.pos[j].0).hypot(view.pos[i].1 - view.pos[j].1);
+                // Grid units: adjacent boxes are exactly one apart.
                 assert!(
-                    d > 1.0,
+                    d >= 1.0,
                     "{} and {} landed on top of each other",
                     rel_of(&view, i),
                     rel_of(&view, j)
@@ -844,40 +973,39 @@ mod tests {
 
     #[test]
     fn the_layout_is_the_same_every_time() {
-        let (_td, a) = fixture();
-        // Laying the same graph out a second time must not move anything.
-        let mut b = ProjectMap {
-            pos: vec![(0.0, 0.0); a.graph.nodes.len()],
-            graph: a.graph.clone(),
-            selected: 0,
-            kinds: [true; 4],
-            show_orphans: false,
-            filter: String::new(),
-            filtering: false,
-        };
-        b.layout();
-        for (i, (p, q)) in a.pos.iter().zip(b.pos.iter()).enumerate() {
-            assert!(
-                (p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-9,
-                "node {i} moved between runs"
-            );
-        }
+        let (td, mut a) = fixture();
+        let mut b = ProjectMap::build(td.path(), &graph::Options::default());
+        let (pa, pb) = (a.place(90, 40), b.place(90, 40));
+        assert_eq!(pa, pb, "the same project draws the same picture");
+        assert_eq!(a.pos, b.pos);
     }
 
     #[test]
-    fn linked_files_end_up_nearer_than_unlinked_ones() {
+    fn a_second_pass_over_the_same_pane_does_not_move_anything() {
+        let (_td, mut view) = fixture();
+        let first = view.place(90, 40);
+        let again = view.place(90, 40);
+        assert_eq!(
+            first, again,
+            "placing is a function of the pane, not a step"
+        );
+    }
+
+    #[test]
+    fn files_in_one_folder_end_up_nearer_than_files_in_another() {
         let (_td, mut view) = fixture();
         view.show_orphans = true;
+        view.place(90, 40);
         let find = |rel: &str| view.graph.nodes.iter().position(|n| n.rel == rel).unwrap();
         let dist = |a: usize, b: usize| {
             (view.pos[a].0 - view.pos[b].0).hypot(view.pos[a].1 - view.pos[b].1)
         };
         let design = find("notes/design.md");
         let arch = find("notes/architecture.md");
-        let alone = find("notes/alone.md");
+        let utils = find("src/utils.py");
         assert!(
-            dist(design, arch) < dist(design, alone),
-            "the spring between linked notes should pull them together"
+            dist(design, arch) < dist(design, utils),
+            "two notes in one folder are neighbours; a file in src is not"
         );
     }
 
@@ -888,8 +1016,7 @@ mod tests {
         let mut view = ProjectMap::build(td.path(), &graph::Options::default());
         assert_eq!(view.pos.len(), 1);
         view.show_orphans = true;
-        // One node has no extent to scale against; it still gets a box.
-        let placed = view.place(60, 20, &view.visible_indices());
+        let placed = view.place(60, 20).boxes;
         assert_eq!(placed.len(), 1);
         assert!(placed[0].right() <= 60 && placed[0].bottom() <= 20);
     }
@@ -897,10 +1024,10 @@ mod tests {
     #[test]
     fn an_empty_project_does_not_panic() {
         let td = tempfile::tempdir().unwrap();
-        let view = ProjectMap::build(td.path(), &graph::Options::default());
+        let mut view = ProjectMap::build(td.path(), &graph::Options::default());
         assert!(view.graph.nodes.is_empty());
         assert!(view.visible_indices().is_empty());
-        assert!(view.place(60, 20, &[]).is_empty());
+        assert_eq!(view.place(60, 20), Placement::default());
         let _ = view.summary();
     }
 
@@ -955,7 +1082,7 @@ mod tests {
             .position(|n| n.rel == "src/main.py")
             .unwrap();
         let (out, incoming) = view.connections(main);
-        assert!(!out.is_empty(), "main.py imports and calls utils");
+        assert!(!out.is_empty(), "main.py calls utils.load");
         assert!(incoming.is_empty(), "nothing points at main.py");
         assert!(out.iter().all(|e| e.from == main));
     }
@@ -1063,9 +1190,9 @@ mod tests {
         let (_td, mut view) = fixture();
         assert!(view.kinds.iter().all(|k| *k));
         view.on_key(ch('3'), act(ch('3')));
-        assert!(!view.kinds[kind_index(EdgeKind::Import)]);
+        assert!(!view.kinds[kind_index(EdgeKind::Call)]);
         view.on_key(ch('3'), act(ch('3')));
-        assert!(view.kinds[kind_index(EdgeKind::Import)]);
+        assert!(view.kinds[kind_index(EdgeKind::Call)]);
     }
 
     #[test]

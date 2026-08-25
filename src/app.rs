@@ -34,10 +34,18 @@
 //! The bar, the prompts and the editor are exempt, because there a letter is a
 //! letter being typed.
 //!
-//! A third flag, `read_mode`, decides whether a focused text file shows
-//! rendered output or raw source. It is not part of `Mode` because it is a
-//! property of *how you are looking at this file*, not of what has the
-//! keyboard.
+//! # There is no reading mode
+//!
+//! There used to be a third flag deciding whether a focused text file showed
+//! rendered output or raw source. It is gone. Markdown keeps its formatting
+//! while you edit it — every block but the one under the cursor, see
+//! `ui::live_rows` — so a separate rendered view was a step to press through
+//! rather than a thing you wanted. Every text file now opens the same way,
+//! straight into the editor, and `Focus` alone says who has the keyboard.
+//!
+//! The rendered view survives in one place: the preview pane while the *tree*
+//! still has the keyboard, where there is no cursor and the file is a picture
+//! of itself.
 //!
 //! # The mode take-and-replace pattern
 //!
@@ -84,8 +92,8 @@ use crate::projectmap::{self, ProjectMap};
 use crate::search::{self, Hit, HitKind};
 use crate::tree::{Row, Tree};
 
-/// Which pane has the keyboard. Combined with [`Mode`] and `read_mode`, this
-/// determines how any given key is interpreted.
+/// Which pane has the keyboard. Combined with [`Mode`], this determines how
+/// any given key is interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Tree,
@@ -242,14 +250,19 @@ pub const KEYBIND_BUTTONS: &[&str] = &["Reset keybinds"];
 pub enum TextKind {
     /// Rendered markdown.
     Markdown,
-    /// Wrapped prose — notes, licences, logs. Read first, edited on demand.
+    /// Wrapped prose — notes, licences, logs.
     Prose,
     /// Source. Straight into the editor, with line numbers.
     Code,
 }
 
 impl TextKind {
-    /// Prose and markdown open to be read; code opens to be typed into.
+    /// Whether an *unfocused* preview of this shows it rendered rather than as
+    /// source. Prose and markdown read better formatted when there is no
+    /// cursor in them; code is already at its most readable as itself.
+    ///
+    /// Says nothing about editing. Every text file opens into the editor the
+    /// same way — see [`App::focus_editor`].
     pub fn reads_first(self) -> bool {
         self != TextKind::Code
     }
@@ -373,7 +386,6 @@ pub struct App {
     /// `ui` during a draw, read here to clamp scrolling.
     pub preview_len: usize,
     /// Markdown opens rendered; `e` drops into raw editing.
-    pub read_mode: bool,
     /// Open files, keyed by path. Outlives the selection so unsaved edits
     /// survive arrowing away and back — see the module docs.
     pub buffers: HashMap<PathBuf, Editor>,
@@ -455,7 +467,6 @@ impl App {
             preview: Preview::Empty,
             preview_scroll: 0,
             preview_len: 0,
-            read_mode: true,
             buffers: HashMap::new(),
             config,
             keymap,
@@ -537,6 +548,20 @@ impl App {
 
     pub fn is_dirty(&self, path: &Path) -> bool {
         self.buffers.get(path).is_some_and(|e| e.dirty)
+    }
+
+    /// Whether a tree row should wear the unsaved marker: the file itself is
+    /// dirty, or — for a directory — something inside it is.
+    ///
+    /// Collapsing a folder used to hide the fact that there was unsaved work
+    /// under it. Marking every ancestor means the star is always visible from
+    /// the root, whatever is folded away.
+    pub fn dirty_here_or_below(&self, path: &Path) -> bool {
+        self.buffers
+            .iter()
+            // `starts_with` is component-wise, so it is true for the path
+            // itself and never for a sibling that merely shares a prefix.
+            .any(|(p, e)| e.dirty && p.starts_with(path))
     }
 
     /// Glyphs for an open folder, a closed folder, and a file.
@@ -847,6 +872,12 @@ impl App {
                 self.open_path(&path);
                 return;
             }
+            projectmap::Intent::Rebuild => {
+                // Same path as opening it, so a rebuilt map is indistinguishable
+                // from a freshly opened one.
+                self.open_map();
+                return;
+            }
         }
         // The counts move as filters change, so keep them in front of you.
         if let Some(view) = self.project_map.as_ref() {
@@ -863,7 +894,7 @@ impl App {
             return;
         };
         match action {
-            Action::Save => self.save_active(),
+            Action::Save => self.save_from_tree(),
             Action::Quit | Action::TreeQuit => self.request_quit(),
             Action::Bar | Action::TreeBar => self.open_bar(false),
             Action::CommandBar => self.open_bar(true),
@@ -872,6 +903,8 @@ impl App {
             Action::TreeDown => self.move_selection(1),
             Action::TreeFirst => self.select_index(0),
             Action::TreeLast => self.select_index(usize::MAX),
+            Action::TreeJumpUp => self.move_selection(-(JUMP_LINES as isize)),
+            Action::TreeJumpDown => self.move_selection(JUMP_LINES as isize),
             Action::TreePageUp => self.move_selection(-page),
             Action::TreePageDown => self.move_selection(page),
             Action::TreeOpen => self.toggle_or_open(),
@@ -899,8 +932,8 @@ impl App {
     /// also why `Ctrl+P` exists as a second binding for the command bar: a
     /// bare `:` in the editor is a colon being typed.
     ///
-    /// Below that the function forks on `read_mode`: reading scrolls, editing
-    /// types.
+    /// Below that the function forks on whether there is a buffer behind the
+    /// preview: a text file types, a picture scrolls.
     fn on_editor_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let tab_width = self.config.tab_width;
@@ -926,8 +959,10 @@ impl App {
             _ => {}
         }
 
-        if self.read_mode {
-            return self.on_read_key(key, page);
+        // A picture, a directory listing, a binary: nothing to type into, so
+        // the arrows move the view instead of a cursor.
+        if !matches!(self.preview, Preview::Buffer { .. }) {
+            return self.on_view_key(key, page);
         }
 
         // Read what the key meant before borrowing the buffer, so nothing has
@@ -956,6 +991,10 @@ impl App {
             Some(Action::EditorDeleteLine) => return ed.delete_line(),
             Some(Action::EditorWordLeft) => return ed.move_word_left(),
             Some(Action::EditorWordRight) => return ed.move_word_right(),
+            Some(Action::EditorJumpUp) => return ed.page_up(JUMP_LINES),
+            Some(Action::EditorJumpDown) => return ed.page_down(JUMP_LINES),
+            Some(Action::EditorLineStart) => return ed.move_home(),
+            Some(Action::EditorLineEnd) => return ed.move_end(),
             Some(Action::EditorDocStart) => return ed.move_doc_start(),
             Some(Action::EditorDocEnd) => return ed.move_doc_end(),
             _ => {}
@@ -965,8 +1004,6 @@ impl App {
             KeyCode::Right => ed.move_right(),
             KeyCode::Up => ed.move_up(),
             KeyCode::Down => ed.move_down(),
-            KeyCode::Home => ed.move_home(),
-            KeyCode::End => ed.move_end(),
             KeyCode::PageUp => ed.page_up(page),
             KeyCode::PageDown => ed.page_down(page),
             KeyCode::Enter => ed.insert_newline(),
@@ -978,26 +1015,24 @@ impl App {
         }
     }
 
-    /// Reading rendered markdown, or looking at a picture: arrows scroll.
-    fn on_read_key(&mut self, key: KeyEvent, page: usize) {
+    /// Looking at something with no text behind it — a picture, a directory,
+    /// a binary. Arrows scroll the view, because there is no cursor to move.
+    ///
+    /// The one place `preview_scroll` is driven by the keyboard. A text file
+    /// never lands here: it has a buffer, and the buffer has a cursor.
+    fn on_view_key(&mut self, key: KeyEvent, page: usize) {
         let max = self.preview_len.saturating_sub(1);
-        let Some(action) = self.keymap.find(KeyContext::Read, &key) else {
+        let Some(action) = self.keymap.find(KeyContext::View, &key) else {
             return;
         };
         match action {
-            Action::ReadUp => self.preview_scroll = self.preview_scroll.saturating_sub(1),
-            Action::ReadDown => self.preview_scroll = (self.preview_scroll + 1).min(max),
-            Action::ReadTop => self.preview_scroll = 0,
-            Action::ReadBottom => self.preview_scroll = max,
-            Action::ReadPageUp => self.preview_scroll = self.preview_scroll.saturating_sub(page),
-            Action::ReadPageDown => self.preview_scroll = (self.preview_scroll + page).min(max),
-            Action::ReadBar => self.open_bar(false),
-            Action::ReadEdit => {
-                if matches!(self.preview, Preview::Buffer { .. }) {
-                    self.read_mode = false;
-                    self.status = "editing — ^S save, Esc back".into();
-                }
-            }
+            Action::ViewUp => self.preview_scroll = self.preview_scroll.saturating_sub(1),
+            Action::ViewDown => self.preview_scroll = (self.preview_scroll + 1).min(max),
+            Action::ViewTop => self.preview_scroll = 0,
+            Action::ViewBottom => self.preview_scroll = max,
+            Action::ViewPageUp => self.preview_scroll = self.preview_scroll.saturating_sub(page),
+            Action::ViewPageDown => self.preview_scroll = (self.preview_scroll + page).min(max),
+            Action::ViewBar => self.open_bar(false),
             _ => {}
         }
     }
@@ -1166,24 +1201,17 @@ impl App {
         }
     }
 
-    /// Put the cursor on a hit, choosing rendered or raw view to suit it.
+    /// Put the cursor on a hit.
     ///
-    /// A content hit forces raw source: the whole point is to see the matching
-    /// line with the cursor on it, and rendered markdown has no line the hit
-    /// corresponds to. A name hit leaves the file in whatever view it would
-    /// normally open in.
+    /// A content hit lands on the matching line; a name hit opens the file at
+    /// the top. Either way the file opens the same way every file does, so
+    /// there is no view to choose between.
     fn place_cursor_on(&mut self, hit: &Hit) {
         if hit.kind == HitKind::Content {
-            // A match inside a note is easier to see as raw source with the
-            // cursor sitting on it than as rendered prose.
-            self.read_mode = false;
             let (line, col) = (hit.line, hit.col);
             if let Some(ed) = self.active_buffer_mut() {
                 ed.goto(line, col);
             }
-        } else {
-            self.read_mode = matches!(self.preview, Preview::Buffer { kind, .. } if kind.reads_first())
-                || matches!(self.preview, Preview::Media { .. });
         }
     }
 
@@ -1351,7 +1379,6 @@ impl App {
             return Err(anyhow!("no file open to jump inside"));
         }
 
-        self.read_mode = false;
         self.focus = Focus::Editor;
         let Some(ed) = self.active_buffer_mut() else {
             return Err(anyhow!("no file open to jump inside"));
@@ -1381,7 +1408,9 @@ impl App {
             self.move_selection(step);
             return;
         }
-        if self.read_mode || !matches!(self.preview, Preview::Buffer { .. }) {
+        // A file being edited has a cursor and a view tied to it; anything
+        // else is just a picture of something, and the view itself moves.
+        if !matches!(self.preview, Preview::Buffer { .. }) || self.focus != Focus::Editor {
             let max = self.preview_len.saturating_sub(1);
             self.preview_scroll = if down {
                 (self.preview_scroll + 1).min(max)
@@ -1992,24 +2021,21 @@ impl App {
         }
     }
 
-    /// Hand the keyboard to the preview pane, choosing rendered or raw view by
-    /// file kind: prose and markdown open to be read, code opens to be typed
-    /// into. Does nothing for a directory, and explains itself for a binary.
+    /// Hand the keyboard to the preview pane.
+    ///
+    /// Every text file opens the same way: into the editor, with the cursor in
+    /// it. There is no reading mode to pass through — markdown keeps its
+    /// formatting while you edit it (see `ui::live_rows`), so the rendered
+    /// view was a step that no longer bought anything.
+    ///
+    /// Does nothing for a directory, and explains itself for a binary.
     fn focus_editor(&mut self) {
         match &self.preview {
-            Preview::Buffer { kind, .. } => {
-                // Markdown opens rendered; code goes straight into the editor,
-                // since there is nothing else to show for it.
-                self.read_mode = kind.reads_first();
+            Preview::Buffer { .. } => {
                 self.focus = Focus::Editor;
-                self.status = if self.read_mode {
-                    "reading — e to edit, Esc back".into()
-                } else {
-                    "editing — ^S save, Esc back".into()
-                };
+                self.status = "editing — ^S save, Esc back".into();
             }
             Preview::Media { .. } => {
-                self.read_mode = true;
                 self.focus = Focus::Editor;
                 self.status = "viewing — Esc back".into();
             }
@@ -2112,6 +2138,49 @@ impl App {
             Ok(()) => self.status = format!("saved {name}"),
             Err(e) => self.status = format!("save failed: {e}"),
         }
+    }
+
+    /// `Ctrl+S` from the tree: save what the cursor is on.
+    ///
+    /// On a file that is the file. On a folder it is everything unsaved
+    /// underneath it, however deep — so the root row saves the whole project
+    /// and a subfolder saves just its own. That makes the one key mean "save
+    /// this", whatever "this" happens to be, which is the same thing the tree
+    /// cursor means everywhere else in the program.
+    fn save_from_tree(&mut self) {
+        let Some(row) = self.selected_row().cloned() else {
+            return self.save_active();
+        };
+        if !row.is_dir {
+            return self.save_active();
+        }
+        let under: Vec<PathBuf> = self
+            .buffers
+            .values()
+            .filter(|e| e.dirty && e.path.starts_with(&row.path))
+            .map(|e| e.path.clone())
+            .collect();
+        if under.is_empty() {
+            self.status = format!("nothing to save in {}", row.name);
+            return;
+        }
+        // Sorted so the report is stable, and so the first failure named is
+        // the same one on every run.
+        let mut under = under;
+        under.sort();
+        let (mut saved, mut failed) = (0usize, Vec::new());
+        for path in &under {
+            match self.buffers.get_mut(path).map(Editor::save) {
+                Some(Ok(())) => saved += 1,
+                Some(Err(e)) => failed.push(format!("{}: {e}", display_name(path))),
+                None => {}
+            }
+        }
+        self.status = match failed.first() {
+            Some(first) => format!("saved {saved}, {} failed — {first}", failed.len()),
+            None if saved == 1 => format!("saved {}", display_name(&under[0])),
+            None => format!("saved {saved} files in {}", row.name),
+        };
     }
 
     /// Quit, or ask first if anything is unsaved. The prompt names every dirty
@@ -2377,6 +2446,13 @@ pub fn display_name(path: &Path) -> String {
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
+
+/// How far `Ctrl+Up` and `Ctrl+Down` jump, in the tree and in the editor.
+///
+/// A fixed count rather than a fraction of the pane: the point of it is a step
+/// you can feel the size of and repeat, which a number tied to the window
+/// height would not be. `PageUp`/`PageDown` are the ones that move by a screen.
+const JUMP_LINES: usize = 5;
 
 /// How many rows an overlay's page keys move. The overlays do not know how
 /// tall they are drawn — `ui` decides that — and a fixed step reads the same
@@ -2791,9 +2867,13 @@ mod tests {
     }
 
     fn ctrl(c: char) -> KeyEvent {
+        ctrl_key(KeyCode::Char(c))
+    }
+
+    fn ctrl_key(code: KeyCode) -> KeyEvent {
         KeyEvent {
             modifiers: KeyModifiers::CONTROL,
-            ..k(KeyCode::Char(c))
+            ..k(code)
         }
     }
 
@@ -2972,7 +3052,7 @@ mod tests {
         let (_td, mut app) = fixture();
         select(&mut app, "design.md");
         app.on_key(k(KeyCode::Enter));
-        app.on_key(ch('e'));
+        app.on_key(k(KeyCode::Enter));
         type_str(&mut app, "x");
         let out = joined(&mut app);
         for bad in ['●', '☐', '☑', '🖼', '📁', '📄'] {
@@ -3008,7 +3088,7 @@ mod tests {
         let (td, mut app) = fixture();
         let long = "a long line of prose that will certainly need to wrap because it keeps going";
         fs::write(td.path().join("notes.txt"), format!("{long}\n")).unwrap();
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
         select(&mut app, "notes.txt");
 
         let out = joined(&mut app);
@@ -3025,16 +3105,13 @@ mod tests {
     }
 
     #[test]
-    fn e_switches_plain_text_into_the_editor_and_back_out() {
+    fn plain_text_opens_straight_into_the_editor() {
         let (td, mut app) = fixture();
         fs::write(td.path().join("notes.txt"), "first line\n").unwrap();
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
         select(&mut app, "notes.txt");
         app.on_key(k(KeyCode::Enter));
-        assert!(app.read_mode);
-
-        app.on_key(ch('e'));
-        assert!(!app.read_mode);
+        assert_eq!(app.focus, Focus::Editor, "no reading step in the way");
         type_str(&mut app, "X");
         assert!(app.active_buffer().unwrap().lines()[0].starts_with('X'));
         app.on_key(ctrl('s'));
@@ -3045,11 +3122,142 @@ mod tests {
     }
 
     #[test]
+    fn right_steps_into_a_file_and_esc_steps_back_out() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "design.md");
+        app.on_key(k(KeyCode::Right));
+        assert_eq!(app.focus, Focus::Editor, "right steps into the file");
+        type_str(&mut app, "x");
+        assert!(app.active_buffer().unwrap().dirty, "and lands in the text");
+
+        app.on_key(k(KeyCode::Esc));
+        assert_eq!(app.focus, Focus::Tree);
+    }
+
+    #[test]
+    fn a_bare_left_moves_the_cursor_instead_of_leaving() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "design.md");
+        app.on_key(k(KeyCode::Right));
+        app.on_key(k(KeyCode::Right));
+        app.on_key(k(KeyCode::Left));
+        assert_eq!(
+            app.focus,
+            Focus::Editor,
+            "an unshifted arrow is cursor movement — it has to be"
+        );
+        assert_eq!(app.active_buffer().unwrap().cursor_col, 0);
+    }
+
+    #[test]
+    fn the_keybinds_window_lists_every_action_without_columns_colliding() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch(','));
+        app.on_key(k(KeyCode::Enter));
+        // Tall enough for the lot: this is about the columns, not scrolling.
+        let out = screen(&mut app, 100, 120).join("\n");
+        for action in Action::all() {
+            let spec = app.keymap.spec(action);
+            assert!(
+                out.contains(&format!("{}  ", action.name())),
+                "{} is missing from the window:\n{out}",
+                action.name()
+            );
+            assert!(
+                spec.is_empty() || out.contains(&format!("{spec}  ")),
+                "`{spec}` runs into the description beside it:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_and_an_arrow_skips_five_lines_in_the_editor() {
+        let (td, mut app) = fixture();
+        let body: String = (0..20).map(|i| format!("line {i}\n")).collect();
+        fs::write(td.path().join("notes/twenty.md"), body).unwrap();
+        command(&mut app, "reload");
+        select(&mut app, "twenty.md");
+        app.on_key(k(KeyCode::Enter));
+
+        app.on_key(ctrl_key(KeyCode::Down));
+        assert_eq!(app.active_buffer().unwrap().cursor_line, 5);
+        app.on_key(ctrl_key(KeyCode::Down));
+        assert_eq!(app.active_buffer().unwrap().cursor_line, 10);
+        app.on_key(ctrl_key(KeyCode::Up));
+        assert_eq!(app.active_buffer().unwrap().cursor_line, 5);
+        // Both ends clamp rather than running off the buffer.
+        for _ in 0..10 {
+            app.on_key(ctrl_key(KeyCode::Up));
+        }
+        assert_eq!(app.active_buffer().unwrap().cursor_line, 0);
+        for _ in 0..10 {
+            app.on_key(ctrl_key(KeyCode::Down));
+        }
+        assert_eq!(
+            app.active_buffer().unwrap().cursor_line,
+            19,
+            "the last line"
+        );
+    }
+
+    #[test]
+    fn ctrl_and_an_arrow_skips_five_entries_in_the_tree() {
+        let (td, mut app) = fixture();
+        for i in 0..12 {
+            fs::write(td.path().join(format!("f{i:02}.txt")), "x\n").unwrap();
+        }
+        command(&mut app, "reload");
+        app.selected = 0;
+
+        app.on_key(ctrl_key(KeyCode::Down));
+        assert_eq!(app.selected, 5);
+        app.on_key(ctrl_key(KeyCode::Down));
+        assert_eq!(app.selected, 10);
+        app.on_key(ctrl_key(KeyCode::Up));
+        assert_eq!(app.selected, 5);
+        for _ in 0..5 {
+            app.on_key(ctrl_key(KeyCode::Up));
+        }
+        assert_eq!(app.selected, 0, "it stops at the top");
+        for _ in 0..20 {
+            app.on_key(ctrl_key(KeyCode::Down));
+        }
+        assert_eq!(app.selected, app.rows.len() - 1, "and at the bottom");
+    }
+
+    #[test]
+    fn shift_and_an_arrow_jumps_to_an_edge_of_the_text() {
+        let (td, mut app) = fixture();
+        fs::write(
+            td.path().join("notes/edges.md"),
+            "first line here\nsecond\nthird\nlast line\n",
+        )
+        .unwrap();
+        command(&mut app, "reload");
+        select(&mut app, "edges.md");
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(k(KeyCode::Down));
+
+        app.on_key(shift(KeyCode::Right));
+        let ed = app.active_buffer().unwrap();
+        assert_eq!((ed.cursor_line, ed.cursor_col), (1, 6), "end of the line");
+        app.on_key(shift(KeyCode::Left));
+        let ed = app.active_buffer().unwrap();
+        assert_eq!((ed.cursor_line, ed.cursor_col), (1, 0), "start of it");
+
+        app.on_key(shift(KeyCode::Down));
+        assert_eq!(app.active_buffer().unwrap().cursor_line, 3, "last line");
+        app.on_key(shift(KeyCode::Up));
+        assert_eq!(app.active_buffer().unwrap().cursor_line, 0, "first line");
+        assert_eq!(app.focus, Focus::Editor, "none of that leaves the file");
+    }
+
+    #[test]
     fn a_code_file_still_opens_straight_into_the_editor() {
         let (_td, mut app) = fixture();
         select(&mut app, "main.py");
         app.on_key(k(KeyCode::Enter));
-        assert!(!app.read_mode, "code is for typing into");
+        assert_eq!(app.focus, Focus::Editor, "code is for typing into");
         assert!(
             joined(&mut app).contains(" 1 "),
             "and keeps its line numbers"
@@ -3060,12 +3268,12 @@ mod tests {
     fn prose_extensions_are_configurable() {
         let (td, mut app) = fixture();
         fs::write(td.path().join("a.csv"), "x,y\n").unwrap();
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
         select(&mut app, "a.csv");
         assert!(joined(&mut app).contains("VIEW"), "csv is code by default");
 
         command(&mut app, "set prose_extensions md txt csv");
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
         select(&mut app, "a.csv");
         assert!(joined(&mut app).contains("READ"), "now it reads as prose");
     }
@@ -3114,7 +3322,7 @@ mod tests {
             *p = image::Rgba([(x * 8) as u8, (y * 8) as u8, 200, 255]);
         }
         img.save(td.path().join("real.png")).unwrap();
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
         select(&mut app, "real.png");
         let out = joined(&mut app);
         assert!(out.contains('▀'), "expected half-blocks:\n{out}");
@@ -3344,9 +3552,11 @@ mod tests {
     }
 
     #[test]
-    fn ijkl_scroll_a_note_being_read() {
+    fn ijkl_scroll_something_with_no_text_in_it() {
         let (_td, mut app) = fixture();
-        select(&mut app, "README.md");
+        // A picture has no buffer and no cursor, so the letters that stand in
+        // for arrows still move the view. In a text file they are letters.
+        select(&mut app, "logo.png");
         app.on_key(k(KeyCode::Enter));
         joined(&mut app);
         app.on_key(ch('k'));
@@ -3368,16 +3578,18 @@ mod tests {
     }
 
     #[test]
-    fn e_is_the_only_key_that_switches_to_raw_editing() {
+    fn a_letter_reaches_a_note_the_moment_it_is_opened() {
         let (_td, mut app) = fixture();
         select(&mut app, "design.md");
         app.on_key(k(KeyCode::Enter));
-        assert!(app.read_mode);
-        // `i` used to mean "edit" here; it is an arrow now.
-        app.on_key(ch('i'));
-        assert!(app.read_mode, "i scrolls, it does not open the editor");
-        app.on_key(ch('e'));
-        assert!(!app.read_mode);
+        // `i` and `e` used to mean things here. With no reading mode between
+        // the tree and the text, a letter is a letter.
+        type_str(&mut app, "ie");
+        assert!(
+            app.active_buffer().unwrap().lines()[0].starts_with("ie"),
+            "{:?}",
+            app.active_buffer().unwrap().lines()[0]
+        );
     }
 
     #[test]
@@ -3402,12 +3614,19 @@ mod tests {
     }
 
     #[test]
-    fn f5_still_re_reads_the_project() {
+    fn f5_and_the_reload_command_both_re_read_the_project() {
         let (td, mut app) = fixture();
         fs::write(td.path().join("appeared.md"), "# new\n").unwrap();
         assert!(!app.rows.iter().any(|r| r.name == "appeared.md"));
         app.on_key(k(KeyCode::F(5)));
-        assert!(app.rows.iter().any(|r| r.name == "appeared.md"));
+        assert!(app.rows.iter().any(|r| r.name == "appeared.md"), "the key");
+
+        fs::write(td.path().join("later.md"), "# later\n").unwrap();
+        command(&mut app, "reload");
+        assert!(
+            app.rows.iter().any(|r| r.name == "later.md"),
+            "and the command"
+        );
     }
 
     #[test]
@@ -3437,10 +3656,124 @@ mod tests {
         select(&mut app, "main.py");
         app.on_key(k(KeyCode::Enter));
         assert_eq!(app.focus, Focus::Editor);
-        assert!(!app.read_mode, "code opens straight into editing");
         type_str(&mut app, "# hi");
         assert!(app.active_buffer().unwrap().lines()[0].starts_with("# hi"));
         assert!(app.active_buffer().unwrap().dirty);
+    }
+
+    #[test]
+    fn ctrl_s_on_a_folder_saves_everything_unsaved_under_it() {
+        let (td, mut app) = fixture();
+        // Two dirty files in notes/, one in src/, so the folder has to save
+        // its own and leave the neighbour alone.
+        fs::write(td.path().join("notes/architecture.md"), "# Arch\n").unwrap();
+        command(&mut app, "reload");
+        for name in ["design.md", "architecture.md", "main.py"] {
+            select(&mut app, name);
+            app.on_key(k(KeyCode::Enter));
+            type_str(&mut app, "X");
+            app.on_key(k(KeyCode::Esc));
+        }
+        assert_eq!(app.dirty_buffers().len(), 3);
+
+        select(&mut app, "notes");
+        app.on_key(ctrl('s'));
+        assert!(app.status.contains("saved 2"), "{}", app.status);
+        assert!(
+            fs::read_to_string(td.path().join("notes/design.md"))
+                .unwrap()
+                .starts_with('X')
+        );
+        let left: Vec<String> = app
+            .dirty_buffers()
+            .iter()
+            .map(|p| display_name(p))
+            .collect();
+        assert_eq!(left, ["main.py"], "the other folder is untouched");
+    }
+
+    #[test]
+    fn ctrl_s_on_the_project_folder_saves_the_whole_project() {
+        let (td, mut app) = fixture();
+        fs::write(td.path().join("notes/architecture.md"), "# Arch\n").unwrap();
+        command(&mut app, "reload");
+        for name in ["design.md", "main.py", "README.md"] {
+            select(&mut app, name);
+            app.on_key(k(KeyCode::Enter));
+            type_str(&mut app, "X");
+            app.on_key(k(KeyCode::Esc));
+        }
+        assert_eq!(app.dirty_buffers().len(), 3);
+
+        app.selected = 0;
+        assert!(app.selected_row().unwrap().is_dir, "the root row");
+        app.on_key(ctrl('s'));
+        assert!(app.status.contains("saved 3"), "{}", app.status);
+        assert!(app.dirty_buffers().is_empty(), "nothing left unsaved");
+        assert!(
+            fs::read_to_string(td.path().join("src/main.py"))
+                .unwrap()
+                .starts_with('X')
+        );
+    }
+
+    #[test]
+    fn ctrl_s_on_a_folder_with_nothing_pending_says_so() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "notes");
+        app.on_key(ctrl('s'));
+        assert!(app.status.contains("nothing to save"), "{}", app.status);
+    }
+
+    #[test]
+    fn ctrl_s_on_a_file_still_saves_just_that_file() {
+        let (td, mut app) = fixture();
+        select(&mut app, "design.md");
+        app.on_key(k(KeyCode::Enter));
+        type_str(&mut app, "X");
+        app.on_key(k(KeyCode::Esc));
+        assert!(app.selected_row().is_some_and(|r| !r.is_dir));
+        app.on_key(ctrl('s'));
+        assert!(app.status.contains("saved design.md"), "{}", app.status);
+        assert!(
+            fs::read_to_string(td.path().join("notes/design.md"))
+                .unwrap()
+                .starts_with('X')
+        );
+    }
+
+    #[test]
+    fn an_unsaved_file_stars_every_folder_above_it() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "main.py");
+        app.on_key(k(KeyCode::Enter));
+        type_str(&mut app, "x");
+
+        let src = app.rows.iter().find(|r| r.name == "src").unwrap();
+        assert!(
+            app.dirty_here_or_below(&src.path),
+            "the folder holding the edit is marked"
+        );
+        assert!(
+            app.dirty_here_or_below(app.tree.root_path()),
+            "and so is the root, all the way up"
+        );
+
+        let notes = app.rows.iter().find(|r| r.name == "notes").unwrap();
+        assert!(
+            !app.dirty_here_or_below(&notes.path),
+            "a sibling folder stays clean"
+        );
+
+        // Folding `src` away must not fold the warning away with it.
+        let src = src.path.clone();
+        app.tree.collapse(&src);
+        app.rebuild_rows();
+        let row = app.rows.iter().position(|r| r.path == src).unwrap();
+        assert!(
+            screen(&mut app, 90, 24)[row + 1].contains("src *"),
+            "the star survives collapsing the folder"
+        );
     }
 
     #[test]
@@ -3491,16 +3824,103 @@ mod tests {
     }
 
     #[test]
-    fn markdown_opens_rendered_and_e_switches_to_raw_source() {
+    fn markdown_previews_rendered_and_opens_into_the_editor() {
         let (_td, mut app) = fixture();
         select(&mut app, "design.md");
-        app.on_key(k(KeyCode::Enter));
-        assert!(app.read_mode);
-        app.on_key(ch('e'));
-        assert!(!app.read_mode);
         let out = joined(&mut app);
+        assert!(
+            !out.contains("# Design Notes"),
+            "unfocused, it is a picture of the file:\n{out}"
+        );
+        app.on_key(k(KeyCode::Enter));
+        assert_eq!(app.focus, Focus::Editor);
+        let out = joined(&mut app);
+        // The cursor starts on the first line, so that block — and only that
+        // block — shows the hashes it was typed with.
         assert!(out.contains("# Design Notes"), "raw source shows:\n{out}");
         assert!(out.contains("EDIT"));
+    }
+
+    #[test]
+    fn editing_markdown_formats_every_block_but_the_cursor_s() {
+        let (td, mut app) = fixture();
+        fs::write(
+            td.path().join("notes/live.md"),
+            "# Title\n\nsome **bold** words\n\n- one\n- two\n",
+        )
+        .unwrap();
+        command(&mut app, "reload");
+        select(&mut app, "live.md");
+        app.on_key(k(KeyCode::Enter));
+
+        // Cursor on line 0: the heading is raw, everything else is formatted.
+        let out = joined(&mut app);
+        assert!(out.contains("# Title"), "the cursor's block is raw:\n{out}");
+        assert!(
+            !out.contains("**bold**"),
+            "the paragraph is formatted:\n{out}"
+        );
+        assert!(out.contains("• one"), "and so is the list:\n{out}");
+
+        // Down to the paragraph: it unformats, the heading formats again.
+        app.on_key(k(KeyCode::Down));
+        app.on_key(k(KeyCode::Down));
+        let out = joined(&mut app);
+        assert!(out.contains("**bold**"), "now the paragraph is raw:\n{out}");
+        assert!(!out.contains("# Title"), "and the heading is not:\n{out}");
+
+        // Into the list: the whole list unformats, not just the line under
+        // the cursor — half a list is not a list.
+        app.on_key(k(KeyCode::Down));
+        app.on_key(k(KeyCode::Down));
+        let out = joined(&mut app);
+        assert!(out.contains("- one"), "{out}");
+        assert!(
+            out.contains("- two"),
+            "the whole block, not one line:\n{out}"
+        );
+        assert!(!out.contains("• "), "no bullets left:\n{out}");
+    }
+
+    #[test]
+    fn a_fenced_block_unformats_whole_and_typing_still_lands() {
+        let (td, mut app) = fixture();
+        fs::write(
+            td.path().join("notes/fence.md"),
+            "intro\n\n```python\nx = 1\n\ny = 2\n```\n\nafter\n",
+        )
+        .unwrap();
+        command(&mut app, "reload");
+        select(&mut app, "fence.md");
+        app.on_key(k(KeyCode::Enter));
+        for _ in 0..3 {
+            app.on_key(k(KeyCode::Down));
+        }
+        let out = joined(&mut app);
+        assert!(out.contains("```python"), "the fence shows:\n{out}");
+        assert!(out.contains("y = 2"), "past a blank line inside it:\n{out}");
+
+        // The cursor is real: what is typed goes where the cursor is drawn.
+        type_str(&mut app, "z");
+        assert_eq!(app.active_buffer().unwrap().lines()[3], "zx = 1");
+    }
+
+    #[test]
+    fn a_long_markdown_file_is_edited_raw() {
+        let (td, mut app) = fixture();
+        let mut body = String::from("# Title\n\n");
+        for i in 0..5000 {
+            body.push_str(&format!("line {i}\n"));
+        }
+        fs::write(td.path().join("notes/huge.md"), body).unwrap();
+        command(&mut app, "reload");
+        select(&mut app, "huge.md");
+        app.on_key(k(KeyCode::Enter));
+        let out = joined(&mut app);
+        assert!(
+            out.contains("# Title"),
+            "past the limit the hashes stay put, formatted or not:\n{out}"
+        );
     }
 
     // ---- opening a single file -------------------------------------------
@@ -3519,7 +3939,6 @@ mod tests {
 
         assert_eq!(app.selected_row().unwrap().path, file);
         assert_eq!(app.focus, Focus::Editor, "it is ready to type into");
-        assert!(!app.read_mode);
         let out = joined(&mut app);
         assert!(out.contains("main.py"), "{out}");
         assert!(out.contains("import utils"), "{out}");
@@ -3552,14 +3971,16 @@ mod tests {
     }
 
     #[test]
-    fn naming_a_markdown_file_opens_it_rendered() {
+    fn naming_a_markdown_file_opens_it_in_the_editor() {
         let td = tempfile::tempdir().unwrap();
         build(td.path());
         let file = td.path().join("notes/design.md");
         let mut app = App::new(target(td.path(), Some(file)), Config::default(), None).unwrap();
         assert_eq!(app.focus, Focus::Editor);
-        assert!(app.read_mode, "a note opens to be read, not edited");
-        assert!(joined(&mut app).contains("Design Notes"));
+        // Formatted, but with a cursor in it — the heading under the cursor
+        // wears its hashes and the rest of the note does not.
+        let out = joined(&mut app);
+        assert!(out.contains("# Design Notes"), "{out}");
     }
 
     // ---- search -----------------------------------------------------------
@@ -3790,7 +4211,7 @@ mod tests {
     fn replace_asks_first_then_rewrites_the_whole_project() {
         let (td, mut app) = fixture();
         fs::write(td.path().join("notes/more.md"), "widget widget\n").unwrap();
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
 
         command(&mut app, "replace widget gadget");
         assert!(matches!(app.mode, Mode::Confirm(_)), "it asks first");
@@ -3849,7 +4270,7 @@ mod tests {
     // ---- the project map --------------------------------------------------
 
     /// The fixture plus the two files it already points at: `design.md` links
-    /// to `[[architecture]]` and `main.py` imports `utils`, so once those
+    /// to `[[architecture]]` and `main.py` calls `utils.load`, so once those
     /// exist the map has real edges to draw.
     fn linked_fixture_with(cfg: Config) -> (tempfile::TempDir, App) {
         let (td, mut app) = fixture_with(cfg);
@@ -3863,7 +4284,7 @@ mod tests {
             "def load():\n    return 1\n",
         )
         .unwrap();
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
         (td, app)
     }
 
@@ -3920,8 +4341,8 @@ mod tests {
     fn a_code_file_that_calls_another_is_joined_to_it() {
         let (_td, mut app) = linked_fixture();
         app.on_key(ch('m'));
-        // Only calls and imports; the notes are switched off, so whatever is
-        // left on screen is there because of the code.
+        // Only calls: the notes are switched off, so whatever is left on
+        // screen is there because of the code.
         app.on_key(ch('1'));
         app.on_key(ch('2'));
         let out = screen(&mut app, 100, 34).join("\n");
@@ -3979,7 +4400,6 @@ mod tests {
         select(&mut app, "main.py");
         command(&mut app, "line 4");
         assert_eq!(app.focus, Focus::Editor);
-        assert!(!app.read_mode, "a line number is a fact about the source");
         assert_eq!(
             app.active_buffer().unwrap().cursor_line,
             3,
@@ -4022,8 +4442,7 @@ mod tests {
     fn a_wheel_notch_moves_exactly_one_line() {
         let (_td, mut app) = fixture();
         select(&mut app, "README.md");
-        app.on_key(k(KeyCode::Enter));
-        assert!(app.read_mode, "a note opens rendered");
+        assert_eq!(app.focus, Focus::Tree, "the note is only being previewed");
         // Draw once so the preview knows how long it is.
         joined(&mut app);
 
@@ -4040,7 +4459,7 @@ mod tests {
         let (_td, mut app) = fixture();
         select(&mut app, "main.py");
         app.on_key(k(KeyCode::Enter));
-        assert!(!app.read_mode, "code opens straight into editing");
+        assert_eq!(app.focus, Focus::Editor);
         joined(&mut app);
 
         app.on_scroll(true, 60);
@@ -4751,7 +5170,7 @@ mod tests {
         let (td, mut app) = fixture();
         fs::create_dir_all(td.path().join("notes/deep/deeper")).unwrap();
         fs::write(td.path().join("notes/deep/deeper/buried.md"), "# buried\n").unwrap();
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
 
         command(&mut app, "copy notes to archive");
         assert!(td.path().join("archive/design.md").is_file());
@@ -4769,7 +5188,7 @@ mod tests {
     fn copy_takes_names_with_spaces_without_quoting_them() {
         let (td, mut app) = fixture();
         fs::write(td.path().join("my notes.md"), "# mine\n").unwrap();
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
 
         // `to` is the separator, so both sides can be several words.
         command(&mut app, "copy my notes.md to old work.md");
@@ -4928,7 +5347,7 @@ mod tests {
         let (td, mut app) = fixture();
         fs::write(td.path().join("report-one.md"), "").unwrap();
         fs::write(td.path().join("report-two.md"), "").unwrap();
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
         // Two matches, so it fills in only what they share.
         assert_eq!(completed(&mut app, "copy rep"), "copy report-");
     }
@@ -4937,7 +5356,7 @@ mod tests {
     fn completion_leaves_dotfiles_alone_unless_asked_for() {
         let (td, mut app) = fixture();
         fs::write(td.path().join(".secret.md"), "").unwrap();
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
 
         assert_eq!(
             completed(&mut app, "delete .sec"),
@@ -4997,8 +5416,8 @@ mod tests {
         // and has a test of its own.
         let out = screen(&mut app, 90, 70).join("\n");
         assert!(out.contains("Keys and commands"), "{out}");
-        assert!(out.contains("search names and contents"), "{out}");
-        assert!(out.contains("the map: boxes and lines"), "{out}");
+        assert!(out.contains("search"), "{out}");
+        assert!(out.contains("open the map"), "{out}");
         app.on_key(ch('x'));
         assert!(matches!(app.mode, Mode::Normal));
     }
@@ -5032,7 +5451,7 @@ mod tests {
         let out = screen(&mut app, 90, 70).join("\n");
         let row = out
             .lines()
-            .find(|l| l.contains("move the cursor"))
+            .find(|l| l.contains("move"))
             .unwrap_or_else(|| panic!("{out}"));
         assert!(row.contains('z'), "the help follows the keyboard:\n{row}");
         assert!(
@@ -5055,7 +5474,7 @@ mod tests {
         let out = screen(&mut app, 90, 70).join("\n");
         let row = out
             .lines()
-            .find(|l| l.contains("a dot in the name"))
+            .find(|l| l.contains("dot makes a file"))
             .unwrap_or_else(|| panic!("{out}"));
         assert!(
             !row.contains(" n "),
@@ -5072,7 +5491,7 @@ mod tests {
         // key and a command share a row.
         assert!(
             rows.iter()
-                .any(|r| r.contains("move the cursor") && r.contains('*')),
+                .any(|r| r.contains("open or close") && r.contains('*')),
             "two columns on one row:\n{}",
             rows.join("\n")
         );
@@ -5087,10 +5506,10 @@ mod tests {
         assert!(
             !rows
                 .iter()
-                .any(|r| r.contains("move the cursor") && r.contains('*')),
+                .any(|r| r.contains("open or close") && r.contains('*')),
             "no room for two:\n{out}"
         );
-        assert!(out.contains("move the cursor"), "{out}");
+        assert!(out.contains("open or close"), "{out}");
         assert!(
             out.contains("*copy a to b"),
             "both are still listed:\n{out}"
@@ -5135,7 +5554,7 @@ mod tests {
     fn dot_toggles_hidden_files() {
         let (td, mut app) = fixture();
         fs::write(td.path().join(".secret"), "x").unwrap();
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
         assert!(!app.rows.iter().any(|r| r.name == ".secret"));
         app.on_key(ch('.'));
         assert!(app.rows.iter().any(|r| r.name == ".secret"));
@@ -5148,7 +5567,7 @@ mod tests {
         app.on_key(k(KeyCode::Enter));
         type_str(&mut app, "KEEP");
         app.on_key(k(KeyCode::Esc));
-        app.on_key(k(KeyCode::F(5)));
+        command(&mut app, "reload");
         select(&mut app, "main.py");
         assert!(app.active_buffer().unwrap().lines()[0].starts_with("KEEP"));
     }
@@ -5179,12 +5598,27 @@ mod tests {
         );
     }
 
+    /// The arrow a screenshot sentinel names, for `TINY_SHOT_KEYS`.
+    fn arrow(c: char) -> Option<KeyCode> {
+        match c {
+            '↑' => Some(KeyCode::Up),
+            '↓' => Some(KeyCode::Down),
+            '←' => Some(KeyCode::Left),
+            '→' => Some(KeyCode::Right),
+            _ => None,
+        }
+    }
+
     /// Not an assertion — a way to look at the panes.
     /// `TINY_SHOT=/path cargo test screenshot -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn screenshot() {
         let dir = std::env::var("TINY_SHOT").expect("set TINY_SHOT");
+        let dir = std::path::Path::new(&dir)
+            .canonicalize()
+            .expect("TINY_SHOT must name a real directory");
+        let dir = dir.to_string_lossy().into_owned();
         let file = std::env::var("TINY_SHOT_FILE").ok();
         let mut app = App::new(target(Path::new(&dir), None), Config::default(), None).unwrap();
         if let Some(f) = file {
@@ -5201,17 +5635,17 @@ mod tests {
                             app.on_key(ctrl(n));
                         }
                     }
-                    '\n' => app.on_key(k(KeyCode::Enter)),
+                    '\n' | '⏎' => app.on_key(k(KeyCode::Enter)),
                     '\t' => app.on_key(k(KeyCode::Tab)),
                     '⎋' => app.on_key(k(KeyCode::Esc)),
-                    '↓' => app.on_key(k(KeyCode::Down)),
+                    // Named as well as literal, because a shell strips a
+                    // trailing newline out of the variable this arrives in.
+                    c if arrow(c).is_some() => app.on_key(k(arrow(c).expect("just checked"))),
                     '⇧' => {
-                        if let Some(n) = chars.next() {
-                            let code = if n == '↑' {
-                                KeyCode::Up
-                            } else {
-                                KeyCode::Down
-                            };
+                        // Anything unrecognised is left alone rather than
+                        // quietly becoming an arrow: a shot that sends the
+                        // wrong key is worse than one that sends none.
+                        if let Some(code) = chars.next().and_then(arrow) {
                             app.on_key(shift(code));
                         }
                     }

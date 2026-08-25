@@ -41,9 +41,11 @@ Press `?` in the program: it lists every key and every command at once, side by 
 | `→` `l`     | open a folder, or step inside an open one  |
 | `←` `j`     | close a folder, or jump to its parent      |
 | `⇧↑` `⇧I` `⇧↓` `⇧K`   | first / last entry               |
+| `^↑` `^↓`   | five entries at a time                     |
 | `n`         | new — a dot in the name makes it a file    |
 | `r`         | rename                                     |
 | `^C` `^V`   | copy, and paste into the folder you are in |
+| `^S`        | save — on a folder, everything unsaved in it|
 | `d`         | delete (asks first)                        |
 | `.`         | show or hide dotfiles                      |
 | `F5`        | re-read from disk (or `*reload`)           |
@@ -58,7 +60,7 @@ Press `?` in the program: it lists every key and every command at once, side by 
 | `m`        | the project map                             |
 | `/`        | the bar — searches names and contents       |
 | `*`        | typed first, it is a command instead        |
-| `,` `F2`   | the settings area                           |
+| `,`        | the settings area                           |
 | `Ctrl+F`   | the bar, from anywhere including the editor |
 | `Ctrl+P`   | the same, with the `*` already typed        |
 
@@ -86,35 +88,40 @@ Press `?` in the program: it lists every key and every command at once, side by 
 
 | key               | does                    |
 | ----------------- | ----------------------- |
+| `→` `l`           | into the file           |
+| `Esc`             | back to the tree        |
 | `Ctrl+S`          | save                    |
 | `Ctrl+Z` `Ctrl+Y` | undo / redo             |
 | `Ctrl+K`          | delete the current line |
 | `Ctrl+←` `Ctrl+→` | move by word            |
+| `Ctrl+↑` `Ctrl+↓` | five lines at a time    |
+| `⇧←` `⇧→`         | start / end of the line |
+| `⇧↑` `⇧↓`         | first / last line       |
 | wheel             | one line per notch      |
 | `*line 42`        | jump to a line          |
-| `Esc`             | back to the tree        |
 
+
+**Saving**
+`Ctrl+s` saves whatever file you are working in or hovering over. If you `Ctrl+s` on
+a directory it will save all files under that directory.
 
 **The Project Map**
 
-Press `m`, or run `*map`. The whole screen becomes a map of the project: every
-file is a box with its name in it, and every connection a line between two
-boxes, with an arrowhead on the end saying which way it runs. Arrow keys move to
-the nearest file in that direction, `Enter` opens it in the editor, `Esc` goes
-back.
+The project map `m` shows the entire project and linking between files in the project.
+any links between files or functions that call other functions will form a link in the map.
 
 ```
+tiny/  2 files
 ╭─────────╮                        ╭────────╮
 │README.md│───────────────────────▸│LICENSE │
 ╰─────────╯                        ╰────────╯
 
-╭───────╮        ╭─────────╮
-│main.py│──────┬▸│utils.py │
-╰───────╯      │ ╰─────────╯
-    ▾          │
-╭──────╮       │
-│cli.py│───────┘
-╰──────╯
+src/  3 files
+╭──────╮         ╭───────╮        ╭─────────╮
+│cli.py│────────▸│main.py│──────┬▸│utils.py │
+╰──────╯         ╰───────╯      │ ╰─────────╯
+                                │
+                     ───────────┘
 ```
 
 | key       | does                                        |
@@ -122,20 +129,21 @@ back.
 | arrows    | move to the nearest file that way (`i j k l`)|
 | `Tab`     | step through every file in turn             |
 | `Enter`   | open the file the cursor is on              |
-| `1`-`4`   | wikilinks / md links / imports / calls      |
+| `1`-`3`   | wikilinks / md links / calls                |
 | `o`       | show files connected to nothing             |
 | `/`       | filter to matching paths                    |
-| `r`       | lay it out again                            |
+| `r`       | build the map again                         |
 
 
-Four kinds of connection, drawn together:
+A line means two files are actually joined — a link you could click, or a
+function one of them calls in the other:
 
 | edge          | comes from                                        |
 |---------------|---------------------------------------------------|
 | **wikilink**  | `[[another-note]]`, in markdown *and* plain text  |
 | **md link**   | `[text](../notes/spec.md)` — relative, not URLs   |
-| **import**    | `import utils`, `mod x;`, `use crate::x`, `from './lib.js'` |
 | **call**      | one file calling a function another defines       |
+
 
 ## Config:
 
@@ -238,7 +246,7 @@ Video shows a poster frame, pulled with `ffmpeg` when it is installed.
 | `markdown.rs`  | markdown → styled terminal lines, wikilink scanning |
 | `highlight.rs` | syntax highlighting via syntect                     |
 | `media.rs`     | pictures and video frames as half-blocks            |
-| `graph.rs`     | the link graph: wikilinks, imports, calls           |
+| `graph.rs`     | the link graph: wikilinks, md links, calls          |
 | `projectmap.rs`| the map you look at: its layout, boxes and keys     |
 | `keys.rs`      | what every key does, and how to rebind it           |
 | `config.rs`    | `tiny.conf`, style specs, the settings index        |

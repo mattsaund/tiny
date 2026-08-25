@@ -266,8 +266,8 @@ def hello(name):
 
 ## Linking
 
-Write `[[wikilinks]]` to point one note at another. Press `w` for the graph
-that draws them, along with the imports and calls between your code files.
+Write `[[wikilinks]]` to point one note at another. Press `m` for the project
+map that draws them, along with the calls between your code files.
 
 > Everything here is a plain file. Nothing is locked in a database.
 "#;
