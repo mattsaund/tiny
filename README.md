@@ -1,6 +1,6 @@
 # tiny
 
-Tiny is a personal knowledge management system (PKMS) and IDE that works entirely in the terminal. This program exists to serve as a full, terminal based project manager that is as lightweight as programs like micro. Tiny has a built in text/code editor, picture/video previewer, file manager, and file web viewer for projects.
+Tiny is a personal knowledge management system (PKMS) and IDE that works entirely in the terminal. This program exists to serve as a full, terminal based project manager that is as lightweight as programs like micro. Tiny has a built in text/code editor, picture/video previewer, file manager, and project map for projects.
 
 Everything tiny manages and edits is non proprietary and not obfuscated.
 ## Install:
@@ -30,56 +30,76 @@ To turn off the starting README.md in tiny projects change this in config
 `starter_readme = false`.
 ## Controls and Commands:
 
-Press `?` in the program to see all controls.
+Press `?` in the program: it lists every key and every command at once, side by side if the window is wide enough.
 
 **Tree**
 
 | key         | does                                       |
 |-------------|--------------------------------------------|
-| `↑` `↓`     | move the cursor (`k` `j` also work)        |
+| `↑` `↓`     | move the cursor (`i` `k` also work)        |
 | `Enter`     | open or close a folder, or edit a file     |
-| `→`         | open a folder, or step inside an open one  |
-| `←`         | close a folder, or jump to its parent      |
-| `g` `G`     | first / last entry                         |
-| `n` `N`     | new file / new folder                      |
+| `→` `l`     | open a folder, or step inside an open one  |
+| `←` `j`     | close a folder, or jump to its parent      |
+| `⇧↑` `⇧↓`   | first / last entry (`I` `K` also work)     |
+| `n`         | new — a dot in the name makes it a file    |
 | `r`         | rename                                     |
 | `^C` `^V`   | copy, and paste into the folder you are in |
 | `d`         | delete (asks first)                        |
 | `.`         | show or hide dotfiles                      |
-| `R` `F5`    | re-read the project from disk              |
+| `F5`        | re-read from disk (or `*reload`)           |
 | `^B`        | fold the tree away, and bring it back      |
 | `q`         | quit                                       |
-(When creating a new directory, you can type the entire desired filepath)
+
+`i` `j` `k` `l` work as the four arrows wherever you are moving around rather
+than typing — the tree, a note being read, the settings list, the project map —
+with `I` and `K` going all the way, like Shift with an arrow. They are there for
+keyboards without a cursor cluster. They are not the vim `h j k l`: `j` and `k`
+cannot mean both left-and-down and down-and-up at once, and matching the arrows
+is the layout that needs no explaining.
+
+`n` makes one thing, and the name says which: `today.md` is a file, `notes` is a
+folder, and you can type a whole path — `notes/2026/today.md` — to make what it
+needs along the way. For an extensionless *file* like `LICENSE`, use `*new
+LICENSE`; `*mkdir` is the always-a-folder form.
 
 **Search and commands**
 
-| key        | does                                       |
-|------------|--------------------------------------------|
-| `w`        | the graph                                  |
-| `/`        | search names and contents across the project |
-| `:`        | commands                                   |
-| `,` `F2`   | the settings area                          |
-| `Ctrl+F`   | search, from anywhere including the editor |
-| `Ctrl+P`   | commands, from anywhere                    |
-(autofill search results pop up while typing. on hover, the preview will show the contents. press enter to jump to it)
+| key        | does                                        |
+|------------|---------------------------------------------|
+| `m`        | the project map                             |
+| `/`        | the bar — searches names and contents       |
+| `*`        | …typed first, it is a command instead       |
+| `,` `F2`   | the settings area                           |
+| `Ctrl+F`   | the bar, from anywhere including the editor |
+| `Ctrl+P`   | the same, with the `*` already typed        |
+
+There is **one bar**, and what you type decides what it is. Plain text searches
+— results appear as you type, hovering one previews it, `Enter` jumps to it. A
+leading `*` makes the line a command instead, and the results give way to the
+tree. Delete the `*` and the search comes straight back.
 
 Commands read as plain English, and `Tab` completes every part of them — the
-command, the paths, and the `to` in the middle:
+command, the paths, and the `to` in the middle. What it would fill in is shown
+in grey ahead of the cursor as you type, so there is nothing to guess at, and
+`→` takes it up as well as `Tab`:
 
 ```
-:set tab_width 2              change a setting; :set <key> alone reports it
-:set theme.heading cyan bold  repaint without a restart
-:new notes/today.md           make a file; :mkdir for a folder
-:copy README.md to notes      copy into a folder, or to a new name
-:copy notes to archive        a folder brings everything under it
-:delete                       delete what the cursor is on, after confirming
-:delete notes/old.md          delete a path, counted from the project root
-:replace old new              find-replace across the project, after confirming
-:replace "old thing" "new"    quote anything with spaces in it
-:graph                        open the graph
-:config                       open the settings area
-:w  :q  :wq                   save, quit
-:help  :reload
+*set tab_width 2              change a setting; *set <key> alone reports it
+*set theme.heading cyan bold  repaint without a restart
+*new LICENSE                  make a file, whatever the name looks like
+*mkdir notes                  make a folder, likewise
+*copy README.md to notes      copy into a folder, or to a new name
+*copy notes to archive        a folder brings everything under it
+*delete                       delete what the cursor is on, after confirming
+*delete notes/old.md          delete a path, counted from the project root
+*line 42                      jump to a line; *42 on its own does too
+*replace old new              find-replace across the project, after confirming
+*replace "old thing" "new"    quote anything with spaces in it
+*map                          open the project map
+*config                       open the settings area
+*w  *q  *wq                   save, quit
+*reload                       re-read the project from disk
+*help
 ```
 
 **Editor**
@@ -90,22 +110,50 @@ command, the paths, and the `to` in the middle:
 | `Ctrl+Z` `Ctrl+Y` | undo / redo             |
 | `Ctrl+K`          | delete the current line |
 | `Ctrl+←` `Ctrl+→` | move by word            |
+| wheel             | one line per notch      |
+| `*line 42`        | jump to a line          |
 | `Esc`             | back to the tree        |
 
-**Project Web**
+The mouse wheel moves exactly one line at a time, in the rendered view and in
+the editor both — terminals left to themselves send three lines a notch, which
+is hard to read against.
 
-Press `w`, or run `:graph`. The whole screen becomes a map of the project. Arrow keys move to the nearest file in that direction, `Enter` opens it in the editor, `Esc` goes back.
+**The Project Map**
+
+Press `m`, or run `*map`. The whole screen becomes a map of the project: every
+file is a box with its name in it, and every connection a line between two
+boxes, with an arrowhead on the end saying which way it runs. Arrow keys move to
+the nearest file in that direction, `Enter` opens it in the editor, `Esc` goes
+back.
+
+```
+╭─────────╮                        ╭────────╮
+│README.md│───────────────────────▸│LICENSE │
+╰─────────╯                        ╰────────╯
+
+╭───────╮        ╭─────────╮
+│main.py│──────┬▸│utils.py │
+╰───────╯      │ ╰─────────╯
+    ▾          │
+╭──────╮       │
+│cli.py│───────┘
+╰──────╯
+```
 
 | key       | does                                        |
 |-----------|---------------------------------------------|
-| arrows    | move to the nearest file that way           |
+| arrows    | move to the nearest file that way (`i j k l`)|
 | `Tab`     | step through every file in turn             |
 | `Enter`   | open the file the cursor is on              |
 | `1`-`4`   | wikilinks / md links / imports / calls      |
 | `o`       | show files connected to nothing             |
-| `L`       | label every file, not just the ones nearby  |
 | `/`       | filter to matching paths                    |
 | `r`       | lay it out again                            |
+
+The file under the cursor and the lines reaching it are drawn brightly; the rest
+of the project stays dim behind them. Set `markers = "ascii"` and the whole
+picture is drawn with `+`, `-` and `|` instead, for terminals with no
+box-drawing characters.
 
 Four kinds of connection, drawn together:
 
@@ -191,7 +239,7 @@ Video shows a poster frame, pulled with `ffmpeg` when it is installed.
 | `highlight.rs` | syntax highlighting via syntect                     |
 | `media.rs`     | pictures and video frames as half-blocks            |
 | `graph.rs`     | the link graph: wikilinks, imports, calls           |
-| `graphview.rs` | its layout and keys                                 |
+| `projectmap.rs`| the map you look at: its layout, boxes and keys     |
 | `config.rs`    | `tiny.conf`, style specs, the settings index        |
 
 ## Features:
@@ -200,7 +248,7 @@ Video shows a poster frame, pulled with `ffmpeg` when it is installed.
 - Markdown text editor, easy editing like obsidian, perfectly viewable
 - plaintext editor (.txt), no formatting
 - pictures and videos viewer
-- web view to show project connections and links between files
+- project map showing the connections and links between files
 - full project searchbar and command caller
 
 **Future**

@@ -1,6 +1,6 @@
 [package]
 name = "tiny"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 # Let-chains, which this uses throughout, landed in 1.88.
 rust-version = "1.88"

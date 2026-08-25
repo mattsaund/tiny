@@ -137,15 +137,18 @@ fn folder_of(file: &Path) -> PathBuf {
     }
 }
 
-/// Does a name that is not on disk yet mean a file, or a folder to put a
-/// project in?
+/// Does a name that is not on disk yet mean a file, or a folder?
 ///
-/// The extension decides: `tiny todo.txt` and `tiny scratch.py` write files,
-/// `tiny thesis` makes a project. A trailing slash always means a folder, since
-/// that is what it means everywhere else. The rule mis-reads a dotted folder
-/// name like `site.v2`, which is the price of not having a flag; an existing
-/// path never reaches here, so it only ever affects things being created.
-fn names_a_file(arg: &str, path: &Path) -> bool {
+/// The extension decides: `todo.txt` and `scratch.py` are files, `thesis` is a
+/// folder. A trailing slash always means a folder, since that is what it means
+/// everywhere else. The rule mis-reads a dotted folder name like `site.v2`,
+/// which is the price of not having a flag.
+///
+/// The same rule answers the question on the command line and at the `n`
+/// prompt inside the app, which is why it lives here and is called from both:
+/// one place to read, and no chance of the two disagreeing. Neither can make
+/// an extensionless *file* — `*new LICENSE` is the way to do that.
+pub fn names_a_file(arg: &str, path: &Path) -> bool {
     !arg.ends_with(std::path::is_separator) && path.extension().is_some()
 }
 
