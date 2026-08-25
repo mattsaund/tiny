@@ -16,7 +16,7 @@
 //! 3. **Drawing** — [`ui`]. Reads `App` and paints a frame. It is deliberately
 //!    the only module that knows about ratatui widgets.
 //! 4. **Support** — [`tree`], [`editor`], [`search`], [`markdown`],
-//!    [`highlight`], [`media`], [`graph`], [`graphview`]. Each is a
+//!    [`highlight`], [`media`], [`graph`], [`projectmap`]. Each is a
 //!    self-contained piece of machinery `app` and `ui` call into.
 //!
 //! # The one-way rule
@@ -42,17 +42,20 @@ mod app;
 mod config;
 mod editor;
 mod graph;
-mod graphview;
 mod highlight;
 mod markdown;
 mod media;
 mod project;
+mod projectmap;
 mod search;
 mod tree;
 mod ui;
 
 use anyhow::{Result, anyhow};
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseEventKind,
+};
+use crossterm::execute;
 
 use app::App;
 use config::{CONF_NAME, Config};
@@ -79,9 +82,9 @@ only into one it just created or found empty. Turn even that off with
 `starter_readme = false`.
 
 KEYS:
-    ?                   the full keymap, from inside the app
-    /                   search the project
-    :                   commands and settings
+    ?                   every key and command, from inside the app
+    /                   the bar: searches, or `*` first for a command
+    w                   the project map
 ";
 
 /// Thin wrapper so the real work can use `?`.
@@ -158,7 +161,15 @@ fn real_main() -> Result<()> {
     let mut terminal = ratatui::try_init().map_err(|e| {
         anyhow!("no interactive terminal available ({e}); tiny needs a real terminal")
     })?;
+    // Wheel events only reach a program that asks for them. Without this the
+    // terminal translates a notch into three arrow keys of its own, which is
+    // why scrolling used to jump. Best-effort: a terminal that will not report
+    // the mouse is still perfectly usable from the keyboard.
+    let mouse = execute!(std::io::stdout(), EnableMouseCapture).is_ok();
     let result = run(&mut terminal, &mut app);
+    if mouse {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    }
     ratatui::restore();
     result
 }
@@ -184,6 +195,15 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                 app.on_key(k)
             }
+            // One notch, one line. Everything else the mouse reports — moves,
+            // clicks, drags — is deliberately ignored: tiny is a keyboard
+            // program, and the wheel is only here because three-line jumps
+            // make a page hard to read.
+            Event::Mouse(m) => match m.kind {
+                MouseEventKind::ScrollDown => app.on_scroll(true, m.column),
+                MouseEventKind::ScrollUp => app.on_scroll(false, m.column),
+                _ => {}
+            },
             _ => {}
         }
     }

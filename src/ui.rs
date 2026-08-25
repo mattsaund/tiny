@@ -14,7 +14,7 @@
 //! ```text
 //! draw
 //!  ├─ bar / status rows, placed by config (either can sit top or bottom)
-//!  ├─ draw_graph            when the graph is open — takes the whole screen
+//!  ├─ draw_map              when the map is open — takes the whole screen
 //!  └─ two panes, side decided by config
 //!      ├─ draw_tree  or  draw_results   (results replace the tree while searching)
 //!      └─ draw_preview
@@ -53,21 +53,20 @@
 //! character is one character and two cells, and confusing the two is how
 //! borders end up misaligned.
 
+use std::collections::HashMap;
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::Color;
 use ratatui::style::{Modifier, Style};
-use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::canvas::{Canvas, Line as CanvasLine, Points};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Bar, BarKind, Focus, Mode, Preview, Settings, TextKind};
-use crate::config::{Config, Palette, Position, Side};
+use crate::app::{App, Bar, Focus, Mode, Preview, Settings, TextKind};
+use crate::config::{Config, Markers, Palette, Position, Side};
 use crate::graph::EdgeKind;
-use crate::graphview::GraphView;
 use crate::markdown;
+use crate::projectmap::{self, Placed, ProjectMap};
 use crate::search::HitKind;
 
 /// Paint one frame. Called once per keypress by the event loop in `main`.
@@ -123,12 +122,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
 
-    if app.graph_view.is_some() {
-        draw_graph(f, app, main);
+    if app.project_map.is_some() {
+        draw_map(f, app, main);
         return;
     }
 
-    let searching = bar_open && matches!(&app.mode, Mode::Bar(b) if b.kind == BarKind::Search);
+    let searching = bar_open && matches!(&app.mode, Mode::Bar(b) if !b.is_command());
 
     // The side pane is where search results are listed, so a search brings it
     // back for as long as the bar is open — hiding the tree must not take the
@@ -136,13 +135,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let (side_area, preview_area) = if app.tree_hidden && !searching {
         (None, main)
     } else {
-        // A wider list while searching: results are longer than file names.
-        let share = if searching {
-            app.config.tree_width.max(0.42)
-        } else {
-            app.config.tree_width
-        };
-        let side_w = ((main.width as f32) * share).round() as u16;
+        // Results take the tree's place at exactly the tree's width, so the
+        // screen does not lurch sideways the moment you start typing.
+        let side_w = ((main.width as f32) * app.config.tree_width).round() as u16;
         let side_w = side_w.clamp(14, main.width.saturating_sub(12).max(14));
 
         let (left, right) = match app.config.tree_side {
@@ -159,9 +154,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     };
 
+    // Tell `app` where the tree ended up, so a mouse wheel can work out which
+    // pane it is over. `None` while it is folded away or replaced by results.
+    app.last_tree_cols = side_area
+        .filter(|_| !searching)
+        .map(|a| (a.x, a.x + a.width));
+
     if let Some(side_area) = side_area {
         match &app.mode {
-            Mode::Bar(b) if b.kind == BarKind::Search => {
+            Mode::Bar(b) if !b.is_command() => {
                 let b = b.clone();
                 draw_results(f, app, side_area, &b);
             }
@@ -511,10 +512,7 @@ fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
                     pal.text,
                 )),
                 Line::from(""),
-                Line::from(Span::styled(
-                    "right to open   n new file   N new folder",
-                    pal.dim,
-                )),
+                Line::from(Span::styled("right to open   n new", pal.dim)),
             ];
             app.preview_len = lines.len();
             f.render_widget(Paragraph::new(lines), inner);
@@ -794,40 +792,21 @@ fn clip_pieces<'a>(
     out
 }
 
-// ---- the graph ------------------------------------------------------------
+// ---- the project map ------------------------------------------------------
 
-/// A style's colour, or the terminal's own where the theme names none.
+/// The project map: every file as a box, every connection as a line, and a
+/// detail strip underneath.
 ///
-/// The canvas widget wants a bare `Color` rather than a `Style`, so this is
-/// the one place styles get unwrapped. `Color::Reset` means "whatever the
-/// terminal is using", which keeps the default monochrome palette working.
-fn colour(style: Style) -> Color {
-    style.fg.unwrap_or(Color::Reset)
-}
-
-/// The graph, drawn on a braille canvas with a detail strip underneath.
+/// Drawn by composing an [`Ink`] grid rather than by emitting spans directly.
+/// Lines go down first and boxes on top, so a connection running past a file
+/// never writes over its name, and two lines crossing resolve into a junction
+/// without either of them having to know the other was there.
 ///
-/// Braille gives four times the vertical resolution and twice the horizontal
-/// resolution of a text cell, which is what makes diagonal edges readable.
-///
-/// # Two things are harder than they look
-///
-/// **Fitting the viewport.** Labels stick out sideways from their dot, so the
-/// bounding box has to be widened by half the widest label or names get
-/// clipped at the edge. That width is only knowable in canvas units after a
-/// first [`fit_bounds`] pass, hence the two rounds: fit, measure, widen, fit
-/// again.
-///
-/// **Label collision.** Labels are placed in priority order — the selected
-/// file first, then its neighbours, then everything else — and each one claims
-/// a `(row, start, end)` span. A label whose span overlaps something already
-/// placed is simply dropped. That is why the cursor's own label is always
-/// legible however dense the graph gets.
-///
-/// Drawing is layered: edges, then dots, then labels, so a name is never
-/// threaded onto the line running under it.
-fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
-    let Some(view) = app.graph_view.as_ref() else {
+/// What is drawn is decided in three steps: `place` works out which boxes fit
+/// and where, `route` draws the line between each pair of them, and then the
+/// boxes are stamped over the top.
+fn draw_map(f: &mut Frame, app: &App, area: Rect) {
+    let Some(view) = app.project_map.as_ref() else {
         return;
     };
     let pal = app.palette;
@@ -841,7 +820,7 @@ fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
 
     let title = vec![
         Span::raw(" "),
-        Span::styled("GRAPH", pal.text.add_modifier(Modifier::BOLD)),
+        Span::styled("PROJECT MAP", pal.text.add_modifier(Modifier::BOLD)),
         Span::styled(format!("  {}", view.summary()), pal.dim),
         Span::raw(" "),
     ];
@@ -865,142 +844,345 @@ fn draw_graph(f: &mut Frame, app: &App, area: Rect) {
     }
     let inner = block.inner(rows[0]);
     f.render_widget(block, rows[0]);
-    if inner.width < 4 || inner.height < 3 {
+    if inner.width < 8 || inner.height < 3 {
         return;
     }
 
     let selected = view.selected;
     let near = view.neighbours(selected);
-    let visible = view.visible_indices();
-    let label_all = view.labels_all || visible.len() <= 30;
 
-    // Labels stick out sideways from the dot they belong to, so the viewport
-    // has to make room for the widest one or it gets clipped at the edge.
-    let (x0, x1, y0, y1) = fit_bounds(view.bounds(), inner.width, inner.height);
-    let unit_x = (x1 - x0) / inner.width.max(1) as f64;
-    let widest = visible
-        .iter()
-        .map(|i| view.graph.nodes[*i].name.chars().count())
-        .max()
-        .unwrap_or(0);
-    let margin = (widest as f64 / 2.0 + 1.0) * unit_x;
-    let (x0, x1, y0, y1) = fit_bounds(
-        (x0 - margin, x1 + margin, y0, y1),
-        inner.width,
-        inner.height,
-    );
-    let unit_x = (x1 - x0) / inner.width.max(1) as f64;
-    let unit_y = (y1 - y0) / inner.height.max(1) as f64;
-
-    // Work out which labels fit before drawing any: the selected file gets
-    // the space first, then its neighbours, then whatever is left over.
+    // Who gets their preferred slot: the file under the cursor, then whatever
+    // it connects to, then everything else. When the grid runs out, it is the
+    // far-away files that go missing rather than the one being looked at.
     let mut order: Vec<usize> = Vec::new();
+    let visible = view.visible_indices();
     if view.node_visible(selected) {
         order.push(selected);
     }
     order.extend(visible.iter().copied().filter(|i| near.contains(i)));
-    if label_all {
-        order.extend(
-            visible
-                .iter()
-                .copied()
-                .filter(|i| *i != selected && !near.contains(i)),
+    order.extend(
+        visible
+            .iter()
+            .copied()
+            .filter(|i| *i != selected && !near.contains(i)),
+    );
+
+    let placed = view.place(inner.width, inner.height, &order);
+    // Index into `placed` by node, so edge routing can find both ends fast.
+    let mut slot_of: HashMap<usize, usize> = HashMap::new();
+    for (n, p) in placed.iter().enumerate() {
+        slot_of.insert(p.node, n);
+    }
+
+    let glyphs = Glyphs::for_markers(app.config.markers);
+    let mut ink = Ink::new(inner.width as usize, inner.height as usize);
+
+    // Lines first, so a box always sits on top of whatever runs past it.
+    for e in &view.graph.edges {
+        if !view.edge_visible(e) {
+            continue;
+        }
+        let (Some(&a), Some(&b)) = (slot_of.get(&e.from), slot_of.get(&e.to)) else {
+            continue;
+        };
+        let hot = e.from == selected || e.to == selected;
+        route(&mut ink, &placed[a], &placed[b], hot, &glyphs);
+    }
+
+    for p in &placed {
+        let style = if p.node == selected {
+            InkStyle::Selected
+        } else if near.contains(&p.node) {
+            InkStyle::Near
+        } else {
+            InkStyle::Far
+        };
+        ink.draw_box(
+            p,
+            &projectmap::label_of(&view.graph.nodes[p.node].name),
+            style,
+            &glyphs,
         );
     }
 
-    let mut taken: Vec<(i32, i32, i32)> = Vec::new();
-    let mut labels: Vec<(f64, f64, String, Style)> = Vec::new();
-    for i in order {
-        let node = &view.graph.nodes[i];
-        // Padded on both sides so the label clears the edge lines running
-        // underneath it instead of being threaded onto them.
-        let label = format!(" {} ", node.name);
-        let w = label.chars().count() as i32;
-        let (px, py) = view.pos[i];
-        let col = ((px - x0) / unit_x).round() as i32;
-        let row = ((y1 - py) / unit_y).round() as i32 + 1;
-        let (a, b) = (col - w / 2, col - w / 2 + w);
-        if taken.iter().any(|(r, s, e)| *r == row && a < *e && *s < b) {
-            continue; // something already has this space
-        }
-        taken.push((row, a, b));
-        let style = if i == selected {
-            pal.text.add_modifier(Modifier::REVERSED)
-        } else if near.contains(&i) {
-            pal.text
-        } else {
-            pal.dim
-        };
-        labels.push((px - (w as f64 / 2.0) * unit_x, py - unit_y, label, style));
-    }
-
-    let dim = colour(pal.dim);
-    let fg = colour(pal.text);
-    let canvas = Canvas::default()
-        .marker(Marker::Braille)
-        .x_bounds([x0, x1])
-        .y_bounds([y0, y1])
-        .paint(move |ctx| {
-            for e in &view.graph.edges {
-                if !view.edge_visible(e) {
-                    continue;
-                }
-                let touches = e.from == selected || e.to == selected;
-                let (ax, ay) = view.pos[e.from];
-                let (bx, by) = view.pos[e.to];
-                ctx.draw(&CanvasLine {
-                    x1: ax,
-                    y1: ay,
-                    x2: bx,
-                    y2: by,
-                    color: if touches { fg } else { dim },
-                });
-            }
-            ctx.layer();
-
-            // Every visible file gets a dot, so an unlabelled one still reads
-            // as something rather than as the end of a line.
-            let dots: Vec<(f64, f64)> = visible.iter().map(|i| view.pos[*i]).collect();
-            ctx.draw(&Points {
-                coords: &dots,
-                color: dim,
-            });
-            ctx.layer();
-
-            for (x, y, label, style) in &labels {
-                ctx.print(*x, *y, Line::from(Span::styled(label.clone(), *style)));
-            }
-        });
-    f.render_widget(canvas, inner);
+    f.render_widget(Paragraph::new(ink.render(&glyphs, &pal)), inner);
 
     if detail_h > 0 {
-        draw_graph_detail(f, app, view, rows[1]);
+        draw_map_detail(f, app, view, rows[1]);
     }
 }
 
-/// Expand the graph's bounding box to match the pane's shape, so the layout
-/// is not stretched. Braille sub-cells are roughly square, and there are two
-/// across and four down per character cell.
+/// How brightly one cell of the graph is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InkStyle {
+    /// Everything not connected to the cursor.
+    Far,
+    /// The file under the cursor, and the lines reaching it.
+    Near,
+    /// The file under the cursor itself.
+    Selected,
+}
+
+/// The characters the graph is drawn out of.
 ///
-/// Always grows the box, never shrinks it, so nothing that was visible is
-/// pushed off screen. The target ratio is `(w * 2) / (h * 4)` — the pane's
-/// dimensions in braille sub-cells rather than in characters.
-fn fit_bounds(b: (f64, f64, f64, f64), w: u16, h: u16) -> (f64, f64, f64, f64) {
-    let (mut x0, mut x1, mut y0, mut y1) = b;
-    let want = (w as f64 * 2.0) / (h as f64 * 4.0);
-    let (dx, dy) = ((x1 - x0).max(1e-6), (y1 - y0).max(1e-6));
-    if dx / dy < want {
-        let target = dy * want;
-        let pad = (target - dx) / 2.0;
-        x0 -= pad;
-        x1 += pad;
-    } else {
-        let target = dx / want;
-        let pad = (target - dy) / 2.0;
-        y0 -= pad;
-        y1 += pad;
+/// Two sets, chosen by the `markers` setting, so a terminal with no box-drawing
+/// characters gets a picture made of `+`, `-` and `|` rather than a screen of
+/// replacement glyphs. Boxes use rounded corners where they exist, which keeps
+/// them visually separate from the sharp corners a line turns with.
+struct Glyphs {
+    /// Indexed by the direction bits a line leaves a cell by.
+    lines: [char; 16],
+    corners: [char; 4],
+    /// Left, right, up, down — drawn where a line enters the box it points at.
+    arrows: [char; 4],
+    horizontal: char,
+    vertical: char,
+}
+
+impl Glyphs {
+    fn for_markers(markers: Markers) -> Self {
+        match markers {
+            Markers::Arrows => Self {
+                lines: [
+                    ' ', '│', '│', '│', '─', '┘', '┐', '┤', '─', '└', '┌', '├', '─', '┴', '┬', '┼',
+                ],
+                corners: ['╭', '╮', '╰', '╯'],
+                arrows: ['◂', '▸', '▴', '▾'],
+                horizontal: '─',
+                vertical: '│',
+            },
+            Markers::Ascii => Self {
+                lines: [
+                    ' ', '|', '|', '|', '-', '+', '+', '+', '-', '+', '+', '+', '-', '+', '+', '+',
+                ],
+                corners: ['+', '+', '+', '+'],
+                arrows: ['<', '>', '^', 'v'],
+                horizontal: '-',
+                vertical: '|',
+            },
+        }
     }
-    (x0, x1, y0, y1)
+}
+
+// Which way a line leaves a cell. Kept as bits so two lines crossing produce
+// the right junction on their own, without anyone having to notice they met.
+const UP: u8 = 1;
+const DOWN: u8 = 2;
+const LEFT: u8 = 4;
+const RIGHT: u8 = 8;
+
+/// The character grid the graph is composed on before it becomes a widget.
+///
+/// Two layers: lines, held as direction bits so crossings merge themselves,
+/// and text, which is the boxes and always wins. Composing into a grid rather
+/// than emitting spans as we go is what lets an edge be drawn without knowing
+/// what else has already been drawn where it lands.
+struct Ink {
+    w: usize,
+    h: usize,
+    bits: Vec<u8>,
+    /// Set where a line touches the file under the cursor, so it stays legible
+    /// where dimmer lines cross it.
+    hot: Vec<bool>,
+    text: Vec<Option<(char, InkStyle)>>,
+}
+
+impl Ink {
+    fn new(w: usize, h: usize) -> Self {
+        Self {
+            w,
+            h,
+            bits: vec![0; w * h],
+            hot: vec![false; w * h],
+            text: vec![None; w * h],
+        }
+    }
+
+    /// Bounds-checked index. Everything else goes through this, so a route
+    /// that runs off the edge is clipped instead of panicking.
+    fn at(&self, x: i32, y: i32) -> Option<usize> {
+        if x < 0 || y < 0 || x as usize >= self.w || y as usize >= self.h {
+            return None;
+        }
+        Some(y as usize * self.w + x as usize)
+    }
+
+    fn mark(&mut self, x: i32, y: i32, dirs: u8, hot: bool) {
+        if let Some(i) = self.at(x, y) {
+            self.bits[i] |= dirs;
+            self.hot[i] |= hot;
+        }
+    }
+
+    fn put(&mut self, x: i32, y: i32, ch: char, style: InkStyle) {
+        if let Some(i) = self.at(x, y) {
+            self.text[i] = Some((ch, style));
+        }
+    }
+
+    /// A run of horizontal line. Endpoints only get the bit pointing along the
+    /// run, so a corner formed with a vertical run turns properly.
+    fn hline(&mut self, y: i32, x1: i32, x2: i32, hot: bool) {
+        let (a, b) = (x1.min(x2), x1.max(x2));
+        for x in a..=b {
+            let mut dirs = 0;
+            if x > a {
+                dirs |= LEFT;
+            }
+            if x < b {
+                dirs |= RIGHT;
+            }
+            self.mark(x, y, dirs, hot);
+        }
+    }
+
+    fn vline(&mut self, x: i32, y1: i32, y2: i32, hot: bool) {
+        let (a, b) = (y1.min(y2), y1.max(y2));
+        for y in a..=b {
+            let mut dirs = 0;
+            if y > a {
+                dirs |= UP;
+            }
+            if y < b {
+                dirs |= DOWN;
+            }
+            self.mark(x, y, dirs, hot);
+        }
+    }
+
+    fn draw_box(&mut self, p: &Placed, name: &str, style: InkStyle, g: &Glyphs) {
+        let (x0, y0) = (p.col as i32, p.row as i32);
+        let x1 = x0 + p.width as i32 - 1;
+        let y1 = y0 + Placed::HEIGHT as i32 - 1;
+        self.put(x0, y0, g.corners[0], style);
+        self.put(x1, y0, g.corners[1], style);
+        self.put(x0, y1, g.corners[2], style);
+        self.put(x1, y1, g.corners[3], style);
+        for x in x0 + 1..x1 {
+            self.put(x, y0, g.horizontal, style);
+            self.put(x, y1, g.horizontal, style);
+        }
+        self.put(x0, y0 + 1, g.vertical, style);
+        self.put(x1, y0 + 1, g.vertical, style);
+        for (i, c) in name.chars().enumerate() {
+            self.put(x0 + 1 + i as i32, y0 + 1, c, style);
+        }
+    }
+
+    /// Turn the grid into one `Line` per row, merging neighbouring cells that
+    /// share a style so a row is a handful of spans rather than one per column.
+    fn render(&self, g: &Glyphs, pal: &Palette) -> Vec<Line<'static>> {
+        let style_of = |s: InkStyle| match s {
+            InkStyle::Selected => pal.text.add_modifier(Modifier::REVERSED),
+            InkStyle::Near => pal.text.add_modifier(Modifier::BOLD),
+            InkStyle::Far => pal.text,
+        };
+        let mut out = Vec::with_capacity(self.h);
+        for y in 0..self.h {
+            let mut spans: Vec<Span> = Vec::new();
+            let mut run = String::new();
+            let mut run_style: Option<Style> = None;
+            for x in 0..self.w {
+                let i = y * self.w + x;
+                let (ch, style) = match self.text[i] {
+                    Some((ch, s)) => (ch, style_of(s)),
+                    None if self.bits[i] != 0 => (
+                        g.lines[self.bits[i] as usize],
+                        if self.hot[i] { pal.text } else { pal.dim },
+                    ),
+                    None => (' ', pal.dim),
+                };
+                if run_style != Some(style) {
+                    if !run.is_empty() {
+                        spans.push(Span::styled(
+                            std::mem::take(&mut run),
+                            run_style.unwrap_or(pal.dim),
+                        ));
+                    }
+                    run_style = Some(style);
+                }
+                run.push(ch);
+            }
+            if !run.is_empty() {
+                spans.push(Span::styled(run, run_style.unwrap_or(pal.dim)));
+            }
+            out.push(Line::from(spans));
+        }
+        out
+    }
+}
+
+/// Draw the connection from one box to another as two turns of a line.
+///
+/// Orthogonal on purpose. A character grid has no diagonals worth the name —
+/// a diagonal has to be faked out of dots, and reads as a smear rather than as
+/// a diagram. Right angles are what anyone drawing this on paper would use, and
+/// they land on cell boundaries exactly.
+///
+/// Which way the line leaves depends on where the other box is: side to side
+/// when there is clear air between them, top to bottom when one is above the
+/// other. Either way it goes out, across the middle, and back in, so the turn
+/// happens in the gutter between boxes rather than over one of them.
+fn route(ink: &mut Ink, a: &Placed, b: &Placed, hot: bool, g: &Glyphs) {
+    let (arrow, ax, ay, bx, by, vertical) = if b.col > a.right() {
+        // Clear air to the right.
+        (
+            g.arrows[1],
+            a.right() as i32,
+            a.middle() as i32,
+            b.col as i32 - 1,
+            b.middle() as i32,
+            false,
+        )
+    } else if a.col > b.right() {
+        (
+            g.arrows[0],
+            a.col as i32 - 1,
+            a.middle() as i32,
+            b.right() as i32,
+            b.middle() as i32,
+            false,
+        )
+    } else if b.row > a.row {
+        // Overlapping columns: go under.
+        (
+            g.arrows[3],
+            a.centre() as i32,
+            a.bottom() as i32,
+            b.centre() as i32,
+            b.row as i32 - 1,
+            true,
+        )
+    } else if a.row > b.row {
+        (
+            g.arrows[2],
+            a.centre() as i32,
+            a.row as i32 - 1,
+            b.centre() as i32,
+            b.bottom() as i32,
+            true,
+        )
+    } else {
+        return; // the same slot: nothing to draw between them
+    };
+
+    if vertical {
+        let mid = (ay + by) / 2;
+        ink.vline(ax, ay, mid, hot);
+        ink.hline(mid, ax, bx, hot);
+        ink.vline(bx, mid, by, hot);
+    } else {
+        let mid = (ax + bx) / 2;
+        ink.hline(ay, ax, mid, hot);
+        ink.vline(mid, ay, by, hot);
+        ink.hline(by, mid, bx, hot);
+    }
+    // The arrowhead says which way the connection runs, which is the whole
+    // difference between "imports" and "is imported by".
+    if let Some(i) = ink.at(bx, by) {
+        ink.text[i] = Some((arrow, if hot { InkStyle::Near } else { InkStyle::Far }));
+        ink.hot[i] |= hot;
+    }
 }
 
 /// Human-readable name for a node kind, for the detail strip.
@@ -1025,17 +1207,9 @@ fn kind_word(kind: EdgeKind) -> &'static str {
     }
 }
 
-/// The strip under the graph: what the cursor is on, what it connects to, and
+/// The strip under the map: what the cursor is on, what it connects to, and
 /// which edge kinds are switched on.
-///
-/// Everything is capped — four connections each way, six defined symbols —
-/// with a `+n more` tail, because this has a fixed six rows and a hub file can
-/// have dozens of edges.
-///
-/// Only call edges show their label, since that label is the symbol being
-/// called and is the actual information. For an import or a link the label
-/// just repeats the filename already shown.
-fn draw_graph_detail(f: &mut Frame, app: &App, view: &GraphView, area: Rect) {
+fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
     let pal = app.palette;
     let Some(node) = view.selected_node() else {
         f.render_widget(
@@ -1056,7 +1230,7 @@ fn draw_graph_detail(f: &mut Frame, app: &App, view: &GraphView, area: Rect) {
     .iter()
     .enumerate()
     .flat_map(|(i, k)| {
-        let on = view.kinds[crate::graphview::kind_index(*k)];
+        let on = view.kinds[crate::projectmap::kind_index(*k)];
         [
             Span::styled(
                 format!("{}:{} ", i + 1, kind_word(*k)),
@@ -1146,29 +1320,52 @@ fn draw_graph_detail(f: &mut Frame, app: &App, view: &GraphView, area: Rect) {
 fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     let Mode::Bar(b) = &app.mode else { return };
     let pal = app.palette;
-    let sigil = match b.kind {
-        BarKind::Search => " / ",
-        BarKind::Command => " : ",
+    // One bar, so the sigil is a readout rather than a mode you chose: it
+    // follows what has been typed, and changes under you the moment the line
+    // starts or stops with a `*`.
+    let command = b.is_command();
+    let sigil = if command { " * " } else { " / " };
+    // The sigil is drawn as its own block, so the typed `*` is not shown a
+    // second time — and the cursor has to shift back past it to match.
+    let (text, cursor) = if command {
+        (b.command(), b.cursor.saturating_sub(1))
+    } else {
+        (b.input.as_str(), b.cursor)
     };
-    let (before, after) = split_at_char(&b.input, b.cursor);
-    let hint = match b.kind {
-        BarKind::Search if b.results.is_empty() => "  names and contents · Esc close",
-        BarKind::Search => "  up/down pick · Enter jump · Esc close",
-        BarKind::Command => "  Tab complete · Enter run · Esc close",
+    let (before, after) = split_at_char(text, cursor);
+
+    // What Tab would fill in, shown in grey ahead of the cursor. Only at the
+    // end of the line: in the middle of one it would read as text that is
+    // already there rather than as an offer.
+    let ghost = if command && b.cursor == b.input.chars().count() {
+        crate::app::completion_for(b, app.tree.root_path(), app.config.show_hidden)
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let hint = if command {
+        "  Tab or → complete · Enter run · Esc close"
+    } else if b.results.is_empty() {
+        "  names and contents · * for a command · Esc close"
+    } else {
+        "  up/down pick · Enter jump · Esc close"
+    };
+    // The real cursor lives in the editor, so the bar draws its own — on the
+    // next character of the line, or on the first character being offered when
+    // there is nothing left of the line. Sitting it on a blank instead would
+    // push the offer along by a space and break the word in half.
+    let (cursor_char, ghost) = match (after.chars().next(), ghost.chars().next()) {
+        (Some(c), _) => (c.to_string(), ghost),
+        (None, Some(c)) => (c.to_string(), ghost.chars().skip(1).collect()),
+        (None, None) => (" ".to_string(), String::new()),
     };
     let line = Line::from(vec![
         Span::styled(sigil, pal.text.add_modifier(Modifier::REVERSED)),
         Span::styled(before, pal.text),
-        // The real cursor lives in the editor, so the bar draws its own.
-        Span::styled(
-            after
-                .chars()
-                .next()
-                .map(String::from)
-                .unwrap_or_else(|| " ".into()),
-            pal.text.add_modifier(Modifier::REVERSED),
-        ),
+        Span::styled(cursor_char, pal.text.add_modifier(Modifier::REVERSED)),
         Span::styled(after.chars().skip(1).collect::<String>(), pal.text),
+        Span::styled(ghost, pal.dim),
         Span::styled(hint, pal.dim),
     ]);
     f.render_widget(Paragraph::new(line), area);
@@ -1199,7 +1396,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                     pal.text.add_modifier(Modifier::REVERSED),
                 ),
                 Span::styled(after.chars().skip(1).collect::<String>(), pal.text),
-                Span::styled("   Enter confirm · Esc cancel", pal.dim),
+                Span::styled("   Enter confirm | Esc cancel", pal.dim),
             ])
         }
         Mode::Confirm(c) => Line::from(vec![
@@ -1207,11 +1404,11 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(format!(" {}", c.message), pal.marker),
         ]),
         _ => {
-            if app.graph_view.is_some() {
+            if app.project_map.is_some() {
                 let line = Line::from(vec![
                     Span::styled(format!(" {}", app.status), pal.text),
                     Span::styled(
-                        "   arrows move · Enter open · 1-4 kinds · o orphans · / filter · Esc back",
+                        "   arrows move | Enter open | 1-4 kinds | o unconnected | / filter | Esc back",
                         pal.dim,
                     ),
                 ]);
@@ -1219,11 +1416,11 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 return;
             }
             let hints = match (&app.mode, app.focus) {
-                (Mode::Settings(_), _) => "up/down pick · Enter change · ^S write · Esc close",
+                (Mode::Settings(_), _) => "up/down pick | Enter change | ^S write | Esc close",
                 (Mode::Bar(_), _) => "Esc close",
-                (_, Focus::Tree) => "/ search · w web · : commands · n new · ? help · q quit",
-                (_, Focus::Editor) if app.read_mode => "up/down scroll · e edit · Esc back",
-                (_, Focus::Editor) => "^S save · ^Z undo · ^K cut line · Esc back",
+                (_, Focus::Tree) => "/ search | m map | n new | q quit",
+                (_, Focus::Editor) if app.read_mode => "up/down scroll | e edit | Esc back",
+                (_, Focus::Editor) => "^S save | ^Z undo | ^K cut line | Esc back",
             };
             let pos = position_readout(app);
             let room = area.width as usize;
@@ -1272,43 +1469,47 @@ fn centred(area: Rect, w: u16, h: u16) -> Rect {
     }
 }
 
-/// The keymap shown by `?`, as `(keys, description)` pairs.
+/// The left half of the `?` window: every key, as `(keys, description)` pairs.
 ///
 /// An empty `keys` makes the row a section heading, and a pair of empty
-/// strings is a spacer. This is the user-facing source of truth for the
-/// bindings — if you add a key in `app`, add it here too, and to the table in
-/// the README.
-const HELP: &[(&str, &str)] = &[
+/// strings is a spacer. This and [`COMMANDS`] are the user-facing source of
+/// truth for the bindings — if you add a key in `app`, add it here too, and to
+/// the table in the README.
+const KEYS: &[(&str, &str)] = &[
     ("", "TREE"),
-    ("up down  k j", "move the cursor"),
+    ("", "  i j k l are the arrows, for a keyboard without"),
+    ("up down  i k", "move the cursor"),
     ("Enter", "open or close a folder, or edit a file"),
-    ("right", "open a folder, or step inside an open one"),
-    ("left", "close a folder, or jump to its parent"),
-    ("g  G", "first / last entry"),
-    ("n  N", "new file / new folder"),
+    ("right  l", "open a folder, or step inside an open one"),
+    ("left  j", "close a folder, or jump to its parent"),
+    ("Shift+up  I", "first entry"),
+    ("Shift+down  K", "last entry"),
+    ("n", "new — a dot in the name makes it a file"),
     ("r", "rename"),
-    ("Ctrl+C  Ctrl+V", "copy · paste into this folder"),
-    ("d", "delete (asks first) — also :delete"),
+    ("Ctrl+C  Ctrl+V", "copy | paste into this folder"),
+    ("d", "delete (asks first) — also *delete"),
     (".", "show or hide dotfiles"),
-    ("R  F5", "re-read the project from disk"),
+    ("F5", "re-read from disk — also *reload"),
     ("Ctrl+B", "fold the tree away, and bring it back"),
     ("", ""),
-    ("", "GRAPH"),
-    ("w", "draw the project as a graph"),
+    ("", "PROJECT MAP"),
+    ("m", "the map: boxes and lines"),
     ("", "  notes link by [[wikilink]], code by import and call"),
-    ("arrows", "move to the nearest file that way"),
+    ("arrows  i j k l", "move to the nearest file that way"),
     ("Enter", "open the file the cursor is on"),
     ("1 2 3 4", "wikilinks / links / imports / calls"),
-    ("o  L  r", "orphans · all labels · lay out again"),
+    ("o  r", "unconnected files | lay out again"),
     ("", ""),
-    ("", "SEARCH AND COMMANDS"),
+    ("", "THE BAR"),
     ("/", "search names and contents"),
-    (":", "commands — :new :copy :delete :set"),
-    ("", "  they read as English: copy README.md to notes"),
+    ("*", "…or start with a star for a command"),
+    (":", "the bar, with the star already typed"),
+    ("Ctrl+F  Ctrl+P", "the same two, from inside the editor"),
     (",  F2", "the settings area"),
     ("", ""),
     ("", "PREVIEW"),
-    ("up down", "scroll a note or a picture"),
+    ("up down  i k", "scroll a note or a picture"),
+    ("wheel", "one line at a time, in either pane"),
     ("e", "switch to raw editing"),
     ("Esc", "back to the tree"),
     ("", ""),
@@ -1321,18 +1522,80 @@ const HELP: &[(&str, &str)] = &[
     ("q  Ctrl+Q", "quit"),
 ];
 
+/// The right half of the `?` window: every command, in the form you type it.
+///
+/// Written with the star, because that is what reaches them — there is one bar
+/// and this is how you tell it you meant a command. Anything added to
+/// `App::run_command` belongs here, and in `complete_command`'s list too.
+const COMMANDS: &[(&str, &str)] = &[
+    ("", "FILES"),
+    ("*copy a to b", "copy a file or a whole folder"),
+    ("*delete", "delete what the cursor is on"),
+    ("*delete notes/old.md", "…or any path in the project"),
+    ("*new notes/today.md", "make a file"),
+    ("*mkdir notes", "make a folder"),
+    ("", ""),
+    ("", "MOVING"),
+    ("*line 42", "jump to a line — *42 does too"),
+    ("*map", "the project map"),
+    ("*reload", "re-read the project from disk"),
+    ("", ""),
+    ("", "CHANGING THINGS"),
+    ("*replace old new", "across every file, after confirming"),
+    ("*replace \"a b\" \"c d\"", "quote anything with spaces"),
+    ("*set tab_width 2", "change a setting"),
+    ("*set theme.heading cyan", "repaint without a restart"),
+    ("*config", "the settings area"),
+    ("", ""),
+    ("", "LEAVING"),
+    ("*w  *q  *wq", "save | quit | both"),
+    ("*help", "this window"),
+    ("", ""),
+    ("", "  every command reads as English, and"),
+    ("", "  Tab or → finishes any part of one"),
+];
+
 /// The keymap overlay. Scrollable, because the full list does not fit a short
 /// terminal — the footer says which of the two situations you are in.
 fn draw_help(f: &mut Frame, area: Rect, pal: &Palette, scroll: usize) {
-    let popup = centred(area, 62, HELP.len() as u16 + 2);
-    // Short terminals cannot show the whole keymap at once.
-    let scrolls = (popup.height as usize).saturating_sub(2) < HELP.len();
+    // Keys on the left, commands on the right, so `?` answers both halves of
+    // "how do I do this" at once. Every width here is measured from the tables
+    // rather than written down, so adding a row with a long description
+    // widens the window instead of quietly losing the end of the line.
+    let (keys_field, keys_w) = (field_width(KEYS), natural_width(KEYS));
+    let (cmds_field, cmds_w) = (field_width(COMMANDS), natural_width(COMMANDS));
+
+    // One column: the two tables run together with a blank line between, which
+    // makes one wider field for both and so has to be measured on the joined
+    // list rather than on either half.
+    let stacked: Vec<(&str, &str)> = KEYS
+        .iter()
+        .copied()
+        .chain(std::iter::once(("", "")))
+        .chain(COMMANDS.iter().copied())
+        .collect();
+
+    // Two columns need both of them whole, plus the border and a gutter.
+    let two_up = (keys_w + cmds_w + 5) as u16 <= area.width.saturating_sub(2);
+    let rows = if two_up {
+        KEYS.len().max(COMMANDS.len())
+    } else {
+        stacked.len()
+    };
+    let width = if two_up {
+        (keys_w + cmds_w + 5) as u16
+    } else {
+        (natural_width(&stacked) + 2) as u16
+    };
+    let popup = centred(area, width, rows as u16 + 2);
+    let scrolls = (popup.height as usize).saturating_sub(2) < rows;
+
     f.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(pal.border_focus)
         .title(Line::from(Span::styled(
-            " Keys ",
+            " Keys and commands ",
             pal.text.add_modifier(Modifier::BOLD),
         )))
         .title_bottom(Line::from(Span::styled(
@@ -1347,8 +1610,60 @@ fn draw_help(f: &mut Frame, area: Rect, pal: &Palette, scroll: usize) {
     f.render_widget(block, popup);
 
     let height = inner.height as usize;
-    let scroll = scroll.min(HELP.len().saturating_sub(height));
-    let lines: Vec<Line> = HELP
+    let scroll = scroll.min(rows.saturating_sub(height));
+    if two_up {
+        let halves = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(keys_w as u16 + 2), Constraint::Min(0)])
+            .split(inner);
+        f.render_widget(
+            help_column(KEYS, scroll, height, keys_field, pal),
+            halves[0],
+        );
+        f.render_widget(
+            help_column(COMMANDS, scroll, height, cmds_field, pal),
+            halves[1],
+        );
+    } else {
+        let field = field_width(&stacked);
+        f.render_widget(help_column(&stacked, scroll, height, field, pal), inner);
+    }
+}
+
+/// How wide the first field has to be for every row of `rows` to line up.
+fn field_width(rows: &[(&str, &str)]) -> usize {
+    rows.iter()
+        .filter(|(keys, _)| !keys.is_empty())
+        .map(|(keys, _)| keys.width())
+        .max()
+        .unwrap_or(0)
+}
+
+/// How wide the column has to be for no row of it to be cut off. Headings and
+/// spacers span the whole column, so they count too.
+fn natural_width(rows: &[(&str, &str)]) -> usize {
+    let field = field_width(rows);
+    rows.iter()
+        .map(|(keys, desc)| {
+            if keys.is_empty() {
+                desc.width()
+            } else {
+                field + 2 + desc.width()
+            }
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// One column of the `?` window, already scrolled and clipped to `height`.
+fn help_column<'a>(
+    rows: &'a [(&'a str, &'a str)],
+    scroll: usize,
+    height: usize,
+    field: usize,
+    pal: &Palette,
+) -> Paragraph<'a> {
+    let lines: Vec<Line> = rows
         .iter()
         .skip(scroll)
         .take(height)
@@ -1357,13 +1672,16 @@ fn draw_help(f: &mut Frame, area: Rect, pal: &Palette, scroll: usize) {
                 Line::from(Span::styled(desc.to_string(), pal.heading))
             } else {
                 Line::from(vec![
-                    Span::styled(format!("{keys:<18}"), pal.text.add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        format!("{keys:<field$}  "),
+                        pal.text.add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(desc.to_string(), pal.dim),
                 ])
             }
         })
         .collect();
-    f.render_widget(Paragraph::new(lines), inner);
+    Paragraph::new(lines)
 }
 
 /// The settings overlay: every key from `Config::settings_index`, its current

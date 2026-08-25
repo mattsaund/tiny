@@ -126,7 +126,7 @@ pub struct Edge {
     pub count: usize,
 }
 
-/// The finished graph. Immutable once built — `GraphView` filters what is
+/// The finished graph. Immutable once built — `ProjectMap` filters what is
 /// drawn without ever changing this.
 #[derive(Debug, Clone)]
 pub struct Graph {

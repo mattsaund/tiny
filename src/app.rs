@@ -18,8 +18,21 @@
 //!   `Normal` for none of them.
 //!
 //! [`App::on_key`] dispatches on `Mode` first and only falls through to `Focus`
-//! when the mode is `Normal`. The graph is checked before either, because it
+//! when the mode is `Normal`. The map is checked before either, because it
 //! takes the whole screen and every key with it.
+//!
+//! # `i j k l` are the arrow keys
+//!
+//! Everywhere a pane is being navigated rather than typed into, `i j k l` do
+//! what the four arrows do — up, left, down, right, in the inverted-T anyone
+//! who has held a keyboard sideways already knows. `I` and `K` go all the way,
+//! the same as Shift with an arrow. They exist for keyboards with no cursor
+//! cluster, and they are deliberately *not* the vim `h j k l`: `j` and `k`
+//! cannot mean both left-down and down-up at once, and a layout that matches
+//! the arrows is the one that needs no explaining.
+//!
+//! The bar, the prompts and the editor are exempt, because there a letter is a
+//! letter being typed.
 //!
 //! A third flag, `read_mode`, decides whether a focused text file shows
 //! rendered output or raw source. It is not part of `Mode` because it is a
@@ -63,10 +76,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::config::{Config, Markers, Palette};
 use crate::editor::Editor;
 use crate::graph;
-use crate::graphview::{self, GraphView};
 use crate::highlight::Highlighter;
 use crate::media;
 use crate::project;
+use crate::projectmap::{self, ProjectMap};
 use crate::search::{self, Hit, HitKind};
 use crate::tree::{Row, Tree};
 
@@ -81,8 +94,8 @@ pub enum Focus {
 /// Which single-line prompt is open in the status bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptKind {
-    NewFile,
-    NewDir,
+    /// A file or a folder, decided by whether the typed name has an extension.
+    New,
     Rename,
 }
 
@@ -100,18 +113,18 @@ pub struct Prompt {
     pub base: PathBuf,
 }
 
-/// The bar across the top: project search, or a command line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BarKind {
-    Search,
-    Command,
-}
+/// The character that turns the bar from a search into a command line.
+///
+/// One bar does both jobs, and this is the whole of the switch: type
+/// `README` and it searches, type `*copy README.md to notes` and it runs. The
+/// cost is that a search cannot begin with a literal `*`, which is a small
+/// price for never having to remember which of two bars you are in.
+pub const COMMAND_SIGIL: char = '*';
 
 /// State for the bar. Search results live here rather than on `App` because
 /// they only exist while the bar is open, and closing it should discard them.
 #[derive(Debug, Clone)]
 pub struct Bar {
-    pub kind: BarKind,
     pub input: String,
     /// Character index into `input`.
     pub cursor: usize,
@@ -126,16 +139,27 @@ pub struct Bar {
 }
 
 impl Bar {
-    fn new(kind: BarKind) -> Self {
+    fn new(input: String) -> Self {
         Self {
-            kind,
-            input: String::new(),
-            cursor: 0,
+            cursor: input.chars().count(),
+            input,
             results: Vec::new(),
             selected: 0,
             scroll: 0,
             searched: false,
         }
+    }
+
+    /// Whether what has been typed so far is a command rather than a query.
+    /// Re-read on every keystroke, so deleting the `*` turns the line back
+    /// into a search and the results come straight back.
+    pub fn is_command(&self) -> bool {
+        self.input.starts_with(COMMAND_SIGIL)
+    }
+
+    /// The command itself, without the sigil. Empty for a search.
+    pub fn command(&self) -> &str {
+        self.input.strip_prefix(COMMAND_SIGIL).unwrap_or("")
     }
 }
 
@@ -336,8 +360,8 @@ pub struct App {
     /// Rebuilt alongside the palette when `syntax_theme` changes.
     pub highlighter: Highlighter,
     pub media: Option<MediaCache>,
-    /// The graph, while it is being looked at.
-    pub graph_view: Option<GraphView>,
+    /// The project map, while it is being looked at.
+    pub project_map: Option<ProjectMap>,
     /// What `Ctrl+C` picked up, waiting for a `Ctrl+V`. A path, not a copy of
     /// the bytes: the file is read at paste time, so editing it in between
     /// pastes what is there now rather than a stale snapshot.
@@ -359,6 +383,10 @@ pub struct App {
     /// are used on the first frame, before anything has been drawn.
     pub last_edit_height: usize,
     pub last_tree_height: usize,
+    /// The columns the tree pane covered in the last frame, as `[x0, x1)`, so
+    /// a mouse wheel can tell which pane it is over. `None` when the tree was
+    /// not drawn at all. Written by `ui` for the same reason the heights are.
+    pub last_tree_cols: Option<(u16, u16)>,
 }
 
 impl App {
@@ -402,7 +430,7 @@ impl App {
             palette,
             highlighter,
             media: None,
-            graph_view: None,
+            project_map: None,
             clipboard: None,
             tree_hidden: false,
             focus_before_hide: Focus::Tree,
@@ -410,6 +438,7 @@ impl App {
             should_quit: false,
             last_edit_height: 20,
             last_tree_height: 20,
+            last_tree_cols: None,
         };
         app.sync_preview();
 
@@ -483,8 +512,8 @@ impl App {
         }
     }
 
-    /// Settings the graph is built with, derived from the live config so
-    /// `:set show_hidden true` changes the graph too.
+    /// Settings the link graph is built with, derived from the live config so
+    /// `*set show_hidden true` changes the map too.
     pub fn graph_options(&self) -> graph::Options {
         graph::Options {
             ignore: self.config.search_ignore.clone(),
@@ -494,26 +523,26 @@ impl App {
         }
     }
 
-    /// Build the graph and hand the screen over to it.
+    /// Build the map and hand the screen over to it.
     ///
     /// Built fresh every time rather than cached: it is the only way to be
     /// sure it reflects files edited since the last look, and there is no
     /// invalidation scheme that would be simpler than just rebuilding.
     /// Synchronous, so a large project pauses here — see `graph::build`.
-    fn open_graph(&mut self) {
+    fn open_map(&mut self) {
         let root = self.root().to_path_buf();
         let options = self.graph_options();
-        let view = GraphView::build(&root, &options);
+        let view = ProjectMap::build(&root, &options);
         self.status = if view.graph.nodes.is_empty() {
-            "nothing to graph yet".into()
+            "nothing on the map yet".into()
         } else {
-            format!("graph — {}", view.summary())
+            format!("project map — {}", view.summary())
         };
-        self.graph_view = Some(view);
+        self.project_map = Some(view);
     }
 
     /// Move the cursor to a path and start editing it. Used when leaving the
-    /// graph with Enter. A path outside the project is reported rather than
+    /// map with Enter. A path outside the project is reported rather than
     /// opened, since the tree has nowhere to put it.
     pub fn open_path(&mut self, path: &Path) {
         if self.reveal(path) {
@@ -722,16 +751,16 @@ impl App {
     // ---- key dispatch -----------------------------------------------------
 
     /// The single entry point for input. Dispatches in strict priority order:
-    /// graph, then mode, then focus.
+    /// map, then mode, then focus.
     ///
     /// See the module docs for the take-and-replace pattern: the mode is moved
     /// out and `Normal` left in its place, so a handler that does nothing
     /// closes its overlay, and one that wants to stay open has to say so.
     pub fn on_key(&mut self, key: KeyEvent) {
-        // The graph takes the whole screen while it is open, and every key
+        // The map takes the whole screen while it is open, and every key
         // with it.
-        if self.graph_view.is_some() {
-            return self.on_graph_key(key);
+        if self.project_map.is_some() {
+            return self.on_map_key(key);
         }
         // Take the mode out so handlers can own it without fighting the borrow
         // checker, then put back whatever they leave behind.
@@ -751,42 +780,47 @@ impl App {
     /// Arrows scroll the keymap; anything else puts it away.
     fn on_help_key(&mut self, scroll: usize, key: KeyEvent) {
         let page = self.last_tree_height.max(1);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let next = match key.code {
-            KeyCode::Up | KeyCode::Char('k') => scroll.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => scroll + 1,
+            KeyCode::Up if shift => 0,
+            KeyCode::Down if shift => usize::MAX,
+            KeyCode::Char('I') => 0,
+            KeyCode::Char('K') => usize::MAX,
+            KeyCode::Up | KeyCode::Char('i') => scroll.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('k') => scroll + 1,
             KeyCode::PageUp => scroll.saturating_sub(page),
             KeyCode::PageDown => scroll + page,
-            KeyCode::Home | KeyCode::Char('g') => 0,
-            KeyCode::End | KeyCode::Char('G') => usize::MAX,
+            KeyCode::Home => 0,
+            KeyCode::End => usize::MAX,
             _ => return,
         };
         self.mode = Mode::Help(next);
     }
 
-    /// Forward a key to the graph view and act on what it asks for. The view
-    /// handles its own navigation; only opening a file and closing the graph
+    /// Forward a key to the map and act on what it asks for. The view
+    /// handles its own navigation; only opening a file and closing the map
     /// need application state.
-    fn on_graph_key(&mut self, key: KeyEvent) {
-        let action = match self.graph_view.as_mut() {
+    fn on_map_key(&mut self, key: KeyEvent) {
+        let action = match self.project_map.as_mut() {
             Some(view) => view.on_key(key),
             None => return,
         };
         match action {
-            graphview::Action::None => {}
-            graphview::Action::Close => {
-                self.graph_view = None;
+            projectmap::Action::None => {}
+            projectmap::Action::Close => {
+                self.project_map = None;
                 self.status = "back to the tree".into();
                 return;
             }
-            graphview::Action::Open(path) => {
-                self.graph_view = None;
+            projectmap::Action::Open(path) => {
+                self.project_map = None;
                 self.open_path(&path);
                 return;
             }
         }
         // The counts move as filters change, so keep them in front of you.
-        if let Some(view) = self.graph_view.as_ref() {
-            self.status = format!("graph — {}", view.summary());
+        if let Some(view) = self.project_map.as_ref() {
+            self.status = format!("project map — {}", view.summary());
         }
     }
 
@@ -795,35 +829,41 @@ impl App {
     /// can be bare.
     fn on_tree_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let page = self.last_tree_height.saturating_sub(1).max(1) as isize;
         match key.code {
             KeyCode::Char('s') if ctrl => self.save_active(),
             KeyCode::Char('q') if ctrl => self.request_quit(),
-            KeyCode::Char('f') if ctrl => self.open_bar(BarKind::Search),
-            KeyCode::Char('p') if ctrl => self.open_bar(BarKind::Command),
+            KeyCode::Char('f') if ctrl => self.open_bar(false),
+            KeyCode::Char('p') if ctrl => self.open_bar(true),
             KeyCode::Char('c') if ctrl => self.copy_selection(),
             KeyCode::Char('v') if ctrl => self.paste_clipboard(),
             KeyCode::Char('b') if ctrl => self.toggle_tree_pane(),
-            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            // Shift and an arrow goes all the way. `I` and `K` are the same
+            // gesture for a keyboard with no arrows — see the note on `i j k l`
+            // in the module docs.
+            KeyCode::Up if shift => self.select_index(0),
+            KeyCode::Down if shift => self.select_index(usize::MAX),
+            KeyCode::Char('I') => self.select_index(0),
+            KeyCode::Char('K') => self.select_index(usize::MAX),
+            KeyCode::Up | KeyCode::Char('i') => self.move_selection(-1),
+            KeyCode::Down | KeyCode::Char('k') => self.move_selection(1),
             KeyCode::PageUp => self.move_selection(-page),
             KeyCode::PageDown => self.move_selection(page),
-            KeyCode::Home | KeyCode::Char('g') => self.select_index(0),
-            KeyCode::End | KeyCode::Char('G') => self.select_index(usize::MAX),
+            KeyCode::Home => self.select_index(0),
+            KeyCode::End => self.select_index(usize::MAX),
             KeyCode::Right | KeyCode::Char('l') => self.activate(),
             KeyCode::Enter => self.toggle_or_open(),
-            KeyCode::Left | KeyCode::Char('h') => self.collapse_or_parent(),
+            KeyCode::Left | KeyCode::Char('j') => self.collapse_or_parent(),
             KeyCode::Tab => self.focus_editor(),
-            KeyCode::Char('/') => self.open_bar(BarKind::Search),
-            KeyCode::Char(':') => self.open_bar(BarKind::Command),
+            KeyCode::Char('/') => self.open_bar(false),
             KeyCode::Char(',') | KeyCode::F(2) => self.open_settings(),
-            KeyCode::Char('w') => self.open_graph(),
-            KeyCode::Char('n') => self.begin_prompt(PromptKind::NewFile),
-            KeyCode::Char('N') => self.begin_prompt(PromptKind::NewDir),
+            KeyCode::Char('m') => self.open_map(),
+            KeyCode::Char('n') => self.begin_prompt(PromptKind::New),
             KeyCode::Char('r') => self.begin_prompt(PromptKind::Rename),
             KeyCode::Char('d') => self.begin_delete(),
             KeyCode::Char('.') => self.toggle_hidden(),
-            KeyCode::Char('R') | KeyCode::F(5) => self.refresh(),
+            KeyCode::F(5) => self.refresh(),
             KeyCode::Char('?') => self.mode = Mode::Help(0),
             KeyCode::Char('q') | KeyCode::Esc => self.request_quit(),
             _ => {}
@@ -849,10 +889,10 @@ impl App {
         match key.code {
             KeyCode::Char('s') if ctrl => return self.save_active(),
             KeyCode::Char('q') if ctrl => return self.request_quit(),
-            KeyCode::Char('f') if ctrl => return self.open_bar(BarKind::Search),
+            KeyCode::Char('f') if ctrl => return self.open_bar(false),
             // Ctrl+P reaches the command bar without leaving the editor, where
             // a bare `:` is just a character being typed.
-            KeyCode::Char('p') if ctrl => return self.open_bar(BarKind::Command),
+            KeyCode::Char('p') if ctrl => return self.open_bar(true),
             KeyCode::Char('b') if ctrl => return self.toggle_tree_pane(),
             // Esc means "back to the tree" even when the tree is folded away,
             // so it brings the pane back rather than handing the keyboard to
@@ -909,37 +949,51 @@ impl App {
     /// Reading rendered markdown, or looking at a picture: arrows scroll.
     fn on_read_key(&mut self, key: KeyEvent, page: usize) {
         let max = self.preview_len.saturating_sub(1);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
-            KeyCode::Char('e') | KeyCode::Char('i') => {
+            KeyCode::Up if shift => self.preview_scroll = 0,
+            KeyCode::Down if shift => self.preview_scroll = max,
+            KeyCode::Char('I') => self.preview_scroll = 0,
+            KeyCode::Char('K') => self.preview_scroll = max,
+            KeyCode::Char('e') => {
                 if matches!(self.preview, Preview::Buffer { .. }) {
                     self.read_mode = false;
                     self.status = "editing — ^S save, Esc back".into();
                 }
             }
-            KeyCode::Char('/') => self.open_bar(BarKind::Search),
-            KeyCode::Char(':') => self.open_bar(BarKind::Command),
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Char('/') => self.open_bar(false),
+            KeyCode::Up | KeyCode::Char('i') => {
                 self.preview_scroll = self.preview_scroll.saturating_sub(1)
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down | KeyCode::Char('k') => {
                 self.preview_scroll = (self.preview_scroll + 1).min(max)
             }
             KeyCode::PageUp => self.preview_scroll = self.preview_scroll.saturating_sub(page),
             KeyCode::PageDown => self.preview_scroll = (self.preview_scroll + page).min(max),
-            KeyCode::Home | KeyCode::Char('g') => self.preview_scroll = 0,
-            KeyCode::End | KeyCode::Char('G') => self.preview_scroll = max,
+            KeyCode::Home => self.preview_scroll = 0,
+            KeyCode::End => self.preview_scroll = max,
             _ => {}
         }
     }
 
     // ---- the bar ----------------------------------------------------------
 
-    /// Open the search or command line, discarding whatever was there before.
-    fn open_bar(&mut self, kind: BarKind) {
-        self.mode = Mode::Bar(Bar::new(kind));
-        self.status = match kind {
-            BarKind::Search => "search the project — Enter to jump, Esc to close".into(),
-            BarKind::Command => "command — :new, :copy, :delete, :set — Tab completes".into(),
+    /// Open the bar, discarding whatever was there before.
+    ///
+    /// `as_command` only decides what is already typed into it: the sigil, or
+    /// nothing. After that the bar decides for itself, keystroke by keystroke,
+    /// which of the two things it is.
+    fn open_bar(&mut self, as_command: bool) {
+        let input = if as_command {
+            COMMAND_SIGIL.to_string()
+        } else {
+            String::new()
+        };
+        self.mode = Mode::Bar(Bar::new(input));
+        self.status = if as_command {
+            "command — Tab completes | Enter runs | Esc closes".into()
+        } else {
+            format!("search — or {COMMAND_SIGIL} for a command, like {COMMAND_SIGIL}copy a to b")
         };
     }
 
@@ -973,16 +1027,13 @@ impl App {
                 return;
             }
             KeyCode::Enter => {
-                match b.kind {
-                    BarKind::Search => {
-                        if let Some(hit) = b.results.get(b.selected).cloned() {
-                            self.jump_to(&hit);
-                            self.status = display_name(&hit.path);
-                        } else {
-                            self.status = "no matches".into();
-                        }
-                    }
-                    BarKind::Command => self.run_command(&b.input.clone()),
+                if b.is_command() {
+                    self.run_command(b.command());
+                } else if let Some(hit) = b.results.get(b.selected).cloned() {
+                    self.jump_to(&hit);
+                    self.status = display_name(&hit.path);
+                } else {
+                    self.status = "no matches".into();
                 }
                 return;
             }
@@ -1001,7 +1052,7 @@ impl App {
                 return;
             }
             KeyCode::Tab => {
-                if b.kind == BarKind::Command {
+                if b.is_command() {
                     complete_command(&mut b, self.tree.root_path(), self.config.show_hidden);
                 }
                 self.mode = Mode::Bar(b);
@@ -1024,7 +1075,17 @@ impl App {
                 }
             }
             KeyCode::Left => b.cursor = b.cursor.saturating_sub(1),
-            KeyCode::Right => b.cursor = (b.cursor + 1).min(b.input.chars().count()),
+            KeyCode::Right => {
+                // At the end of the line the only thing to the right of the
+                // cursor is the grey suggestion, so the arrow takes it up —
+                // the same key, doing the same thing, to what is drawn there.
+                // Anywhere else it moves along the text as it always did.
+                if b.is_command() && b.cursor == b.input.chars().count() {
+                    complete_command(&mut b, self.tree.root_path(), self.config.show_hidden);
+                } else {
+                    b.cursor = (b.cursor + 1).min(b.input.chars().count());
+                }
+            }
             KeyCode::Home => b.cursor = 0,
             KeyCode::End => b.cursor = b.input.chars().count(),
             KeyCode::Char(c) => {
@@ -1038,7 +1099,12 @@ impl App {
             }
         }
 
-        if b.kind == BarKind::Search {
+        // The line may have just become a command, or stopped being one.
+        if b.is_command() {
+            b.results.clear();
+            b.searched = false;
+            b.selected = 0;
+        } else {
             self.run_search(&mut b);
             self.preview_hit(&b);
         }
@@ -1119,8 +1185,8 @@ impl App {
                 self.open_settings();
                 Ok(String::new())
             }
-            "graph" | "web" => {
-                self.open_graph();
+            "map" | "graph" | "web" => {
+                self.open_map();
                 Ok(String::new())
             }
             "w" | "write" | "save" => {
@@ -1148,6 +1214,9 @@ impl App {
             "mkdir" => self.cmd_new(rest, true),
             "delete" | "rm" => self.cmd_delete(rest),
             "copy" | "cp" => self.cmd_copy(rest),
+            "line" | "go" => self.cmd_line(rest),
+            // A bare number is a line number, the way `:42` is everywhere else.
+            n if n.parse::<usize>().is_ok() => self.cmd_line(&args),
             other => Err(anyhow!("unknown command `{other}` — try :help")),
         };
         match result {
@@ -1228,6 +1297,87 @@ impl App {
         let src = safe_join(&root, &from, &root)?;
         let dst = safe_join(&root, &into, &root)?;
         self.copy_entry(&src, &dst)
+    }
+
+    /// `*line 42`, `*go to 42`, or just `*42` — put the cursor on that line of
+    /// the open file.
+    ///
+    /// Counted from 1, the way every error message and every other editor
+    /// counts, and clamped to the end of the file rather than refused: asking
+    /// for line 900 of a 400-line file plainly means the end.
+    ///
+    /// This always lands in the editor, never in the rendered view. "Line 42"
+    /// is a fact about the source; the rendered version of a note has its own
+    /// line count that has nothing to do with it.
+    fn cmd_line(&mut self, args: &[String]) -> Result<String> {
+        // `go to 42` reads better than `go 42`, so the joining word is allowed
+        // here as well and simply skipped.
+        let number = args
+            .iter()
+            .find(|a| !a.eq_ignore_ascii_case("to") && !a.eq_ignore_ascii_case("line"))
+            .ok_or_else(|| anyhow!("say it like: line 42"))?;
+        let wanted: usize = number
+            .parse()
+            .map_err(|_| anyhow!("`{number}` is not a line number"))?;
+        if wanted == 0 {
+            return Err(anyhow!("lines are counted from 1"));
+        }
+        if !matches!(self.preview, Preview::Buffer { .. }) {
+            return Err(anyhow!("no file open to jump inside"));
+        }
+
+        self.read_mode = false;
+        self.focus = Focus::Editor;
+        let Some(ed) = self.active_buffer_mut() else {
+            return Err(anyhow!("no file open to jump inside"));
+        };
+        let last = ed.line_count().saturating_sub(1);
+        let line = (wanted - 1).min(last);
+        ed.goto(line, 0);
+        Ok(format!("line {}", line + 1))
+    }
+
+    /// One notch of the mouse wheel, over the pane at `column`.
+    ///
+    /// Always exactly one line. The wheel is the one input where a terminal
+    /// will happily send three of something for one flick of a finger, and a
+    /// note that jumps three lines at a time is hard to read against.
+    ///
+    /// What "one line" means depends on the pane. A rendered note or a picture
+    /// has no cursor, so the view itself moves. The editor does have one, and
+    /// its view is tied to it, so the cursor moves instead — which scrolls the
+    /// view once it reaches an edge, and never leaves you looking at somewhere
+    /// you cannot type.
+    pub fn on_scroll(&mut self, down: bool, column: u16) {
+        let step: isize = if down { 1 } else { -1 };
+        if self.over_tree(column) {
+            // The preview follows the tree cursor, so moving the view on its
+            // own would only be undone on the next frame.
+            self.move_selection(step);
+            return;
+        }
+        if self.read_mode || !matches!(self.preview, Preview::Buffer { .. }) {
+            let max = self.preview_len.saturating_sub(1);
+            self.preview_scroll = if down {
+                (self.preview_scroll + 1).min(max)
+            } else {
+                self.preview_scroll.saturating_sub(1)
+            };
+        } else if let Some(ed) = self.active_buffer_mut() {
+            if down {
+                ed.move_down();
+            } else {
+                ed.move_up();
+            }
+        }
+    }
+
+    /// Whether `column` fell inside the tree pane as it was last drawn.
+    ///
+    /// False whenever the tree is not on screen, which covers both `Ctrl+B`
+    /// and the very first frame, before `ui` has said where anything is.
+    fn over_tree(&self, column: u16) -> bool {
+        matches!(self.last_tree_cols, Some((x0, x1)) if column >= x0 && column < x1)
     }
 
     /// `Ctrl+C`: remember what the cursor is on. Nothing is read or written
@@ -1390,6 +1540,7 @@ impl App {
     /// value and immediately saving is the obvious thing to want.
     fn on_settings_key(&mut self, mut s: Settings, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let index = Config::settings_index();
         let last = index.len().saturating_sub(1);
 
@@ -1458,10 +1609,14 @@ impl App {
                 Ok(p) => self.status = format!("wrote {}", p.display()),
                 Err(e) => self.status = format!("{e:#}"),
             },
-            KeyCode::Up | KeyCode::Char('k') => s.selected = s.selected.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => s.selected = (s.selected + 1).min(last),
-            KeyCode::Home | KeyCode::Char('g') => s.selected = 0,
-            KeyCode::End | KeyCode::Char('G') => s.selected = last,
+            KeyCode::Up if shift => s.selected = 0,
+            KeyCode::Down if shift => s.selected = last,
+            KeyCode::Char('I') => s.selected = 0,
+            KeyCode::Char('K') => s.selected = last,
+            KeyCode::Up | KeyCode::Char('i') => s.selected = s.selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('k') => s.selected = (s.selected + 1).min(last),
+            KeyCode::Home => s.selected = 0,
+            KeyCode::End => s.selected = last,
             KeyCode::Enter => {
                 let key_name = index[s.selected.min(last)].0;
                 let current = self.config.get(key_name).unwrap_or_default();
@@ -1772,12 +1927,7 @@ impl App {
     /// it within.
     fn begin_prompt(&mut self, kind: PromptKind) {
         let (label, input, base) = match kind {
-            PromptKind::NewFile => ("New file".to_string(), String::new(), self.creation_base()),
-            PromptKind::NewDir => (
-                "New folder".to_string(),
-                String::new(),
-                self.creation_base(),
-            ),
+            PromptKind::New => ("New".to_string(), String::new(), self.creation_base()),
             PromptKind::Rename => {
                 let Some(row) = self.selected_row() else {
                     return;
@@ -1813,8 +1963,12 @@ impl App {
             return;
         }
         let result = match p.kind {
-            PromptKind::NewFile => self.create_entry(&p.base, &name, false),
-            PromptKind::NewDir => self.create_entry(&p.base, &name, true),
+            // The same rule the command line uses: a name with an extension is
+            // a file, one without is a folder.
+            PromptKind::New => {
+                let is_dir = !project::names_a_file(&name, Path::new(&name));
+                self.create_entry(&p.base, &name, is_dir)
+            }
             PromptKind::Rename => self.rename_selected(&p.base, &name),
         };
         match result {
@@ -2173,25 +2327,43 @@ pub fn split_args(line: &str) -> Vec<String> {
 ///
 /// Completes to the longest common prefix of the matches rather than to the
 /// first one, so Tab on an ambiguous prefix advances as far as it safely can
-/// and then stops — the shell behaviour. Returns without changing anything
-/// when that would add nothing.
+/// and then stops — the shell behaviour.
 ///
 /// The whole of `copy README.md to notes/today.md` can be typed with Tab, which
 /// is the point: a command that reads like a sentence is no use if every word
 /// of it has to be spelled out by hand.
+fn complete_command(b: &mut Bar, root: &Path, show_hidden: bool) {
+    if let Some(rest) = completion_for(b, root, show_hidden) {
+        b.input.push_str(&rest);
+        b.cursor = b.input.chars().count();
+    }
+}
+
+/// What `Tab` would add to the line, if anything.
+///
+/// Split out from [`complete_command`] so the bar can draw the same answer in
+/// grey before the key is pressed — a suggestion you can see is worth more than
+/// one you have to guess at, and it costs one `read_dir`.
+///
+/// Returns only the *remainder*: every candidate is filtered by what has been
+/// typed already, so the completion always begins with it.
 ///
 /// Any new command added to [`App::run_command`] needs adding to `COMMANDS`
 /// here too, or it will work but never complete — and one that takes a path
 /// needs adding to `TAKES_PATHS` as well.
-fn complete_command(b: &mut Bar, root: &Path, show_hidden: bool) {
+pub fn completion_for(b: &Bar, root: &Path, show_hidden: bool) -> Option<String> {
     const COMMANDS: &[&str] = &[
-        "set", "replace", "config", "settings", "graph", "web", "write", "save", "quit", "help",
-        "reload", "new", "mkdir", "delete", "rm", "copy", "cp",
+        "set", "replace", "config", "settings", "map", "write", "save", "quit", "help", "reload",
+        "new", "mkdir", "delete", "rm", "copy", "cp", "line",
     ];
     const TAKES_PATHS: &[&str] = &["new", "mkdir", "delete", "rm", "copy", "cp"];
 
-    let args = split_args(&b.input);
-    let trailing_space = b.input.ends_with(' ');
+    // The sigil is not part of the command, so completion never sees it. The
+    // replacement at the bottom still works on `b.input`, because whatever is
+    // being completed is a suffix of both.
+    let line = b.command().to_string();
+    let args = split_args(&line);
+    let trailing_space = line.ends_with(' ');
     // Which argument the cursor is in the middle of. A trailing space means the
     // one after the last complete argument has been started but not typed into.
     let position = if trailing_space {
@@ -2222,14 +2394,14 @@ fn complete_command(b: &mut Bar, root: &Path, show_hidden: bool) {
         Some(c) if TAKES_PATHS.contains(&c) => {
             (typed.clone(), path_candidates(root, &typed, show_hidden))
         }
-        _ => return,
+        _ => return None,
     };
 
     let matches: Vec<&String> = candidates
         .iter()
         .filter(|c| c.starts_with(&prefix))
         .collect();
-    let Some(first) = matches.first() else { return };
+    let first = matches.first()?;
     // With several options, fill in only what they all agree on.
     let common = matches.iter().skip(1).fold((*first).clone(), |acc, m| {
         acc.chars()
@@ -2239,11 +2411,9 @@ fn complete_command(b: &mut Bar, root: &Path, show_hidden: bool) {
             .collect()
     });
     if common.len() <= prefix.len() {
-        return;
+        return None;
     }
-    let base = &b.input[..b.input.len() - prefix.len()];
-    b.input = format!("{base}{common}");
-    b.cursor = b.input.chars().count();
+    Some(common[prefix.len()..].to_string())
 }
 
 /// Join a user-typed name onto `base`, refusing anything that would escape the
@@ -2355,6 +2525,13 @@ mod tests {
         k(KeyCode::Char(c))
     }
 
+    fn shift(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            modifiers: KeyModifiers::SHIFT,
+            ..k(code)
+        }
+    }
+
     fn ctrl(c: char) -> KeyEvent {
         KeyEvent {
             modifiers: KeyModifiers::CONTROL,
@@ -2369,8 +2546,12 @@ mod tests {
     }
 
     /// Run a command line through the bar, exactly as a user would.
+    /// Run a command from wherever the keyboard happens to be.
+    ///
+    /// Ctrl+P rather than `:`, because in the editor a colon is a colon — the
+    /// same reason the binding exists at all.
     fn command(app: &mut App, line: &str) {
-        app.on_key(ch(':'));
+        app.on_key(ctrl('p'));
         type_str(app, line);
         app.on_key(k(KeyCode::Enter));
     }
@@ -2378,13 +2559,13 @@ mod tests {
     /// Type `line` into the command bar, press Tab, and give back what the bar
     /// holds afterwards.
     fn completed(app: &mut App, line: &str) -> String {
-        app.on_key(ch(':'));
+        app.on_key(ctrl('p'));
         type_str(app, line);
         app.on_key(k(KeyCode::Tab));
         let Mode::Bar(b) = &app.mode else {
             panic!("the bar closed")
         };
-        let out = b.input.clone();
+        let out = b.command().to_string();
         app.on_key(k(KeyCode::Esc));
         out
     }
@@ -2569,7 +2750,7 @@ mod tests {
         let (td, mut app) = fixture();
         let long = "a long line of prose that will certainly need to wrap because it keeps going";
         fs::write(td.path().join("notes.txt"), format!("{long}\n")).unwrap();
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
         select(&mut app, "notes.txt");
 
         let out = joined(&mut app);
@@ -2589,7 +2770,7 @@ mod tests {
     fn e_switches_plain_text_into_the_editor_and_back_out() {
         let (td, mut app) = fixture();
         fs::write(td.path().join("notes.txt"), "first line\n").unwrap();
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
         select(&mut app, "notes.txt");
         app.on_key(k(KeyCode::Enter));
         assert!(app.read_mode);
@@ -2621,12 +2802,12 @@ mod tests {
     fn prose_extensions_are_configurable() {
         let (td, mut app) = fixture();
         fs::write(td.path().join("a.csv"), "x,y\n").unwrap();
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
         select(&mut app, "a.csv");
         assert!(joined(&mut app).contains("VIEW"), "csv is code by default");
 
         command(&mut app, "set prose_extensions md txt csv");
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
         select(&mut app, "a.csv");
         assert!(joined(&mut app).contains("READ"), "now it reads as prose");
     }
@@ -2675,7 +2856,7 @@ mod tests {
             *p = image::Rgba([(x * 8) as u8, (y * 8) as u8, 200, 255]);
         }
         img.save(td.path().join("real.png")).unwrap();
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
         select(&mut app, "real.png");
         let out = joined(&mut app);
         assert!(out.contains('▀'), "expected half-blocks:\n{out}");
@@ -2835,6 +3016,151 @@ mod tests {
     }
 
     #[test]
+    fn n_makes_a_file_when_the_name_has_an_extension() {
+        let (td, mut app) = fixture();
+        app.on_key(ch('n'));
+        type_str(&mut app, "todo.txt");
+        app.on_key(k(KeyCode::Enter));
+        assert!(td.path().join("todo.txt").is_file(), "{}", app.status);
+    }
+
+    #[test]
+    fn n_makes_a_folder_when_the_name_has_none() {
+        let (td, mut app) = fixture();
+        app.on_key(ch('n'));
+        type_str(&mut app, "archive");
+        app.on_key(k(KeyCode::Enter));
+        assert!(td.path().join("archive").is_dir(), "{}", app.status);
+    }
+
+    #[test]
+    fn a_trailing_slash_makes_a_folder_whatever_the_name_looks_like() {
+        let (td, mut app) = fixture();
+        app.on_key(ch('n'));
+        type_str(&mut app, "site.v2/");
+        app.on_key(k(KeyCode::Enter));
+        assert!(td.path().join("site.v2").is_dir(), "{}", app.status);
+    }
+
+    #[test]
+    fn the_new_command_still_makes_a_file_with_no_extension() {
+        let (td, mut app) = fixture();
+        command(&mut app, "new LICENSE");
+        assert!(
+            td.path().join("LICENSE").is_file(),
+            "the explicit form is how you get an extensionless file: {}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn shift_is_not_needed_for_anything_that_makes_a_thing() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('N'));
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "capital N does nothing now; n covers both"
+        );
+    }
+
+    #[test]
+    fn ijkl_move_the_tree_cursor_like_the_arrows() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('k'));
+        assert_eq!(app.selected_row().unwrap().name, "notes", "k is down");
+        app.on_key(ch('l'));
+        assert!(app.selected_row().unwrap().expanded, "l is right");
+        app.on_key(ch('j'));
+        assert!(!app.selected_row().unwrap().expanded, "j is left");
+        app.on_key(ch('i'));
+        assert_eq!(app.selected, 0, "i is up");
+    }
+
+    #[test]
+    fn shift_i_and_k_go_all_the_way_like_shift_and_an_arrow() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('K'));
+        assert_eq!(app.selected, app.rows.len() - 1);
+        app.on_key(ch('I'));
+        assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn ijkl_scroll_a_note_being_read() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "README.md");
+        app.on_key(k(KeyCode::Enter));
+        joined(&mut app);
+        app.on_key(ch('k'));
+        assert_eq!(app.preview_scroll, 1);
+        app.on_key(ch('i'));
+        assert_eq!(app.preview_scroll, 0);
+    }
+
+    #[test]
+    fn a_letter_in_the_editor_is_still_just_a_letter() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "main.py");
+        app.on_key(k(KeyCode::Enter));
+        type_str(&mut app, "ijkl");
+        assert!(
+            app.active_buffer().unwrap().lines()[0].starts_with("ijkl"),
+            "typing is typing"
+        );
+    }
+
+    #[test]
+    fn e_is_the_only_key_that_switches_to_raw_editing() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "design.md");
+        app.on_key(k(KeyCode::Enter));
+        assert!(app.read_mode);
+        // `i` used to mean "edit" here; it is an arrow now.
+        app.on_key(ch('i'));
+        assert!(app.read_mode, "i scrolls, it does not open the editor");
+        app.on_key(ch('e'));
+        assert!(!app.read_mode);
+    }
+
+    #[test]
+    fn shift_and_an_arrow_goes_to_the_first_or_last_entry() {
+        let (_td, mut app) = fixture();
+        app.on_key(shift(KeyCode::Down));
+        assert_eq!(app.selected, app.rows.len() - 1, "all the way down");
+        app.on_key(shift(KeyCode::Up));
+        assert_eq!(app.selected, 0, "and all the way back");
+    }
+
+    #[test]
+    fn the_old_letter_keys_for_those_are_gone() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('G'));
+        assert_eq!(app.selected, 0, "G no longer jumps to the end");
+        app.on_key(ch('R'));
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "R is *reload now, not a key"
+        );
+    }
+
+    #[test]
+    fn f5_still_re_reads_the_project() {
+        let (td, mut app) = fixture();
+        fs::write(td.path().join("appeared.md"), "# new\n").unwrap();
+        assert!(!app.rows.iter().any(|r| r.name == "appeared.md"));
+        app.on_key(k(KeyCode::F(5)));
+        assert!(app.rows.iter().any(|r| r.name == "appeared.md"));
+    }
+
+    #[test]
+    fn the_reload_command_does_the_same() {
+        let (td, mut app) = fixture();
+        fs::write(td.path().join("appeared.md"), "# new\n").unwrap();
+        command(&mut app, "reload");
+        assert!(app.rows.iter().any(|r| r.name == "appeared.md"));
+    }
+
+    #[test]
     fn the_cursor_cannot_run_off_either_end() {
         let (_td, mut app) = fixture();
         for _ in 0..50 {
@@ -2979,6 +3305,28 @@ mod tests {
     }
 
     // ---- search -----------------------------------------------------------
+
+    #[test]
+    fn the_results_pane_is_the_width_of_the_tree_it_replaces() {
+        let (_td, mut app) = fixture();
+        let tree_row = screen(&mut app, 90, 24)
+            .into_iter()
+            .find(|r| r.contains("PROJECT"))
+            .expect("the tree is drawn");
+        let tree_edge = tree_row.find("┐").expect("the pane ends somewhere");
+
+        app.on_key(ch('/'));
+        type_str(&mut app, "widget");
+        let hits_row = screen(&mut app, 90, 24)
+            .into_iter()
+            .find(|r| r.contains("MATCH"))
+            .expect("the results are drawn");
+        assert_eq!(
+            hits_row.find("┐"),
+            Some(tree_edge),
+            "the screen must not lurch sideways when you start typing"
+        );
+    }
 
     #[test]
     fn slash_opens_the_search_bar_and_typing_finds_matches() {
@@ -3183,7 +3531,7 @@ mod tests {
     fn replace_asks_first_then_rewrites_the_whole_project() {
         let (td, mut app) = fixture();
         fs::write(td.path().join("notes/more.md"), "widget widget\n").unwrap();
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
 
         command(&mut app, "replace widget gadget");
         assert!(matches!(app.mode, Mode::Confirm(_)), "it asks first");
@@ -3239,21 +3587,416 @@ mod tests {
         );
     }
 
+    // ---- the project map --------------------------------------------------
+
+    /// The fixture plus the two files it already points at: `design.md` links
+    /// to `[[architecture]]` and `main.py` imports `utils`, so once those
+    /// exist the map has real edges to draw.
+    fn linked_fixture_with(cfg: Config) -> (tempfile::TempDir, App) {
+        let (td, mut app) = fixture_with(cfg);
+        fs::write(
+            td.path().join("notes/architecture.md"),
+            "# Architecture\n\nback to [[design]]\n",
+        )
+        .unwrap();
+        fs::write(
+            td.path().join("src/utils.py"),
+            "def load():\n    return 1\n",
+        )
+        .unwrap();
+        app.on_key(k(KeyCode::F(5)));
+        (td, app)
+    }
+
+    fn linked_fixture() -> (tempfile::TempDir, App) {
+        linked_fixture_with(Config::default())
+    }
+
+    #[test]
+    fn the_bottom_bar_says_only_what_is_not_already_on_screen() {
+        let (_td, mut app) = fixture();
+        let bar = screen(&mut app, 96, 14).pop().expect("a status line");
+        assert!(bar.contains("| m map |"), "dividers are pipes:\n{bar}");
+        assert!(!bar.contains('·'), "{bar}");
+        assert!(
+            !bar.contains("? help"),
+            "the status already opens with `? for help`:\n{bar}"
+        );
+        assert!(
+            !bar.contains(": commands"),
+            "there is no colon key any more:\n{bar}"
+        );
+    }
+
+    #[test]
+    fn the_map_draws_every_file_in_a_box() {
+        let (_td, mut app) = linked_fixture();
+        app.on_key(ch('m'));
+        let out = screen(&mut app, 100, 34).join("\n");
+        assert!(out.contains("PROJECT MAP"), "{out}");
+        // Names sit inside boxes, so the borders are right beside them.
+        assert!(
+            out.contains("│design.md│"),
+            "a box with a name in it:\n{out}"
+        );
+        assert!(
+            out.contains('╭') && out.contains('╯'),
+            "box corners:\n{out}"
+        );
+    }
+
+    #[test]
+    fn the_map_joins_linked_files_with_a_line() {
+        let (_td, mut app) = linked_fixture();
+        app.on_key(ch('m'));
+        let out = screen(&mut app, 100, 34).join("\n");
+        assert!(out.contains('─') || out.contains('│'), "lines:\n{out}");
+        assert!(
+            ['◂', '▸', '▴', '▾'].iter().any(|a| out.contains(*a)),
+            "an arrowhead says which way it runs:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_code_file_that_calls_another_is_joined_to_it() {
+        let (_td, mut app) = linked_fixture();
+        app.on_key(ch('m'));
+        // Only calls and imports; the notes are switched off, so whatever is
+        // left on screen is there because of the code.
+        app.on_key(ch('1'));
+        app.on_key(ch('2'));
+        let out = screen(&mut app, 100, 34).join("\n");
+        assert!(out.contains("│main.py│"), "{out}");
+        assert!(out.contains("│utils.py│"), "{out}");
+        assert!(
+            !out.contains("│design.md│"),
+            "the notes are unconnected now, so they drop out:\n{out}"
+        );
+    }
+
+    #[test]
+    fn nothing_is_drawn_on_top_of_a_box() {
+        let (_td, mut app) = linked_fixture();
+        app.on_key(ch('m'));
+        let rows = screen(&mut app, 100, 34);
+        // Every name on screen is whole, with its own border either side: a
+        // line crossing the box would have overwritten one of those cells.
+        for name in ["design.md", "architecture.md", "main.py", "utils.py"] {
+            let row = rows
+                .iter()
+                .find(|r| r.contains(name))
+                .unwrap_or_else(|| panic!("{name} is missing:\n{}", rows.join("\n")));
+            let at = row.find(name).unwrap();
+            assert_eq!(
+                row[..at].chars().last().unwrap(),
+                '│',
+                "{name} sits inside its box:\n{row}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_map_can_be_drawn_without_box_characters() {
+        let cfg = Config {
+            markers: Markers::Ascii,
+            ..Config::default()
+        };
+        let (_td, mut app) = linked_fixture_with(cfg);
+        app.on_key(ch('m'));
+        let out = screen(&mut app, 100, 34).join("\n");
+        assert!(!out.contains('╭'), "no box drawing at all:\n{out}");
+        assert!(
+            out.contains("|design.md|"),
+            "boxes are made of pipes:\n{out}"
+        );
+        assert!(out.contains('+'), "and corners of plus signs:\n{out}");
+    }
+
+    // ---- jumping to a line, and the wheel ---------------------------------
+
+    #[test]
+    fn the_line_command_puts_the_cursor_on_that_line() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "main.py");
+        command(&mut app, "line 4");
+        assert_eq!(app.focus, Focus::Editor);
+        assert!(!app.read_mode, "a line number is a fact about the source");
+        assert_eq!(
+            app.active_buffer().unwrap().cursor_line,
+            3,
+            "counted from 1"
+        );
+        assert!(app.status.contains("line 4"), "{}", app.status);
+    }
+
+    #[test]
+    fn a_bare_number_is_a_line_number_too() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "main.py");
+        command(&mut app, "3");
+        assert_eq!(app.active_buffer().unwrap().cursor_line, 2);
+        // And the wordier forms mean the same thing.
+        command(&mut app, "go to 2");
+        assert_eq!(app.active_buffer().unwrap().cursor_line, 1);
+    }
+
+    #[test]
+    fn a_line_past_the_end_lands_on_the_last_one() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "main.py");
+        let last = app.active_buffer().unwrap().line_count() - 1;
+        command(&mut app, "line 900");
+        assert_eq!(app.active_buffer().unwrap().cursor_line, last);
+    }
+
+    #[test]
+    fn the_line_command_says_when_there_is_nothing_to_jump_inside() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "notes");
+        command(&mut app, "line 4");
+        assert!(app.status.contains("no file open"), "{}", app.status);
+        command(&mut app, "line zero");
+        assert!(app.status.contains("not a line number"), "{}", app.status);
+    }
+
+    #[test]
+    fn a_wheel_notch_moves_exactly_one_line() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "README.md");
+        app.on_key(k(KeyCode::Enter));
+        assert!(app.read_mode, "a note opens rendered");
+        // Draw once so the preview knows how long it is.
+        joined(&mut app);
+
+        app.on_scroll(true, 60);
+        assert_eq!(app.preview_scroll, 1, "one notch, one line");
+        app.on_scroll(false, 60);
+        assert_eq!(app.preview_scroll, 0);
+        app.on_scroll(false, 60);
+        assert_eq!(app.preview_scroll, 0, "and it stops at the top");
+    }
+
+    #[test]
+    fn the_wheel_moves_the_cursor_in_a_file_being_edited() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "main.py");
+        app.on_key(k(KeyCode::Enter));
+        assert!(!app.read_mode, "code opens straight into editing");
+        joined(&mut app);
+
+        app.on_scroll(true, 60);
+        assert_eq!(app.active_buffer().unwrap().cursor_line, 1);
+        app.on_scroll(false, 60);
+        assert_eq!(app.active_buffer().unwrap().cursor_line, 0);
+    }
+
+    #[test]
+    fn the_wheel_over_the_tree_moves_the_tree_cursor() {
+        let (_td, mut app) = fixture();
+        joined(&mut app);
+        let (x0, _) = app.last_tree_cols.expect("the tree was drawn");
+        assert_eq!(app.selected, 0);
+
+        app.on_scroll(true, x0 + 1);
+        assert_eq!(app.selected, 1, "one notch, one row");
+        app.on_scroll(false, x0 + 1);
+        assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn one_bar_switches_between_searching_and_commanding_as_you_type() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('/'));
+        type_str(&mut app, "widget");
+        let Mode::Bar(b) = &app.mode else {
+            panic!("bar closed")
+        };
+        assert!(!b.is_command(), "plain text searches");
+        assert!(!b.results.is_empty(), "and found something");
+
+        // Clear it and lead with the sigil instead.
+        for _ in 0.."widget".len() {
+            app.on_key(k(KeyCode::Backspace));
+        }
+        type_str(&mut app, "*copy");
+        let Mode::Bar(b) = &app.mode else {
+            panic!("bar closed")
+        };
+        assert!(b.is_command(), "a leading * is a command");
+        assert_eq!(b.command(), "copy");
+        assert!(b.results.is_empty(), "a command has nothing to list");
+    }
+
+    #[test]
+    fn deleting_the_sigil_turns_a_command_back_into_a_search() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('/'));
+        type_str(&mut app, "*widget");
+        assert!(matches!(&app.mode, Mode::Bar(b) if b.results.is_empty()));
+
+        // Back to the front and take the star off.
+        app.on_key(k(KeyCode::Home));
+        app.on_key(k(KeyCode::Delete));
+        let Mode::Bar(b) = &app.mode else {
+            panic!("bar closed")
+        };
+        assert!(!b.is_command());
+        assert!(!b.results.is_empty(), "the results come straight back");
+    }
+
+    #[test]
+    fn a_command_typed_into_the_search_bar_runs() {
+        let (td, mut app) = fixture();
+        app.on_key(ch('/'));
+        type_str(&mut app, "*copy README.md to notes");
+        app.on_key(k(KeyCode::Enter));
+        assert!(
+            td.path().join("notes/README.md").is_file(),
+            "{}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn ctrl_p_opens_the_bar_with_the_sigil_already_there() {
+        let (_td, mut app) = fixture();
+        app.on_key(ctrl('p'));
+        let Mode::Bar(b) = &app.mode else {
+            panic!("no bar")
+        };
+        assert_eq!(b.input, "*");
+        assert!(b.is_command());
+        assert_eq!(b.cursor, 1, "and the cursor is past it");
+    }
+
+    #[test]
+    fn the_bar_shows_which_of_the_two_it_currently_is() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('/'));
+        type_str(&mut app, "widget");
+        assert!(joined(&mut app).contains(" / "), "a search shows a slash");
+        app.on_key(k(KeyCode::Home));
+        type_str(&mut app, "*");
+        assert!(joined(&mut app).contains(" * "), "a command shows a star");
+    }
+
+    #[test]
+    fn a_colon_is_just_a_colon_now() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch(':'));
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "the bar is reached by / and Ctrl+P; it does not need a third key"
+        );
+    }
+
+    #[test]
+    fn the_bar_shows_the_star_once_not_twice() {
+        let (_td, mut app) = fixture();
+        app.on_key(ctrl('p'));
+        type_str(&mut app, "copy");
+        let bar = screen(&mut app, 90, 24)
+            .into_iter()
+            .find(|r| r.contains(" * "))
+            .expect("the bar is drawn");
+        assert!(bar.contains("* copy"), "{bar}");
+        assert!(!bar.contains("**"), "the sigil is the block, not the text");
+    }
+
+    #[test]
+    fn the_bar_offers_the_completion_in_grey_before_tab() {
+        let (_td, mut app) = fixture();
+        app.on_key(ctrl('p'));
+        type_str(&mut app, "cop");
+        let bar = screen(&mut app, 90, 24)
+            .into_iter()
+            .find(|r| r.contains(" * "))
+            .expect("the bar is drawn");
+        assert!(
+            bar.contains("* copy"),
+            "the y is offered before Tab is pressed:\n{bar}"
+        );
+
+        // And Tab takes up exactly what was offered.
+        app.on_key(k(KeyCode::Tab));
+        let Mode::Bar(b) = &app.mode else {
+            panic!("bar closed")
+        };
+        assert_eq!(b.command(), "copy");
+    }
+
+    #[test]
+    fn the_offer_is_only_made_at_the_end_of_the_line() {
+        let (_td, mut app) = fixture();
+        app.on_key(ctrl('p'));
+        type_str(&mut app, "cop");
+        app.on_key(k(KeyCode::Home));
+        let bar = screen(&mut app, 90, 24)
+            .into_iter()
+            .find(|r| r.contains(" * "))
+            .expect("the bar is drawn");
+        assert!(
+            !bar.contains("copy"),
+            "mid-line it would read as text already there:\n{bar}"
+        );
+    }
+
+    #[test]
+    fn a_search_is_not_offered_a_command_completion() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('/'));
+        type_str(&mut app, "cop");
+        let bar = screen(&mut app, 90, 24)
+            .into_iter()
+            .find(|r| r.contains(" / "))
+            .expect("the bar is drawn");
+        assert!(!bar.contains("copy"), "{bar}");
+    }
+
+    #[test]
+    fn the_right_arrow_takes_up_the_suggestion_too() {
+        let (_td, mut app) = fixture();
+        app.on_key(ctrl('p'));
+        type_str(&mut app, "cop");
+        app.on_key(k(KeyCode::Right));
+        let Mode::Bar(b) = &app.mode else {
+            panic!("bar closed")
+        };
+        assert_eq!(b.command(), "copy", "the arrow does what Tab does");
+        assert_eq!(b.cursor, b.input.chars().count(), "and lands at the end");
+    }
+
+    #[test]
+    fn the_right_arrow_still_moves_along_the_text_mid_line() {
+        let (_td, mut app) = fixture();
+        app.on_key(ctrl('p'));
+        type_str(&mut app, "cop");
+        app.on_key(k(KeyCode::Home));
+        app.on_key(k(KeyCode::Right));
+        let Mode::Bar(b) = &app.mode else {
+            panic!("bar closed")
+        };
+        assert_eq!(b.command(), "cop", "nothing was completed");
+        assert_eq!(b.cursor, 1, "it just moved");
+    }
+
+    #[test]
+    fn the_right_arrow_leaves_a_search_alone() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('/'));
+        type_str(&mut app, "wid");
+        app.on_key(k(KeyCode::Right));
+        let Mode::Bar(b) = &app.mode else {
+            panic!("bar closed")
+        };
+        assert_eq!(b.input, "wid", "a search is never completed for you");
+    }
+
     #[test]
     fn tab_completes_commands_and_setting_names() {
         let (_td, mut app) = fixture();
-        app.on_key(ch(':'));
-        type_str(&mut app, "repl");
-        app.on_key(k(KeyCode::Tab));
-        let Mode::Bar(b) = &app.mode else { panic!() };
-        assert_eq!(b.input, "replace");
-
-        app.on_key(k(KeyCode::Esc));
-        app.on_key(ch(':'));
-        type_str(&mut app, "set tree_w");
-        app.on_key(k(KeyCode::Tab));
-        let Mode::Bar(b) = &app.mode else { panic!() };
-        assert_eq!(b.input, "set tree_width");
+        assert_eq!(completed(&mut app, "repl"), "replace");
+        assert_eq!(completed(&mut app, "set tree_w"), "set tree_width");
     }
 
     #[test]
@@ -3519,7 +4262,7 @@ mod tests {
         let (td, mut app) = fixture();
         fs::create_dir_all(td.path().join("notes/deep/deeper")).unwrap();
         fs::write(td.path().join("notes/deep/deeper/buried.md"), "# buried\n").unwrap();
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
 
         command(&mut app, "copy notes to archive");
         assert!(td.path().join("archive/design.md").is_file());
@@ -3537,7 +4280,7 @@ mod tests {
     fn copy_takes_names_with_spaces_without_quoting_them() {
         let (td, mut app) = fixture();
         fs::write(td.path().join("my notes.md"), "# mine\n").unwrap();
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
 
         // `to` is the separator, so both sides can be several words.
         command(&mut app, "copy my notes.md to old work.md");
@@ -3696,7 +4439,7 @@ mod tests {
         let (td, mut app) = fixture();
         fs::write(td.path().join("report-one.md"), "").unwrap();
         fs::write(td.path().join("report-two.md"), "").unwrap();
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
         // Two matches, so it fills in only what they share.
         assert_eq!(completed(&mut app, "copy rep"), "copy report-");
     }
@@ -3705,7 +4448,7 @@ mod tests {
     fn completion_leaves_dotfiles_alone_unless_asked_for() {
         let (td, mut app) = fixture();
         fs::write(td.path().join(".secret.md"), "").unwrap();
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
 
         assert_eq!(
             completed(&mut app, "delete .sec"),
@@ -3761,14 +4504,62 @@ mod tests {
     fn help_opens_and_any_key_closes_it() {
         let (_td, mut app) = fixture();
         app.on_key(ch('?'));
-        // Tall enough for the whole keymap; the short-terminal case scrolls,
+        // Tall enough for the whole thing; the short-terminal case scrolls,
         // and has a test of its own.
-        let out = screen(&mut app, 90, 44).join("\n");
-        assert!(out.contains("Keys"), "{out}");
+        let out = screen(&mut app, 90, 70).join("\n");
+        assert!(out.contains("Keys and commands"), "{out}");
         assert!(out.contains("search names and contents"), "{out}");
-        assert!(out.contains("draw the project as a graph"), "{out}");
+        assert!(out.contains("the map: boxes and lines"), "{out}");
         app.on_key(ch('x'));
         assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn help_lists_the_commands_as_well_as_the_keys() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('?'));
+        let out = screen(&mut app, 90, 70).join("\n");
+        assert!(out.contains("*copy a to b"), "commands are in it:\n{out}");
+        assert!(out.contains("*line 42"), "{out}");
+        assert!(out.contains("*replace old new"), "{out}");
+        assert!(
+            out.contains("Ctrl+S"),
+            "and the keys are still there:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_wide_window_puts_keys_and_commands_side_by_side() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('?'));
+        let rows = screen(&mut app, 130, 46);
+        // Whichever command happens to line up with it — the point is that a
+        // key and a command share a row.
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("move the cursor") && r.contains('*')),
+            "two columns on one row:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    #[test]
+    fn a_narrow_window_stacks_them_into_one_column() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch('?'));
+        let rows = screen(&mut app, 70, 70);
+        let out = rows.join("\n");
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.contains("move the cursor") && r.contains('*')),
+            "no room for two:\n{out}"
+        );
+        assert!(out.contains("move the cursor"), "{out}");
+        assert!(
+            out.contains("*copy a to b"),
+            "both are still listed:\n{out}"
+        );
     }
 
     #[test]
@@ -3809,7 +4600,7 @@ mod tests {
     fn dot_toggles_hidden_files() {
         let (td, mut app) = fixture();
         fs::write(td.path().join(".secret"), "x").unwrap();
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
         assert!(!app.rows.iter().any(|r| r.name == ".secret"));
         app.on_key(ch('.'));
         assert!(app.rows.iter().any(|r| r.name == ".secret"));
@@ -3822,7 +4613,7 @@ mod tests {
         app.on_key(k(KeyCode::Enter));
         type_str(&mut app, "KEEP");
         app.on_key(k(KeyCode::Esc));
-        app.on_key(ch('R'));
+        app.on_key(k(KeyCode::F(5)));
         select(&mut app, "main.py");
         assert!(app.active_buffer().unwrap().lines()[0].starts_with("KEEP"));
     }
@@ -3878,11 +4669,29 @@ mod tests {
                     '\n' => app.on_key(k(KeyCode::Enter)),
                     '\t' => app.on_key(k(KeyCode::Tab)),
                     '↓' => app.on_key(k(KeyCode::Down)),
+                    '⇧' => {
+                        if let Some(n) = chars.next() {
+                            let code = if n == '↑' {
+                                KeyCode::Up
+                            } else {
+                                KeyCode::Down
+                            };
+                            app.on_key(shift(code));
+                        }
+                    }
                     _ => app.on_key(ch(c)),
                 }
             }
         }
-        for row in screen(&mut app, 100, 30) {
+        let w: u16 = std::env::var("TINY_SHOT_W")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100);
+        let h: u16 = std::env::var("TINY_SHOT_H")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+        for row in screen(&mut app, w, h) {
             println!("{row}");
         }
     }
