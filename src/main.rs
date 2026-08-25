@@ -43,6 +43,7 @@ mod config;
 mod editor;
 mod graph;
 mod highlight;
+mod keys;
 mod markdown;
 mod media;
 mod project;

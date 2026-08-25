@@ -36,11 +36,11 @@ Press `?` in the program: it lists every key and every command at once, side by 
 
 | key         | does                                       |
 |-------------|--------------------------------------------|
-| `↑` `↓`     | move the cursor (`i` `k` also work)        |
+| `↑` `i` `↓` `k`    | move the cursor                     |
 | `Enter`     | open or close a folder, or edit a file     |
 | `→` `l`     | open a folder, or step inside an open one  |
 | `←` `j`     | close a folder, or jump to its parent      |
-| `⇧↑` `⇧↓`   | first / last entry (`I` `K` also work)     |
+| `⇧↑` `⇧I` `⇧↓` `⇧K`   | first / last entry               |
 | `n`         | new — a dot in the name makes it a file    |
 | `r`         | rename                                     |
 | `^C` `^V`   | copy, and paste into the folder you are in |
@@ -50,17 +50,6 @@ Press `?` in the program: it lists every key and every command at once, side by 
 | `^B`        | fold the tree away, and bring it back      |
 | `q`         | quit                                       |
 
-`i` `j` `k` `l` work as the four arrows wherever you are moving around rather
-than typing — the tree, a note being read, the settings list, the project map —
-with `I` and `K` going all the way, like Shift with an arrow. They are there for
-keyboards without a cursor cluster. They are not the vim `h j k l`: `j` and `k`
-cannot mean both left-and-down and down-and-up at once, and matching the arrows
-is the layout that needs no explaining.
-
-`n` makes one thing, and the name says which: `today.md` is a file, `notes` is a
-folder, and you can type a whole path — `notes/2026/today.md` — to make what it
-needs along the way. For an extensionless *file* like `LICENSE`, use `*new
-LICENSE`; `*mkdir` is the always-a-folder form.
 
 **Search and commands**
 
@@ -68,20 +57,11 @@ LICENSE`; `*mkdir` is the always-a-folder form.
 |------------|---------------------------------------------|
 | `m`        | the project map                             |
 | `/`        | the bar — searches names and contents       |
-| `*`        | …typed first, it is a command instead       |
+| `*`        | typed first, it is a command instead        |
 | `,` `F2`   | the settings area                           |
 | `Ctrl+F`   | the bar, from anywhere including the editor |
 | `Ctrl+P`   | the same, with the `*` already typed        |
 
-There is **one bar**, and what you type decides what it is. Plain text searches
-— results appear as you type, hovering one previews it, `Enter` jumps to it. A
-leading `*` makes the line a command instead, and the results give way to the
-tree. Delete the `*` and the search comes straight back.
-
-Commands read as plain English, and `Tab` completes every part of them — the
-command, the paths, and the `to` in the middle. What it would fill in is shown
-in grey ahead of the cursor as you type, so there is nothing to guess at, and
-`→` takes it up as well as `Tab`:
 
 ```
 *set tab_width 2              change a setting; *set <key> alone reports it
@@ -114,9 +94,6 @@ in grey ahead of the cursor as you type, so there is nothing to guess at, and
 | `*line 42`        | jump to a line          |
 | `Esc`             | back to the tree        |
 
-The mouse wheel moves exactly one line at a time, in the rendered view and in
-the editor both — terminals left to themselves send three lines a notch, which
-is hard to read against.
 
 **The Project Map**
 
@@ -150,10 +127,6 @@ back.
 | `/`       | filter to matching paths                    |
 | `r`       | lay it out again                            |
 
-The file under the cursor and the lines reaching it are drawn brightly; the rest
-of the project stays dim behind them. Set `markers = "ascii"` and the whole
-picture is drawn with `+`, `-` and `|` instead, for terminals with no
-box-drawing characters.
 
 Four kinds of connection, drawn together:
 
@@ -179,7 +152,18 @@ borders         = true      # false for a plainer screen
 markers         = "arrows"  # or "ascii"
 ```
 
-One file, written on first run, covering everything about how the program behaves — there is no per-project config, so every project on a machine looks and works the same way. Any field may be left out; the defaults fill in. `tiny --config` prints the path.
+### Settings and keys, from inside
+
+Press `,` (or run `*config`) for the settings area. Two buttons sit at the top
+of it:
+
+| button           | does                                                     |
+|------------------|----------------------------------------------------------|
+| `Keybinds`      | opens a window listing every action and the keys that reach it |
+| `Reset settings` | puts every setting back to what tiny ships with, after asking |
+
+
+### The config file
 
 | platform      | where                                          |
 |---------------|------------------------------------------------|
@@ -187,6 +171,22 @@ One file, written on first run, covering everything about how the program behave
 | Windows       | `%APPDATA%\tiny\tiny.conf`                     |
 
 `$XDG_CONFIG_HOME` wins over both when it is set.
+
+Keys live in a `[keys]` section, by action name, and only what you have changed
+needs to be there — anything left out is whatever tiny ships with, including a
+binding added in a later version:
+
+```toml
+[keys]
+tree.down    = "z"          # one key
+tree.up      = "up i w"     # or several, space separated
+editor.undo  = "ctrl+u"
+map.orphans  = ""           # or none at all
+```
+
+Names are what the keybinds window shows in its left column. A key is written
+the way it reads: `ctrl+s`, `shift+up`, `f5`, `enter`, `esc`, `pageup`, `.`, or
+a single character. A capital letter *is* the shifted one — `I` is Shift+i.
 
 Theme entries are style specs, so a line can carry weight as well as color:
 
@@ -240,6 +240,7 @@ Video shows a poster frame, pulled with `ffmpeg` when it is installed.
 | `media.rs`     | pictures and video frames as half-blocks            |
 | `graph.rs`     | the link graph: wikilinks, imports, calls           |
 | `projectmap.rs`| the map you look at: its layout, boxes and keys     |
+| `keys.rs`      | what every key does, and how to rebind it           |
 | `config.rs`    | `tiny.conf`, style specs, the settings index        |
 
 ## Features:
@@ -259,7 +260,6 @@ Video shows a poster frame, pulled with `ffmpeg` when it is installed.
 - HTML Viewer with local web server
 - Window tiling manager allowing user to open up multiple windows in the tui. shift+arrow keys to move around to different windows. 
 - apt/brew install support
-- editable controls and keybinds (will be defaults)
 ## Contributer Rules and Procedures:
 
 **AI Policy**

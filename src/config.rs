@@ -36,6 +36,7 @@
 //! numbers are clamped by [`Config::sanitized`]. A typo in a config file
 //! should cost you an underline, never the program.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -82,6 +83,12 @@ pub enum Markers {
 pub struct Config {
     /// Fallback when the working directory cannot be read.
     pub default_root: PathBuf,
+    /// Key bindings that differ from the shipped ones, by action name — see
+    /// [`crate::keys`]. Only what has been changed is kept, so an untouched
+    /// config has no `[keys]` section and a binding added in a later version
+    /// reaches everyone who has not overridden that action.
+    pub keys: BTreeMap<String, String>,
+
     /// Write a starter `README.md` into a folder tiny creates or finds empty.
     /// The only file it ever writes into a project; turn it off and it writes
     /// nothing at all.
@@ -130,6 +137,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             default_root: home(),
+            keys: BTreeMap::new(),
             starter_readme: true,
             show_hidden: false,
             tab_width: 4,
@@ -215,6 +223,19 @@ impl Config {
         }
         fs::write(path, toml::to_string_pretty(self)?)?;
         Ok(())
+    }
+
+    /// How many settings differ from the shipped ones.
+    ///
+    /// Counted through `get`, so it walks the same list the settings area
+    /// shows and cannot fall out of step with it. Key bindings are not
+    /// settings and are not counted — they have their own reset.
+    pub fn changed_from_default(&self) -> usize {
+        let shipped = Config::default();
+        Self::settings_index()
+            .iter()
+            .filter(|(name, _)| self.get(name) != shipped.get(name))
+            .count()
     }
 
     /// Clamp every numeric field into a range that cannot break the layout.
@@ -755,6 +776,39 @@ mod tests {
         assert_eq!(cfg.tab_width, 2);
         assert_eq!(cfg.tree_side, Side::Right);
         assert!(warning.is_none());
+    }
+
+    #[test]
+    fn rebindings_survive_the_round_trip_through_the_file() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join(CONF_NAME);
+        let mut cfg = Config::default();
+        cfg.keys.insert("tree.down".into(), "z".into());
+        cfg.save_to(&path).unwrap();
+
+        let (back, warning) = Config::load_from(Some(&path));
+        assert!(warning.is_none());
+        assert_eq!(back.keys.get("tree.down").map(String::as_str), Some("z"));
+    }
+
+    #[test]
+    fn a_config_with_no_rebindings_has_none() {
+        assert!(
+            Config::default().keys.is_empty(),
+            "the shipped keyboard is not written down twice"
+        );
+    }
+
+    #[test]
+    fn changed_from_default_counts_only_what_moved() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.changed_from_default(), 0);
+        cfg.set("tab_width", "7").unwrap();
+        cfg.set("tree_side", "right").unwrap();
+        assert_eq!(cfg.changed_from_default(), 2);
+        // A rebinding is not a setting, and has its own reset.
+        cfg.keys.insert("tree.down".into(), "z".into());
+        assert_eq!(cfg.changed_from_default(), 2);
     }
 
     #[test]

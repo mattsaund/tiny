@@ -232,18 +232,6 @@ impl Tree {
         }
     }
 
-    /// Re-read one directory from disk, preserving which subdirectories were
-    /// expanded. Used after creating, renaming, or deleting an entry.
-    #[allow(dead_code)]
-    pub fn refresh(&mut self, dir: &Path) {
-        // Only loaded directories need re-reading; an unloaded one will read
-        // fresh whenever it is first expanded.
-        let loaded = matches!(self.find(dir), Some(n) if n.is_dir && n.loaded);
-        if loaded {
-            self.load_children_at(dir);
-        }
-    }
-
     /// Re-read every directory that has been loaded so far.
     ///
     /// The blunt instrument behind `R`, `:reload`, and every file operation.
@@ -468,7 +456,7 @@ mod tests {
         assert!(names(&tree.flatten()).contains(&"buried.md".to_string()));
 
         fs::write(notes.join("new.md"), "fresh").unwrap();
-        tree.refresh(&notes);
+        tree.refresh_all();
 
         let after = names(&tree.flatten());
         assert!(after.contains(&"new.md".to_string()), "new file appears");
@@ -483,7 +471,7 @@ mod tests {
         let td = fixture();
         let mut tree = Tree::new(td.path().to_path_buf(), false);
         fs::remove_file(td.path().join("README.md")).unwrap();
-        tree.refresh(td.path());
+        tree.refresh_all();
         assert!(!names(&tree.flatten()).contains(&"README.md".to_string()));
     }
 

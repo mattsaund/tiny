@@ -56,8 +56,8 @@ use crate::highlight::Highlighter;
 /// Extract every `[[target]]` in document order, with any `|alias` stripped.
 /// Duplicates are kept — callers that want unique edges can dedupe.
 ///
-/// Nothing calls this yet; it is the entry point the link graph will use.
-#[allow(dead_code)]
+/// This is how `graph` finds the wikilinks in a file, so the renderer and the
+/// project map agree on what counts as one.
 pub fn wikilinks(source: &str) -> Vec<String> {
     let mut out = Vec::new();
     for (_, _, target) in scan_wikilinks(source) {

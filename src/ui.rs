@@ -62,9 +62,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Bar, Focus, Mode, Preview, Settings, TextKind};
+use crate::app::{
+    App, BUTTONS, Bar, Focus, KEYBIND_BUTTONS, Keybinds, Mode, Preview, Settings, TextKind,
+};
 use crate::config::{Config, Markers, Palette, Position, Side};
 use crate::graph::EdgeKind;
+use crate::keys::{Action, Keymap};
 use crate::markdown;
 use crate::projectmap::{self, Placed, ProjectMap};
 use crate::search::HitKind;
@@ -172,10 +175,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_preview(f, app, preview_area);
 
     match &app.mode {
-        Mode::Help(scroll) => draw_help(f, area, &pal, *scroll),
+        Mode::Help(scroll) => draw_help(f, app, area, &pal, *scroll),
         Mode::Settings(s) => {
             let s = s.clone();
             draw_settings(f, app, area, &s);
+        }
+        Mode::Keybinds(kb) => {
+            let kb = kb.clone();
+            draw_keybinds(f, app, area, &kb);
         }
         _ => {}
     }
@@ -377,14 +384,10 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect, b: &Bar) {
         return;
     }
 
-    // Keep the highlighted result on screen.
-    let mut scroll = b.scroll;
-    if b.selected < scroll {
-        scroll = b.selected;
-    } else if b.selected >= scroll + height {
-        scroll = b.selected + 1 - height;
-    }
-    scroll = scroll.min(b.results.len().saturating_sub(height));
+    // Keep the highlighted result on screen, from the top until it has to
+    // move. Recomputed rather than remembered: the list is rebuilt on every
+    // keystroke anyway, so there is no offset worth carrying between frames.
+    let scroll = keep_visible(b.selected, height, b.results.len());
 
     let root = app.root().to_path_buf();
     let width = inner.width as usize;
@@ -1456,6 +1459,122 @@ fn position_readout(app: &App) -> String {
 
 // ---- overlays -------------------------------------------------------------
 
+/// The keybinds window: every action, what it does, and the keys that reach it.
+///
+/// Grouped by context with a heading for each, because the same key means
+/// different things in different panes and a flat list of sixty rows would
+/// hide that. A binding that has been changed is drawn brightly, so what you
+/// have done to the shipped keyboard is visible at a glance.
+fn draw_keybinds(f: &mut Frame, app: &App, area: Rect, kb: &Keybinds) {
+    let pal = app.palette;
+    let actions: Vec<Action> = Action::all().collect();
+    // A heading appears wherever the context changes.
+    let mut rows: Vec<BindRow> = KEYBIND_BUTTONS.iter().map(|l| BindRow::Button(l)).collect();
+    let mut context = None;
+    for (i, action) in actions.iter().enumerate() {
+        if context != Some(action.context()) {
+            context = Some(action.context());
+            rows.push(BindRow::Heading(action.context().title()));
+        }
+        rows.push(BindRow::Action(i, *action));
+    }
+
+    let popup = centred(area, 76, area.height.saturating_sub(4));
+    f.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(pal.border_focus)
+        .title(Line::from(Span::styled(
+            " Keybinds ",
+            pal.text.add_modifier(Modifier::BOLD),
+        )))
+        .title_bottom(Line::from(Span::styled(
+            if kb.capturing {
+                " press the key you want it on "
+            } else {
+                " Enter change · Delete restore · ^S write tiny.conf · Esc back "
+            },
+            pal.dim,
+        )));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+    let height = inner.height as usize;
+    if height == 0 {
+        return;
+    }
+
+    // The cursor counts buttons and actions, not headings, so the line it is
+    // on has to be looked up rather than indexed.
+    let cursor_row = rows
+        .iter()
+        .position(|r| match r {
+            BindRow::Button(_) => kb.selected < KEYBIND_BUTTONS.len(),
+            BindRow::Action(i, _) => *i + KEYBIND_BUTTONS.len() == kb.selected,
+            BindRow::Heading(_) => false,
+        })
+        .unwrap_or(0);
+    let scroll = keep_visible(cursor_row, height, rows.len());
+
+    let width = inner.width as usize;
+    let mut lines: Vec<Line> = Vec::with_capacity(height);
+    for (n, row) in rows.iter().enumerate().skip(scroll).take(height) {
+        let selected = n == cursor_row;
+        let mut spans = match row {
+            BindRow::Heading(title) => vec![Span::styled(title.to_string(), pal.heading)],
+            BindRow::Button(label) => vec![Span::styled(
+                format!("[ {label} ]"),
+                pal.text.add_modifier(Modifier::BOLD),
+            )],
+            BindRow::Action(_, action) => {
+                let changed = app.config.keys.contains_key(action.name());
+                let keys = if selected && kb.capturing {
+                    "…".to_string()
+                } else {
+                    app.keymap.spec(*action)
+                };
+                vec![
+                    Span::styled(format!("  {:<20}", action.name()), pal.dim),
+                    Span::styled(
+                        format!("{keys:<18}"),
+                        if changed {
+                            pal.text.add_modifier(Modifier::BOLD)
+                        } else {
+                            pal.text
+                        },
+                    ),
+                    Span::styled(action.describe().to_string(), pal.dim),
+                ]
+            }
+        };
+        if selected {
+            highlight_row(&mut spans, width, pal, true);
+        }
+        lines.push(Line::from(spans));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// One line of the keybinds window. Headings are drawn but never landed on.
+enum BindRow {
+    Heading(&'static str),
+    Button(&'static str),
+    /// The action, and its place in the cursor's numbering.
+    Action(usize, Action),
+}
+
+/// The first row to draw so that `selected` is on screen, scrolling no further
+/// than it has to.
+///
+/// Used by the lists that are rebuilt from scratch each frame — search results,
+/// the settings, the keybinds. The tree keeps an offset of its own instead,
+/// because there the cursor is the thing being moved around a list that stays
+/// put, and remembering where you were reading matters.
+fn keep_visible(selected: usize, height: usize, total: usize) -> usize {
+    selected
+        .saturating_sub(height.saturating_sub(1))
+        .min(total.saturating_sub(height))
+}
+
 /// A centred rectangle for an overlay, shrunk to fit if the window is smaller
 /// than the requested size.
 fn centred(area: Rect, w: u16, h: u16) -> Rect {
@@ -1475,52 +1594,115 @@ fn centred(area: Rect, w: u16, h: u16) -> Rect {
 /// strings is a spacer. This and [`COMMANDS`] are the user-facing source of
 /// truth for the bindings — if you add a key in `app`, add it here too, and to
 /// the table in the README.
-const KEYS: &[(&str, &str)] = &[
-    ("", "TREE"),
-    ("", "  i j k l are the arrows, for a keyboard without"),
-    ("up down  i k", "move the cursor"),
-    ("Enter", "open or close a folder, or edit a file"),
-    ("right  l", "open a folder, or step inside an open one"),
-    ("left  j", "close a folder, or jump to its parent"),
-    ("Shift+up  I", "first entry"),
-    ("Shift+down  K", "last entry"),
-    ("n", "new — a dot in the name makes it a file"),
-    ("r", "rename"),
-    ("Ctrl+C  Ctrl+V", "copy | paste into this folder"),
-    ("d", "delete (asks first) — also *delete"),
-    (".", "show or hide dotfiles"),
-    ("F5", "re-read from disk — also *reload"),
-    ("Ctrl+B", "fold the tree away, and bring it back"),
-    ("", ""),
-    ("", "PROJECT MAP"),
-    ("m", "the map: boxes and lines"),
-    ("", "  notes link by [[wikilink]], code by import and call"),
-    ("arrows  i j k l", "move to the nearest file that way"),
-    ("Enter", "open the file the cursor is on"),
-    ("1 2 3 4", "wikilinks / links / imports / calls"),
-    ("o  r", "unconnected files | lay out again"),
-    ("", ""),
-    ("", "THE BAR"),
-    ("/", "search names and contents"),
-    ("*", "…or start with a star for a command"),
-    (":", "the bar, with the star already typed"),
-    ("Ctrl+F  Ctrl+P", "the same two, from inside the editor"),
-    (",  F2", "the settings area"),
-    ("", ""),
-    ("", "PREVIEW"),
-    ("up down  i k", "scroll a note or a picture"),
-    ("wheel", "one line at a time, in either pane"),
-    ("e", "switch to raw editing"),
-    ("Esc", "back to the tree"),
-    ("", ""),
-    ("", "EDITOR"),
-    ("Ctrl+S", "save"),
-    ("Ctrl+Z  Ctrl+Y", "undo / redo"),
-    ("Ctrl+K", "delete the current line"),
-    ("Ctrl+left right", "move by word"),
-    ("", ""),
-    ("q  Ctrl+Q", "quit"),
+/// One row of the keys half of `?`.
+enum KeyRow {
+    Heading(&'static str),
+    /// A gap between sections.
+    Blank,
+    /// The keys are looked up in the live keymap when the window is drawn, so
+    /// a rebinding shows here as well as in the keybinds window. Several
+    /// actions on one row read as one idea — "move the cursor" is up and down.
+    Bound(&'static [Action], &'static str),
+    /// A row whose keys cannot be rebound, and so cannot change.
+    Fixed(&'static str, &'static str),
+}
+
+use KeyRow::{Blank, Bound, Fixed, Heading};
+
+const KEYS: &[KeyRow] = &[
+    Heading("TREE"),
+    Bound(&[Action::TreeUp, Action::TreeDown], "move the cursor"),
+    Bound(&[Action::TreeOpen], "open or close a folder, edit a file"),
+    Bound(&[Action::TreeInto], "open a folder, or step inside"),
+    Bound(&[Action::TreeOut], "close a folder, or go to its parent"),
+    Bound(&[Action::TreeFirst], "first entry"),
+    Bound(&[Action::TreeLast], "last entry"),
+    Bound(&[Action::TreeNew], "new — a dot in the name makes a file"),
+    Bound(&[Action::TreeRename], "rename"),
+    Bound(
+        &[Action::TreeCopy, Action::TreePaste],
+        "copy | paste into this folder",
+    ),
+    Bound(&[Action::TreeDelete], "delete (asks first) — also *delete"),
+    Bound(&[Action::TreeHidden], "show or hide dotfiles"),
+    Bound(&[Action::TreeRefresh], "re-read from disk — also *reload"),
+    Bound(&[Action::ToggleTreePane], "fold the tree away, and back"),
+    Blank,
+    Heading("PROJECT MAP"),
+    Bound(&[Action::TreeMap], "the map: boxes and lines"),
+    Bound(
+        &[Action::MapUp, Action::MapDown],
+        "the nearest file up or down",
+    ),
+    Bound(
+        &[Action::MapLeft, Action::MapRight],
+        "the nearest file left or right",
+    ),
+    Bound(&[Action::MapOpen], "open the file the cursor is on"),
+    Bound(
+        &[
+            Action::MapWikilinks,
+            Action::MapLinks,
+            Action::MapImports,
+            Action::MapCalls,
+        ],
+        "wikilinks | links | imports | calls",
+    ),
+    Bound(
+        &[Action::MapOrphans, Action::MapRelayout],
+        "unconnected files | lay out again",
+    ),
+    Blank,
+    Heading("THE BAR"),
+    Bound(&[Action::TreeBar], "search names and contents"),
+    Fixed("*", "…or a star first, for a command"),
+    Bound(
+        &[Action::Bar, Action::CommandBar],
+        "the same two, from the editor",
+    ),
+    Bound(&[Action::TreeSettings], "settings, and the keybinds"),
+    Blank,
+    Heading("PREVIEW"),
+    Bound(
+        &[Action::ReadUp, Action::ReadDown],
+        "scroll a note or a picture",
+    ),
+    Fixed("wheel", "one line at a time, in either pane"),
+    Bound(&[Action::ReadEdit], "switch to raw editing"),
+    Bound(&[Action::EditorBack], "back to the tree"),
+    Blank,
+    Heading("EDITOR"),
+    Bound(&[Action::Save], "save"),
+    Bound(&[Action::EditorUndo, Action::EditorRedo], "undo | redo"),
+    Bound(&[Action::EditorDeleteLine], "delete the current line"),
+    Bound(
+        &[Action::EditorWordLeft, Action::EditorWordRight],
+        "move by word",
+    ),
+    Blank,
+    Bound(&[Action::TreeQuit, Action::Quit], "quit"),
 ];
+
+/// The keys half of `?`, resolved against what the keys actually do now.
+fn key_rows(keymap: &Keymap) -> Vec<(String, String)> {
+    KEYS.iter()
+        .map(|row| match row {
+            Heading(title) => (String::new(), (*title).to_string()),
+            Blank => (String::new(), String::new()),
+            Fixed(keys, desc) => ((*keys).to_string(), (*desc).to_string()),
+            Bound(actions, desc) => {
+                // An action bound to nothing contributes nothing, rather than
+                // an empty gap in the middle of the row.
+                let keys: Vec<String> = actions
+                    .iter()
+                    .map(|a| keymap.spec(*a))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                (keys.join("  "), (*desc).to_string())
+            }
+        })
+        .collect()
+}
 
 /// The right half of the `?` window: every command, in the form you type it.
 ///
@@ -1545,40 +1727,45 @@ const COMMANDS: &[(&str, &str)] = &[
     ("*replace \"a b\" \"c d\"", "quote anything with spaces"),
     ("*set tab_width 2", "change a setting"),
     ("*set theme.heading cyan", "repaint without a restart"),
-    ("*config", "the settings area"),
+    ("*config", "settings, and every keybinding"),
     ("", ""),
     ("", "LEAVING"),
     ("*w  *q  *wq", "save | quit | both"),
     ("*help", "this window"),
     ("", ""),
-    ("", "  every command reads as English, and"),
-    ("", "  Tab or → finishes any part of one"),
 ];
 
 /// The keymap overlay. Scrollable, because the full list does not fit a short
 /// terminal — the footer says which of the two situations you are in.
-fn draw_help(f: &mut Frame, area: Rect, pal: &Palette, scroll: usize) {
+fn draw_help(f: &mut Frame, app: &App, area: Rect, pal: &Palette, scroll: usize) {
     // Keys on the left, commands on the right, so `?` answers both halves of
     // "how do I do this" at once. Every width here is measured from the tables
     // rather than written down, so adding a row with a long description
     // widens the window instead of quietly losing the end of the line.
-    let (keys_field, keys_w) = (field_width(KEYS), natural_width(KEYS));
-    let (cmds_field, cmds_w) = (field_width(COMMANDS), natural_width(COMMANDS));
+    // The keys are read out of the live keymap, so a rebinding shows here and
+    // not only in the window that made it.
+    let keys = key_rows(&app.keymap);
+    let commands: Vec<(String, String)> = COMMANDS
+        .iter()
+        .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
+        .collect();
+    let (keys_field, keys_w) = (field_width(&keys), natural_width(&keys));
+    let (cmds_field, cmds_w) = (field_width(&commands), natural_width(&commands));
 
     // One column: the two tables run together with a blank line between, which
     // makes one wider field for both and so has to be measured on the joined
     // list rather than on either half.
-    let stacked: Vec<(&str, &str)> = KEYS
+    let stacked: Vec<(String, String)> = keys
         .iter()
-        .copied()
-        .chain(std::iter::once(("", "")))
-        .chain(COMMANDS.iter().copied())
+        .cloned()
+        .chain(std::iter::once((String::new(), String::new())))
+        .chain(commands.iter().cloned())
         .collect();
 
     // Two columns need both of them whole, plus the border and a gutter.
     let two_up = (keys_w + cmds_w + 5) as u16 <= area.width.saturating_sub(2);
     let rows = if two_up {
-        KEYS.len().max(COMMANDS.len())
+        keys.len().max(commands.len())
     } else {
         stacked.len()
     };
@@ -1617,11 +1804,11 @@ fn draw_help(f: &mut Frame, area: Rect, pal: &Palette, scroll: usize) {
             .constraints([Constraint::Length(keys_w as u16 + 2), Constraint::Min(0)])
             .split(inner);
         f.render_widget(
-            help_column(KEYS, scroll, height, keys_field, pal),
+            help_column(&keys, scroll, height, keys_field, pal),
             halves[0],
         );
         f.render_widget(
-            help_column(COMMANDS, scroll, height, cmds_field, pal),
+            help_column(&commands, scroll, height, cmds_field, pal),
             halves[1],
         );
     } else {
@@ -1631,7 +1818,7 @@ fn draw_help(f: &mut Frame, area: Rect, pal: &Palette, scroll: usize) {
 }
 
 /// How wide the first field has to be for every row of `rows` to line up.
-fn field_width(rows: &[(&str, &str)]) -> usize {
+fn field_width(rows: &[(String, String)]) -> usize {
     rows.iter()
         .filter(|(keys, _)| !keys.is_empty())
         .map(|(keys, _)| keys.width())
@@ -1641,7 +1828,7 @@ fn field_width(rows: &[(&str, &str)]) -> usize {
 
 /// How wide the column has to be for no row of it to be cut off. Headings and
 /// spacers span the whole column, so they count too.
-fn natural_width(rows: &[(&str, &str)]) -> usize {
+fn natural_width(rows: &[(String, String)]) -> usize {
     let field = field_width(rows);
     rows.iter()
         .map(|(keys, desc)| {
@@ -1656,27 +1843,27 @@ fn natural_width(rows: &[(&str, &str)]) -> usize {
 }
 
 /// One column of the `?` window, already scrolled and clipped to `height`.
-fn help_column<'a>(
-    rows: &'a [(&'a str, &'a str)],
+fn help_column(
+    rows: &[(String, String)],
     scroll: usize,
     height: usize,
     field: usize,
     pal: &Palette,
-) -> Paragraph<'a> {
+) -> Paragraph<'static> {
     let lines: Vec<Line> = rows
         .iter()
         .skip(scroll)
         .take(height)
         .map(|(keys, desc)| {
             if keys.is_empty() {
-                Line::from(Span::styled(desc.to_string(), pal.heading))
+                Line::from(Span::styled(desc.clone(), pal.heading))
             } else {
                 Line::from(vec![
                     Span::styled(
                         format!("{keys:<field$}  "),
                         pal.text.add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(desc.to_string(), pal.dim),
+                    Span::styled(desc.clone(), pal.dim),
                 ])
             }
         })
@@ -1694,7 +1881,8 @@ fn help_column<'a>(
 fn draw_settings(f: &mut Frame, app: &App, area: Rect, s: &Settings) {
     let pal = app.palette;
     let index = Config::settings_index();
-    let popup = centred(area, 80, index.len() as u16 + 4);
+    let rows = BUTTONS.len() + index.len();
+    let popup = centred(area, 80, rows as u16 + 4);
     f.render_widget(Clear, popup);
 
     let block = Block::default()
@@ -1715,17 +1903,33 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect, s: &Settings) {
         return;
     }
 
-    let mut scroll = s.scroll;
-    if s.selected < scroll {
-        scroll = s.selected;
-    } else if s.selected >= scroll + height {
-        scroll = s.selected + 1 - height;
-    }
-    scroll = scroll.min(index.len().saturating_sub(height));
+    let scroll = keep_visible(s.selected, height, rows);
 
     let width = inner.width as usize;
     let mut lines: Vec<Line> = Vec::with_capacity(height);
-    for (i, (key, desc)) in index.iter().enumerate().skip(scroll).take(height) {
+
+    // The buttons first, drawn as buttons rather than as settings with no
+    // value: bracketed, so it is clear they do something rather than hold
+    // something.
+    for (i, label) in BUTTONS.iter().enumerate().skip(scroll).take(height) {
+        let mut spans = vec![Span::styled(
+            format!("[ {label} ]"),
+            pal.text.add_modifier(Modifier::BOLD),
+        )];
+        if i == s.selected {
+            highlight_row(&mut spans, width, pal, true);
+        }
+        lines.push(Line::from(spans));
+    }
+
+    for (row, (key, desc)) in index
+        .iter()
+        .enumerate()
+        .map(|(n, r)| (n + BUTTONS.len(), r))
+        .skip(scroll.saturating_sub(BUTTONS.len()))
+        .take(height.saturating_sub(lines.len()))
+    {
+        let i = row;
         let editing = i == s.selected && s.editing.is_some();
         let value = match (&s.editing, editing) {
             (Some(buf), true) => buf.clone(),

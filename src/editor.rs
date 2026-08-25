@@ -32,7 +32,7 @@
 //! find-replace lives in `search` and works on files rather than buffers.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineEnding {
@@ -167,11 +167,13 @@ impl Editor {
         }
     }
 
-    /// Read a file straight into a buffer. `App` loads through its own
-    /// classification path instead, so this is used by tests and by callers
-    /// that already know the file is text.
-    #[allow(dead_code)]
-    pub fn open(path: &Path) -> std::io::Result<Self> {
+    /// Read a file straight into a buffer.
+    ///
+    /// `App` loads through its own classification path — it has to decide
+    /// whether a file is text at all first — so nothing but the tests below
+    /// comes in this way.
+    #[cfg(test)]
+    pub fn open(path: &std::path::Path) -> std::io::Result<Self> {
         let content = fs::read_to_string(path)?;
         Ok(Self::from_str(path.to_path_buf(), &content))
     }

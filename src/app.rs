@@ -77,6 +77,7 @@ use crate::config::{Config, Markers, Palette};
 use crate::editor::Editor;
 use crate::graph;
 use crate::highlight::Highlighter;
+use crate::keys::{Action, Context as KeyContext, Keymap};
 use crate::media;
 use crate::project;
 use crate::projectmap::{self, ProjectMap};
@@ -133,7 +134,6 @@ pub struct Bar {
     pub results: Vec<Hit>,
     /// Highlighted result. Moving it previews that hit without leaving the bar.
     pub selected: usize,
-    pub scroll: usize,
     /// Set when a search found nothing, so the bar can say so.
     pub searched: bool,
 }
@@ -145,7 +145,6 @@ impl Bar {
             input,
             results: Vec::new(),
             selected: 0,
-            scroll: 0,
             searched: false,
         }
     }
@@ -163,13 +162,21 @@ impl Bar {
     }
 }
 
-/// The in-program settings area. Rows come from `Config::settings_index`, so
-/// this holds only the cursor and whatever is being typed.
+/// The two rows above the settings themselves: things you do, rather than
+/// values you set.
+///
+/// They live at the top because they are what someone opening this area is
+/// most often looking for — and because a button below thirty rows of settings
+/// is a button nobody finds.
+pub const BUTTONS: &[&str] = &["Keybinds", "Reset settings"];
+
+/// The in-program settings area. Rows come from [`BUTTONS`] and then
+/// `Config::settings_index`, so this holds only the cursor and whatever is
+/// being typed.
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
-    /// Index into `Config::settings_index`.
+    /// Row under the cursor: the buttons first, then the settings.
     pub selected: usize,
-    pub scroll: usize,
     /// Present while a value is being typed.
     pub editing: Option<String>,
     pub cursor: usize,
@@ -186,6 +193,10 @@ pub enum ConfirmKind {
     QuitUnsaved,
     /// Rewrite every occurrence across the project.
     Replace { find: String, replace: String },
+    /// Throw away every setting and go back to the shipped ones.
+    ResetSettings,
+    /// Throw away every rebinding and go back to the shipped keyboard.
+    ResetKeybinds,
 }
 
 /// A pending yes/no question. The `message` is built at the point the action
@@ -209,7 +220,22 @@ pub enum Mode {
     Help(usize),
     Bar(Bar),
     Settings(Settings),
+    /// The keybinds window, opened from the settings area.
+    Keybinds(Keybinds),
 }
+
+/// The keybinds window: every action, and the keys that reach it.
+#[derive(Debug, Clone, Default)]
+pub struct Keybinds {
+    /// Row under the cursor: the reset button first, then one row per action.
+    pub selected: usize,
+    /// Set while the next keypress is being read as a new binding rather than
+    /// as a key. This is the only place in tiny where a key is data.
+    pub capturing: bool,
+}
+
+/// The button above the keybinds list.
+pub const KEYBIND_BUTTONS: &[&str] = &["Reset keybinds"];
 
 /// How a text file wants to be shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,9 +377,13 @@ pub struct App {
     /// Open files, keyed by path. Outlives the selection so unsaved edits
     /// survive arrowing away and back — see the module docs.
     pub buffers: HashMap<PathBuf, Editor>,
-    /// The live config. Mutated by `:set` and the settings area; persisted
+    /// The live config. Mutated by `*set` and the settings area; persisted
     /// only on an explicit `Ctrl+S`.
     pub config: Config,
+    /// What every key does. Rebuilt from `config.keys` by
+    /// [`App::apply_config`], so a rebinding takes effect on the next
+    /// keypress without a restart.
+    pub keymap: Keymap,
     /// Parsed styles. Rebuilt from `config.theme` by [`App::apply_config`], so
     /// a theme change repaints without a restart.
     pub palette: Palette,
@@ -405,6 +435,7 @@ impl App {
             return Err(anyhow!("{} is not a directory", root.display()));
         }
         let (highlighter, theme_warning) = Highlighter::with_theme(&config.syntax_theme);
+        let (keymap, keys_warning) = Keymap::new(&config.keys);
         let tree = Tree::new(root, config.show_hidden);
         let rows = tree.flatten();
         let palette = Palette::from_theme(&config.theme);
@@ -427,6 +458,7 @@ impl App {
             read_mode: true,
             buffers: HashMap::new(),
             config,
+            keymap,
             palette,
             highlighter,
             media: None,
@@ -434,7 +466,10 @@ impl App {
             clipboard: None,
             tree_hidden: false,
             focus_before_hide: Focus::Tree,
-            status: warning.or(theme_warning).unwrap_or(opening),
+            status: warning
+                .or(keys_warning)
+                .or(theme_warning)
+                .unwrap_or(opening),
             should_quit: false,
             last_edit_height: 20,
             last_tree_height: 20,
@@ -770,6 +805,7 @@ impl App {
             Mode::Confirm(c) => self.on_confirm_key(c, key),
             Mode::Bar(b) => self.on_bar_key(b, key),
             Mode::Settings(s) => self.on_settings_key(s, key),
+            Mode::Keybinds(kb) => self.on_keybinds_key(kb, key),
             Mode::Normal => match self.focus {
                 Focus::Tree => self.on_tree_key(key),
                 Focus::Editor => self.on_editor_key(key),
@@ -780,19 +816,10 @@ impl App {
     /// Arrows scroll the keymap; anything else puts it away.
     fn on_help_key(&mut self, scroll: usize, key: KeyEvent) {
         let page = self.last_tree_height.max(1);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-        let next = match key.code {
-            KeyCode::Up if shift => 0,
-            KeyCode::Down if shift => usize::MAX,
-            KeyCode::Char('I') => 0,
-            KeyCode::Char('K') => usize::MAX,
-            KeyCode::Up | KeyCode::Char('i') => scroll.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('k') => scroll + 1,
-            KeyCode::PageUp => scroll.saturating_sub(page),
-            KeyCode::PageDown => scroll + page,
-            KeyCode::Home => 0,
-            KeyCode::End => usize::MAX,
-            _ => return,
+        // No last row to clamp to here: `ui` knows how long the keymap is and
+        // clamps as it draws.
+        let Some(next) = list_move(key, scroll, usize::MAX, page) else {
+            return;
         };
         self.mode = Mode::Help(next);
     }
@@ -801,18 +828,21 @@ impl App {
     /// handles its own navigation; only opening a file and closing the map
     /// need application state.
     fn on_map_key(&mut self, key: KeyEvent) {
-        let action = match self.project_map.as_mut() {
-            Some(view) => view.on_key(key),
+        // Resolved here rather than inside the view: the map does not need to
+        // know how a key becomes an action, only which one it was.
+        let action = self.keymap.find(KeyContext::Map, &key);
+        let intent = match self.project_map.as_mut() {
+            Some(view) => view.on_key(key, action),
             None => return,
         };
-        match action {
-            projectmap::Action::None => {}
-            projectmap::Action::Close => {
+        match intent {
+            projectmap::Intent::None => {}
+            projectmap::Intent::Close => {
                 self.project_map = None;
                 self.status = "back to the tree".into();
                 return;
             }
-            projectmap::Action::Open(path) => {
+            projectmap::Intent::Open(path) => {
                 self.project_map = None;
                 self.open_path(&path);
                 return;
@@ -828,44 +858,36 @@ impl App {
     /// editor, nothing is being typed — which is why `n`, `r`, `d` and friends
     /// can be bare.
     fn on_tree_key(&mut self, key: KeyEvent) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let page = self.last_tree_height.saturating_sub(1).max(1) as isize;
-        match key.code {
-            KeyCode::Char('s') if ctrl => self.save_active(),
-            KeyCode::Char('q') if ctrl => self.request_quit(),
-            KeyCode::Char('f') if ctrl => self.open_bar(false),
-            KeyCode::Char('p') if ctrl => self.open_bar(true),
-            KeyCode::Char('c') if ctrl => self.copy_selection(),
-            KeyCode::Char('v') if ctrl => self.paste_clipboard(),
-            KeyCode::Char('b') if ctrl => self.toggle_tree_pane(),
-            // Shift and an arrow goes all the way. `I` and `K` are the same
-            // gesture for a keyboard with no arrows — see the note on `i j k l`
-            // in the module docs.
-            KeyCode::Up if shift => self.select_index(0),
-            KeyCode::Down if shift => self.select_index(usize::MAX),
-            KeyCode::Char('I') => self.select_index(0),
-            KeyCode::Char('K') => self.select_index(usize::MAX),
-            KeyCode::Up | KeyCode::Char('i') => self.move_selection(-1),
-            KeyCode::Down | KeyCode::Char('k') => self.move_selection(1),
-            KeyCode::PageUp => self.move_selection(-page),
-            KeyCode::PageDown => self.move_selection(page),
-            KeyCode::Home => self.select_index(0),
-            KeyCode::End => self.select_index(usize::MAX),
-            KeyCode::Right | KeyCode::Char('l') => self.activate(),
-            KeyCode::Enter => self.toggle_or_open(),
-            KeyCode::Left | KeyCode::Char('j') => self.collapse_or_parent(),
-            KeyCode::Tab => self.focus_editor(),
-            KeyCode::Char('/') => self.open_bar(false),
-            KeyCode::Char(',') | KeyCode::F(2) => self.open_settings(),
-            KeyCode::Char('m') => self.open_map(),
-            KeyCode::Char('n') => self.begin_prompt(PromptKind::New),
-            KeyCode::Char('r') => self.begin_prompt(PromptKind::Rename),
-            KeyCode::Char('d') => self.begin_delete(),
-            KeyCode::Char('.') => self.toggle_hidden(),
-            KeyCode::F(5) => self.refresh(),
-            KeyCode::Char('?') => self.mode = Mode::Help(0),
-            KeyCode::Char('q') | KeyCode::Esc => self.request_quit(),
+        let Some(action) = self.keymap.resolve(KeyContext::Tree, &key) else {
+            return;
+        };
+        match action {
+            Action::Save => self.save_active(),
+            Action::Quit | Action::TreeQuit => self.request_quit(),
+            Action::Bar | Action::TreeBar => self.open_bar(false),
+            Action::CommandBar => self.open_bar(true),
+            Action::ToggleTreePane => self.toggle_tree_pane(),
+            Action::TreeUp => self.move_selection(-1),
+            Action::TreeDown => self.move_selection(1),
+            Action::TreeFirst => self.select_index(0),
+            Action::TreeLast => self.select_index(usize::MAX),
+            Action::TreePageUp => self.move_selection(-page),
+            Action::TreePageDown => self.move_selection(page),
+            Action::TreeOpen => self.toggle_or_open(),
+            Action::TreeInto => self.activate(),
+            Action::TreeOut => self.collapse_or_parent(),
+            Action::TreePreview => self.focus_editor(),
+            Action::TreeNew => self.begin_prompt(PromptKind::New),
+            Action::TreeRename => self.begin_prompt(PromptKind::Rename),
+            Action::TreeDelete => self.begin_delete(),
+            Action::TreeCopy => self.copy_selection(),
+            Action::TreePaste => self.paste_clipboard(),
+            Action::TreeHidden => self.toggle_hidden(),
+            Action::TreeRefresh => self.refresh(),
+            Action::TreeHelp => self.mode = Mode::Help(0),
+            Action::TreeSettings => self.open_settings(),
+            Action::TreeMap => self.open_map(),
             _ => {}
         }
     }
@@ -885,19 +907,18 @@ impl App {
         let page = self.last_edit_height.saturating_sub(1).max(1);
 
         // Keys that leave the pane or act on the file come first, so they can
-        // never be swallowed as text input.
-        match key.code {
-            KeyCode::Char('s') if ctrl => return self.save_active(),
-            KeyCode::Char('q') if ctrl => return self.request_quit(),
-            KeyCode::Char('f') if ctrl => return self.open_bar(false),
-            // Ctrl+P reaches the command bar without leaving the editor, where
-            // a bare `:` is just a character being typed.
-            KeyCode::Char('p') if ctrl => return self.open_bar(true),
-            KeyCode::Char('b') if ctrl => return self.toggle_tree_pane(),
-            // Esc means "back to the tree" even when the tree is folded away,
+        // never be swallowed as text input. `Ctrl+P` is here because a bare
+        // `*` in the editor is a character being typed.
+        match self.keymap.resolve(KeyContext::Editor, &key) {
+            Some(Action::Save) => return self.save_active(),
+            Some(Action::Quit) => return self.request_quit(),
+            Some(Action::Bar) => return self.open_bar(false),
+            Some(Action::CommandBar) => return self.open_bar(true),
+            Some(Action::ToggleTreePane) => return self.toggle_tree_pane(),
+            // "Back to the tree" means the tree, even when it is folded away,
             // so it brings the pane back rather than handing the keyboard to
             // something that is not on screen.
-            KeyCode::Esc => {
+            Some(Action::EditorBack) => {
                 self.focus_tree();
                 self.status = "back to tree".into();
                 return;
@@ -909,26 +930,37 @@ impl App {
             return self.on_read_key(key, page);
         }
 
+        // Read what the key meant before borrowing the buffer, so nothing has
+        // to be cloned to satisfy the borrow checker on every keystroke.
+        let action = self.keymap.find(KeyContext::Editor, &key);
         let Some(ed) = self.active_buffer_mut() else {
             self.focus = Focus::Tree;
             return;
         };
-        match key.code {
-            KeyCode::Char('z') if ctrl => {
+        // Editing proper. The bindable half is handled first; what is left is
+        // the text-editing keyboard itself, which is fixed — a keyboard that
+        // cannot type is not a keyboard.
+        match action {
+            Some(Action::EditorUndo) => {
                 if !ed.undo() {
                     self.status = "nothing to undo".into();
                 }
+                return;
             }
-            KeyCode::Char('y') if ctrl => {
+            Some(Action::EditorRedo) => {
                 if !ed.redo() {
                     self.status = "nothing to redo".into();
                 }
+                return;
             }
-            KeyCode::Char('k') if ctrl => ed.delete_line(),
-            KeyCode::Left if ctrl => ed.move_word_left(),
-            KeyCode::Right if ctrl => ed.move_word_right(),
-            KeyCode::Home if ctrl => ed.move_doc_start(),
-            KeyCode::End if ctrl => ed.move_doc_end(),
+            Some(Action::EditorDeleteLine) => return ed.delete_line(),
+            Some(Action::EditorWordLeft) => return ed.move_word_left(),
+            Some(Action::EditorWordRight) => return ed.move_word_right(),
+            Some(Action::EditorDocStart) => return ed.move_doc_start(),
+            Some(Action::EditorDocEnd) => return ed.move_doc_end(),
+            _ => {}
+        }
+        match key.code {
             KeyCode::Left => ed.move_left(),
             KeyCode::Right => ed.move_right(),
             KeyCode::Up => ed.move_up(),
@@ -949,29 +981,23 @@ impl App {
     /// Reading rendered markdown, or looking at a picture: arrows scroll.
     fn on_read_key(&mut self, key: KeyEvent, page: usize) {
         let max = self.preview_len.saturating_sub(1);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-        match key.code {
-            KeyCode::Up if shift => self.preview_scroll = 0,
-            KeyCode::Down if shift => self.preview_scroll = max,
-            KeyCode::Char('I') => self.preview_scroll = 0,
-            KeyCode::Char('K') => self.preview_scroll = max,
-            KeyCode::Char('e') => {
+        let Some(action) = self.keymap.find(KeyContext::Read, &key) else {
+            return;
+        };
+        match action {
+            Action::ReadUp => self.preview_scroll = self.preview_scroll.saturating_sub(1),
+            Action::ReadDown => self.preview_scroll = (self.preview_scroll + 1).min(max),
+            Action::ReadTop => self.preview_scroll = 0,
+            Action::ReadBottom => self.preview_scroll = max,
+            Action::ReadPageUp => self.preview_scroll = self.preview_scroll.saturating_sub(page),
+            Action::ReadPageDown => self.preview_scroll = (self.preview_scroll + page).min(max),
+            Action::ReadBar => self.open_bar(false),
+            Action::ReadEdit => {
                 if matches!(self.preview, Preview::Buffer { .. }) {
                     self.read_mode = false;
                     self.status = "editing — ^S save, Esc back".into();
                 }
             }
-            KeyCode::Char('/') => self.open_bar(false),
-            KeyCode::Up | KeyCode::Char('i') => {
-                self.preview_scroll = self.preview_scroll.saturating_sub(1)
-            }
-            KeyCode::Down | KeyCode::Char('k') => {
-                self.preview_scroll = (self.preview_scroll + 1).min(max)
-            }
-            KeyCode::PageUp => self.preview_scroll = self.preview_scroll.saturating_sub(page),
-            KeyCode::PageDown => self.preview_scroll = (self.preview_scroll + page).min(max),
-            KeyCode::Home => self.preview_scroll = 0,
-            KeyCode::End => self.preview_scroll = max,
             _ => {}
         }
     }
@@ -1118,7 +1144,6 @@ impl App {
         b.results = search::search(self.tree.root_path(), &b.input, &opts);
         b.searched = !b.input.trim().is_empty();
         b.selected = 0;
-        b.scroll = 0;
     }
 
     /// Show the highlighted result in the preview pane without leaving the bar.
@@ -1511,6 +1536,11 @@ impl App {
     /// the media cache since a size change invalidates whatever was drawn.
     fn apply_config(&mut self) {
         self.palette = Palette::from_theme(&self.config.theme);
+        let (keymap, warning) = Keymap::new(&self.config.keys);
+        self.keymap = keymap;
+        if let Some(w) = warning {
+            self.status = w;
+        }
         let (hl, _) = Highlighter::with_theme(&self.config.syntax_theme);
         self.highlighter = hl;
         if self.tree.show_hidden() != self.config.show_hidden {
@@ -1540,18 +1570,17 @@ impl App {
     /// value and immediately saving is the obvious thing to want.
     fn on_settings_key(&mut self, mut s: Settings, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let index = Config::settings_index();
-        let last = index.len().saturating_sub(1);
+        // The buttons sit above the settings, so a row number has to be turned
+        // into one or the other before it means anything.
+        let last = BUTTONS.len() + index.len() - 1;
+        let setting_at = |row: usize| index.get(row.saturating_sub(BUTTONS.len()));
 
         // Editing a value: the keys go into the field.
         if let Some(mut buf) = s.editing.take() {
             if ctrl {
                 if key.code == KeyCode::Char('s') {
-                    match self.config.save() {
-                        Ok(p) => self.status = format!("wrote {}", p.display()),
-                        Err(e) => self.status = format!("{e:#}"),
-                    }
+                    self.write_config();
                 }
                 s.editing = Some(buf);
                 self.mode = Mode::Settings(s);
@@ -1562,7 +1591,7 @@ impl App {
                     self.status = "unchanged".into();
                 }
                 KeyCode::Enter => {
-                    let key_name = index[s.selected.min(last)].0;
+                    let key_name = setting_at(s.selected).map(|r| r.0).unwrap_or("");
                     match self.config.set(key_name, &buf) {
                         Ok(()) => {
                             self.apply_config();
@@ -1600,32 +1629,190 @@ impl App {
             return;
         }
 
+        if let Some(next) = list_move(key, s.selected, last, OVERLAY_PAGE) {
+            s.selected = next;
+            self.mode = Mode::Settings(s);
+            return;
+        }
         match key.code {
             KeyCode::Esc => {
                 self.status = "closed".into();
                 return;
             }
-            KeyCode::Char('s') if ctrl => match self.config.save() {
-                Ok(p) => self.status = format!("wrote {}", p.display()),
-                Err(e) => self.status = format!("{e:#}"),
+            KeyCode::Char('s') if ctrl => self.write_config(),
+            KeyCode::Enter => match s.selected {
+                0 => {
+                    self.mode = Mode::Keybinds(Keybinds::default());
+                    self.status = "keybinds — Enter to change a key, Esc to close".into();
+                    return;
+                }
+                1 => {
+                    self.confirm_reset_settings();
+                    return;
+                }
+                row => {
+                    let key_name = setting_at(row).map(|r| r.0).unwrap_or("");
+                    let current = self.config.get(key_name).unwrap_or_default();
+                    s.cursor = current.chars().count();
+                    s.editing = Some(current);
+                }
             },
-            KeyCode::Up if shift => s.selected = 0,
-            KeyCode::Down if shift => s.selected = last,
-            KeyCode::Char('I') => s.selected = 0,
-            KeyCode::Char('K') => s.selected = last,
-            KeyCode::Up | KeyCode::Char('i') => s.selected = s.selected.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('k') => s.selected = (s.selected + 1).min(last),
-            KeyCode::Home => s.selected = 0,
-            KeyCode::End => s.selected = last,
-            KeyCode::Enter => {
-                let key_name = index[s.selected.min(last)].0;
-                let current = self.config.get(key_name).unwrap_or_default();
-                s.cursor = current.chars().count();
-                s.editing = Some(current);
-            }
             _ => {}
         }
         self.mode = Mode::Settings(s);
+    }
+
+    /// Write the whole config to disk, and say where it went.
+    ///
+    /// `Ctrl+S` in the settings area and in the keybinds window both land
+    /// here: they edit the same file, and one of them writing a different
+    /// message than the other would only suggest otherwise.
+    fn write_config(&mut self) {
+        match self.config.save() {
+            Ok(p) => self.status = format!("wrote {}", p.display()),
+            Err(e) => self.status = format!("{e:#}"),
+        }
+    }
+
+    /// Ask before throwing away every setting. There is no undo for this, and
+    /// the answer takes the settings area back with it either way.
+    fn confirm_reset_settings(&mut self) {
+        let changed = self.config.changed_from_default();
+        if changed == 0 {
+            self.status = "already the shipped settings".into();
+            self.mode = Mode::Settings(Settings::default());
+            return;
+        }
+        self.mode = Mode::Confirm(Confirm {
+            kind: ConfirmKind::ResetSettings,
+            message: format!(
+                "Reset {changed} setting{} to what tiny ships with?  (y/n)",
+                plural(changed)
+            ),
+        });
+    }
+
+    /// Keys for the keybinds window.
+    ///
+    /// Two states, like the settings area: reading the list, or waiting for the
+    /// key that will become a binding. In the second, *every* key is data — so
+    /// there is no Esc to cancel with, and the way out is to bind Esc to the
+    /// action or to press it twice.
+    fn on_keybinds_key(&mut self, mut kb: Keybinds, key: KeyEvent) {
+        let actions: Vec<Action> = Action::all().collect();
+        let last = KEYBIND_BUTTONS.len() + actions.len() - 1;
+
+        if kb.capturing {
+            kb.capturing = false;
+            let action = actions[kb.selected.saturating_sub(KEYBIND_BUTTONS.len())];
+            match crate::keys::spec_of(&key) {
+                Some(spec) => self.bind(action, &spec),
+                None => self.status = "that key cannot be written down".into(),
+            }
+            self.mode = Mode::Keybinds(kb);
+            return;
+        }
+
+        if let Some(next) = list_move(key, kb.selected, last, OVERLAY_PAGE) {
+            kb.selected = next;
+            self.mode = Mode::Keybinds(kb);
+            return;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => {
+                // Back to where this was opened from, not out to the tree.
+                self.mode = Mode::Settings(Settings::default());
+                self.status =
+                    "settings — Enter to change, ^S to write tiny.conf, Esc to close".into();
+                return;
+            }
+            KeyCode::Char('s') if ctrl => self.write_config(),
+            KeyCode::Delete | KeyCode::Backspace => {
+                if kb.selected >= KEYBIND_BUTTONS.len() {
+                    let action = actions[kb.selected - KEYBIND_BUTTONS.len()];
+                    self.config.keys.remove(action.name());
+                    self.apply_config();
+                    self.status = format!("{} back to {}", action.name(), action.defaults());
+                }
+            }
+            KeyCode::Enter => {
+                if kb.selected < KEYBIND_BUTTONS.len() {
+                    self.confirm_reset_keybinds();
+                    return;
+                }
+                kb.capturing = true;
+                let action = actions[kb.selected - KEYBIND_BUTTONS.len()];
+                self.status = format!("press the key for {} — Delete restores it", action.name());
+            }
+            _ => {}
+        }
+        self.mode = Mode::Keybinds(kb);
+    }
+
+    /// Bind one key to an action, replacing whatever reached it before.
+    ///
+    /// One key per action, not a list: the window shows what you pressed, and
+    /// a second binding you cannot see is worse than no second binding. The
+    /// config file still takes several, space-separated, and the window shows
+    /// them all.
+    ///
+    /// The key is taken off anything else in the same pane that answered to
+    /// it, so what the window shows is what actually happens — two rows
+    /// claiming the same key, only one of which works, would be a lie.
+    fn bind(&mut self, action: Action, spec: &str) {
+        let Some(key) = crate::keys::Key::parse(spec) else {
+            self.status = format!("`{spec}` is not a key");
+            return;
+        };
+        let clashes = self.keymap.clashes(action, &key);
+        for other in &clashes {
+            let left: Vec<String> = self
+                .keymap
+                .keys(*other)
+                .iter()
+                .filter(|k| **k != key)
+                .map(|k| k.to_string())
+                .collect();
+            self.set_binding(*other, &left.join(" "));
+        }
+        self.set_binding(action, spec);
+        self.apply_config();
+        self.status = match clashes.first() {
+            // Say what was taken away, rather than letting a key quietly stop
+            // doing what it used to.
+            Some(other) => format!("{} = {spec} — taken from {}", action.name(), other.name()),
+            None => format!("{} = {spec}", action.name()),
+        };
+    }
+
+    /// Record what reaches an action, dropping the override entirely when it is
+    /// back to the shipped keys — so the config file only ever holds what has
+    /// actually been changed.
+    fn set_binding(&mut self, action: Action, spec: &str) {
+        if spec == action.defaults() {
+            self.config.keys.remove(action.name());
+        } else {
+            self.config
+                .keys
+                .insert(action.name().to_string(), spec.to_string());
+        }
+    }
+
+    fn confirm_reset_keybinds(&mut self) {
+        if self.config.keys.is_empty() {
+            self.status = "already the shipped keyboard".into();
+            self.mode = Mode::Keybinds(Keybinds::default());
+            return;
+        }
+        let n = self.config.keys.len();
+        self.mode = Mode::Confirm(Confirm {
+            kind: ConfirmKind::ResetKeybinds,
+            message: format!(
+                "Put {n} key{} back to what tiny ships with?  (y/n)",
+                plural(n)
+            ),
+        });
     }
 
     // ---- prompts & confirmations -----------------------------------------
@@ -1693,12 +1880,47 @@ impl App {
                 ConfirmKind::Delete(path) => self.do_delete(&path),
                 ConfirmKind::QuitUnsaved => self.should_quit = true,
                 ConfirmKind::Replace { find, replace } => self.do_replace(&find, &replace),
+                ConfirmKind::ResetSettings => self.do_reset_settings(),
+                ConfirmKind::ResetKeybinds => self.do_reset_keybinds(),
             },
             KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
-                self.status = "cancelled".into()
+                // A reset was asked for from a window; go back to it rather
+                // than dropping the user out to the tree.
+                match c.kind {
+                    ConfirmKind::ResetSettings => self.mode = Mode::Settings(Settings::default()),
+                    ConfirmKind::ResetKeybinds => self.mode = Mode::Keybinds(Keybinds::default()),
+                    _ => {}
+                }
+                self.status = "cancelled".into();
             }
             _ => self.mode = Mode::Confirm(c),
         }
+    }
+
+    /// Put every setting back to what tiny ships with, keeping the rebindings:
+    /// they are a different question and were reset by a different button.
+    ///
+    /// The file on disk is untouched until `Ctrl+S`, so a reset answered by
+    /// mistake costs nothing as long as you do not save.
+    fn do_reset_settings(&mut self) {
+        let keys = std::mem::take(&mut self.config.keys);
+        self.config = Config {
+            keys,
+            ..Config::default()
+        };
+        self.apply_config();
+        self.tree.set_show_hidden(self.config.show_hidden);
+        self.rebuild_rows();
+        self.mode = Mode::Settings(Settings::default());
+        self.status = "settings reset — ^S to write it".into();
+    }
+
+    /// Put every key back, keeping the settings.
+    fn do_reset_keybinds(&mut self) {
+        self.config.keys.clear();
+        self.apply_config();
+        self.mode = Mode::Keybinds(Keybinds::default());
+        self.status = "keybinds reset — ^S to write it".into();
     }
 
     /// Carry out a confirmed project-wide replace.
@@ -2154,6 +2376,42 @@ pub fn display_name(path: &Path) -> String {
 /// `""` or `"s"`, for building status messages that read properly at n = 1.
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
+}
+
+/// How many rows an overlay's page keys move. The overlays do not know how
+/// tall they are drawn — `ui` decides that — and a fixed step reads the same
+/// in a tall window as in a short one.
+const OVERLAY_PAGE: usize = 10;
+
+/// Move a list cursor the way every list in tiny moves: an arrow or `i`/`k`,
+/// Shift or `I`/`K` for the ends, and a page at a time.
+///
+/// `None` for anything else, which is how each caller keeps its own keys —
+/// Enter, Esc, Delete — to itself.
+///
+/// These are not rebindable, and deliberately: an overlay you cannot get out
+/// of because you rebound its keys is a trap, and `keys` says so.
+fn list_move(key: KeyEvent, at: usize, last: usize, page: usize) -> Option<usize> {
+    // A chord is never a movement: `Ctrl+K` is a chord the window may want for
+    // something else, not the letter k with a modifier attached.
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    Some(match key.code {
+        KeyCode::Up if shift => 0,
+        KeyCode::Down if shift => last,
+        KeyCode::Char('I') | KeyCode::Home => 0,
+        KeyCode::Char('K') | KeyCode::End => last,
+        KeyCode::Up | KeyCode::Char('i') => at.saturating_sub(1),
+        KeyCode::Down | KeyCode::Char('k') => (at + 1).min(last),
+        KeyCode::PageUp => at.saturating_sub(page),
+        KeyCode::PageDown => (at + page).min(last),
+        _ => return None,
+    })
 }
 
 /// Byte offset of character index `ci`.
@@ -3452,8 +3710,9 @@ mod tests {
     fn ctrl_s_while_editing_a_setting_does_not_type_an_s_into_it() {
         let (_td, mut app) = fixture();
         app.on_key(ch(','));
-        app.on_key(k(KeyCode::Down));
-        app.on_key(k(KeyCode::Down));
+        for _ in 0..4 {
+            app.on_key(k(KeyCode::Down));
+        }
         app.on_key(k(KeyCode::Enter));
         app.on_key(ctrl('s'));
         let Mode::Settings(s) = &app.mode else {
@@ -4059,13 +4318,243 @@ mod tests {
         assert!(out.contains("left"), "values are shown:\n{out}");
     }
 
+    // ---- the settings buttons and the keybinds window ---------------------
+
+    /// Open the keybinds window with the cursor on `action`.
+    fn keybinds_on(app: &mut App, action: Action) {
+        app.on_key(ch(','));
+        app.on_key(k(KeyCode::Enter)); // the Keybinds button is the first row
+        let rows = Action::all().position(|a| a == action).unwrap() + KEYBIND_BUTTONS.len();
+        for _ in 0..rows {
+            app.on_key(k(KeyCode::Down));
+        }
+    }
+
+    #[test]
+    fn a_chord_is_not_a_movement_in_a_list() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch(','));
+        app.on_key(ctrl('k'));
+        let Mode::Settings(s) = &app.mode else {
+            panic!("settings closed")
+        };
+        assert_eq!(s.selected, 0, "^K is a chord, not the letter k");
+    }
+
+    #[test]
+    fn the_settings_area_opens_on_its_two_buttons() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch(','));
+        let out = screen(&mut app, 96, 40).join("\n");
+        assert!(out.contains("[ Keybinds ]"), "{out}");
+        assert!(out.contains("[ Reset settings ]"), "{out}");
+        assert!(
+            out.contains("tab_width"),
+            "the settings are still there:\n{out}"
+        );
+    }
+
+    #[test]
+    fn the_keybinds_button_opens_the_keybinds_window() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch(','));
+        app.on_key(k(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Keybinds(_)));
+        let out = screen(&mut app, 96, 40).join("\n");
+        assert!(out.contains("Keybinds"), "{out}");
+        assert!(out.contains("tree.down"), "every action is listed:\n{out}");
+        assert!(
+            out.contains("ctrl+s"),
+            "with the keys that reach it:\n{out}"
+        );
+    }
+
+    #[test]
+    fn esc_from_the_keybinds_window_goes_back_to_the_settings() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch(','));
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(k(KeyCode::Esc));
+        assert!(
+            matches!(app.mode, Mode::Settings(_)),
+            "back where it was opened from, not out to the tree"
+        );
+    }
+
+    #[test]
+    fn a_key_can_be_rebound_and_the_tree_answers_to_it() {
+        let (_td, mut app) = fixture();
+        keybinds_on(&mut app, Action::TreeDown);
+        app.on_key(k(KeyCode::Enter));
+        assert!(matches!(&app.mode, Mode::Keybinds(kb) if kb.capturing));
+        app.on_key(ch('z'));
+
+        assert_eq!(
+            app.config.keys.get("tree.down").map(String::as_str),
+            Some("z")
+        );
+        app.on_key(k(KeyCode::Esc));
+        app.on_key(k(KeyCode::Esc));
+        assert_eq!(app.selected, 0);
+        app.on_key(ch('z'));
+        assert_eq!(app.selected, 1, "z moves down now");
+        app.on_key(ch('k'));
+        assert_eq!(app.selected, 1, "and k does not");
+    }
+
+    #[test]
+    fn rebinding_takes_the_key_off_whatever_had_it() {
+        let (_td, mut app) = fixture();
+        keybinds_on(&mut app, Action::TreeDown);
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('n')); // n was tree.new
+
+        assert!(app.status.contains("taken from tree.new"), "{}", app.status);
+        assert_eq!(
+            app.keymap.spec(Action::TreeNew),
+            "",
+            "one key does one thing, and the window says so"
+        );
+    }
+
+    #[test]
+    fn delete_puts_one_binding_back() {
+        let (_td, mut app) = fixture();
+        keybinds_on(&mut app, Action::TreeDown);
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('z'));
+        assert!(app.config.keys.contains_key("tree.down"));
+
+        app.on_key(k(KeyCode::Delete));
+        assert!(
+            !app.config.keys.contains_key("tree.down"),
+            "the override is gone, not set back to the same value"
+        );
+        assert_eq!(app.keymap.spec(Action::TreeDown), "down k");
+    }
+
+    #[test]
+    fn binding_a_key_back_to_its_default_drops_the_override() {
+        let (_td, mut app) = fixture();
+        keybinds_on(&mut app, Action::TreeRename);
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('r'));
+        assert!(
+            app.config.keys.is_empty(),
+            "the config only holds what actually changed"
+        );
+    }
+
+    #[test]
+    fn resetting_the_keybinds_asks_first_and_then_restores_them() {
+        let (_td, mut app) = fixture();
+        keybinds_on(&mut app, Action::TreeDown);
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('z'));
+
+        // Back up to the reset button.
+        app.on_key(ch('I'));
+        app.on_key(k(KeyCode::Enter));
+        assert!(
+            joined(&mut app).contains("back to what tiny ships with"),
+            "asks"
+        );
+        app.on_key(ch('n'));
+        assert!(app.config.keys.contains_key("tree.down"), "n backed out");
+
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('y'));
+        assert!(app.config.keys.is_empty(), "y put them all back");
+        assert!(
+            matches!(app.mode, Mode::Keybinds(_)),
+            "and left the window open"
+        );
+    }
+
+    #[test]
+    fn resetting_the_settings_asks_first_and_then_restores_them() {
+        let (_td, mut app) = fixture();
+        command(&mut app, "set tab_width 7");
+        assert_eq!(app.config.tab_width, 7);
+
+        app.on_key(ch(','));
+        app.on_key(k(KeyCode::Down)); // the reset button
+        app.on_key(k(KeyCode::Enter));
+        assert!(
+            joined(&mut app).contains("Reset 1 setting"),
+            "{}",
+            app.status
+        );
+        app.on_key(ch('n'));
+        assert_eq!(app.config.tab_width, 7, "n backed out");
+
+        app.on_key(k(KeyCode::Down));
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('y'));
+        assert_eq!(app.config.tab_width, 4, "back to the shipped value");
+        assert!(matches!(app.mode, Mode::Settings(_)), "and stayed open");
+    }
+
+    #[test]
+    fn the_two_resets_do_not_touch_each_other() {
+        let (_td, mut app) = fixture();
+        command(&mut app, "set tab_width 7");
+        keybinds_on(&mut app, Action::TreeDown);
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('z'));
+
+        // Reset the keys: the setting survives.
+        app.on_key(ch('I'));
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('y'));
+        assert!(app.config.keys.is_empty());
+        assert_eq!(app.config.tab_width, 7, "a setting is not a keybinding");
+
+        // And the other way round.
+        keybinds_on(&mut app, Action::TreeDown);
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('z'));
+        app.on_key(k(KeyCode::Esc));
+        app.on_key(k(KeyCode::Down));
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('y'));
+        assert_eq!(app.config.tab_width, 4);
+        assert!(
+            app.config.keys.contains_key("tree.down"),
+            "a keybinding is not a setting"
+        );
+    }
+
+    #[test]
+    fn resetting_when_nothing_has_changed_says_so() {
+        let (_td, mut app) = fixture();
+        app.on_key(ch(','));
+        app.on_key(k(KeyCode::Down));
+        app.on_key(k(KeyCode::Enter));
+        assert!(app.status.contains("already"), "{}", app.status);
+        assert!(matches!(app.mode, Mode::Settings(_)), "nothing to confirm");
+    }
+
+    #[test]
+    fn a_rebinding_from_the_config_file_is_what_the_keys_do() {
+        let td = tempfile::tempdir().unwrap();
+        build(td.path());
+        let mut cfg = Config::default();
+        cfg.keys.insert("tree.down".into(), "z".into());
+        let mut app = App::new(target(td.path(), None), cfg, None).unwrap();
+
+        app.on_key(ch('z'));
+        assert_eq!(app.selected, 1, "the file said z, so z it is");
+    }
+
     #[test]
     fn a_setting_can_be_changed_from_the_settings_area() {
         let (_td, mut app) = fixture();
         app.on_key(ch(','));
-        // Walk to tab_width, third in the index.
-        app.on_key(k(KeyCode::Down));
-        app.on_key(k(KeyCode::Down));
+        // Past the two buttons, then to tab_width, third in the index.
+        for _ in 0..4 {
+            app.on_key(k(KeyCode::Down));
+        }
         app.on_key(k(KeyCode::Enter));
 
         // The field is prefilled with the current value.
@@ -4523,8 +5012,54 @@ mod tests {
         assert!(out.contains("*line 42"), "{out}");
         assert!(out.contains("*replace old new"), "{out}");
         assert!(
-            out.contains("Ctrl+S"),
+            // Keys read as they would be written in the config, which is what
+            // the keybinds window shows too.
+            out.contains("ctrl+s"),
             "and the keys are still there:\n{out}"
+        );
+    }
+
+    #[test]
+    fn the_help_window_shows_a_rebinding_not_the_shipped_key() {
+        let (_td, mut app) = fixture();
+        keybinds_on(&mut app, Action::TreeDown);
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('z'));
+        app.on_key(k(KeyCode::Esc));
+        app.on_key(k(KeyCode::Esc));
+
+        app.on_key(ch('?'));
+        let out = screen(&mut app, 90, 70).join("\n");
+        let row = out
+            .lines()
+            .find(|l| l.contains("move the cursor"))
+            .unwrap_or_else(|| panic!("{out}"));
+        assert!(row.contains('z'), "the help follows the keyboard:\n{row}");
+        assert!(
+            !row.contains("down k"),
+            "and not the key that used to do it:\n{row}"
+        );
+    }
+
+    #[test]
+    fn an_unbound_action_leaves_the_help_row_empty_rather_than_lying() {
+        let (_td, mut app) = fixture();
+        // Binding n to something else takes it off tree.new entirely.
+        keybinds_on(&mut app, Action::TreeDown);
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('n'));
+        app.on_key(k(KeyCode::Esc));
+        app.on_key(k(KeyCode::Esc));
+
+        app.on_key(ch('?'));
+        let out = screen(&mut app, 90, 70).join("\n");
+        let row = out
+            .lines()
+            .find(|l| l.contains("a dot in the name"))
+            .unwrap_or_else(|| panic!("{out}"));
+        assert!(
+            !row.contains(" n "),
+            "nothing reaches it, so nothing is offered:\n{row}"
         );
     }
 
@@ -4668,6 +5203,7 @@ mod tests {
                     }
                     '\n' => app.on_key(k(KeyCode::Enter)),
                     '\t' => app.on_key(k(KeyCode::Tab)),
+                    '⎋' => app.on_key(k(KeyCode::Esc)),
                     '↓' => app.on_key(k(KeyCode::Down)),
                     '⇧' => {
                         if let Some(n) = chars.next() {

@@ -42,16 +42,18 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::graph::{self, Edge, EdgeKind, Graph, Node};
+use crate::keys::Action;
 
-/// What a keypress asked the app to do.
+/// What a keypress asked the app to do. Named for the request rather than
+/// the key, since `keys::Action` is now what a key resolves to.
 ///
 /// The view handles its own navigation but cannot open files or close itself —
 /// both need `App`. Returning an intent keeps this module free of any
 /// dependency on application state.
-pub enum Action {
+pub enum Intent {
     /// Handled internally; nothing for `App` to do.
     None,
     /// Leave the map and go back to the tree.
@@ -523,51 +525,57 @@ impl ProjectMap {
     /// Ctrl chords are refused outright and passed back as `None`, so global
     /// bindings keep their meaning here rather than being eaten as graph keys.
     /// While the filter box is open every key goes to it instead.
-    pub fn on_key(&mut self, key: KeyEvent) -> Action {
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            return Action::None;
-        }
+    pub fn on_key(&mut self, key: KeyEvent, action: Option<Action>) -> Intent {
+        // While the filter box has the keyboard every key is a character, so
+        // whatever the key would otherwise have meant is beside the point.
         if self.filtering {
             return self.on_filter_key(key);
         }
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('m') => return Action::Close,
-            KeyCode::Enter => {
+        let Some(action) = action else {
+            return Intent::None;
+        };
+        match action {
+            Action::MapClose => return Intent::Close,
+            Action::MapOpen => {
                 if let Some(n) = self.selected_node() {
-                    return Action::Open(n.path.clone());
+                    return Intent::Open(n.path.clone());
                 }
             }
-            KeyCode::Left | KeyCode::Char('j') => self.move_towards(-1.0, 0.0),
-            KeyCode::Right | KeyCode::Char('l') => self.move_towards(1.0, 0.0),
+            Action::MapLeft => self.move_towards(-1.0, 0.0),
+            Action::MapRight => self.move_towards(1.0, 0.0),
             // Screen coordinates run downwards; the layout runs upwards.
-            KeyCode::Up | KeyCode::Char('i') => self.move_towards(0.0, 1.0),
-            KeyCode::Down | KeyCode::Char('k') => self.move_towards(0.0, -1.0),
-            KeyCode::Tab => self.cycle(true),
-            KeyCode::BackTab => self.cycle(false),
-            KeyCode::Char('/') => {
+            Action::MapUp => self.move_towards(0.0, 1.0),
+            Action::MapDown => self.move_towards(0.0, -1.0),
+            Action::MapNext => self.cycle(true),
+            Action::MapPrevious => self.cycle(false),
+            Action::MapFilter => {
                 self.filtering = true;
                 self.filter.clear();
             }
-            KeyCode::Char(c @ '1'..='4') => {
-                let i = c as usize - '1' as usize;
-                self.kinds[i] = !self.kinds[i];
-                self.ensure_selection();
-            }
-            KeyCode::Char('o') => {
+            Action::MapWikilinks => self.toggle_kind(0),
+            Action::MapLinks => self.toggle_kind(1),
+            Action::MapImports => self.toggle_kind(2),
+            Action::MapCalls => self.toggle_kind(3),
+            Action::MapOrphans => {
                 self.show_orphans = !self.show_orphans;
                 self.ensure_selection();
             }
-            KeyCode::Char('r') => {
-                self.layout();
-            }
+            Action::MapRelayout => self.layout(),
             _ => {}
         }
-        Action::None
+        Intent::None
+    }
+
+    /// Turn one kind of connection on or off, and make sure the cursor is
+    /// still on something that is drawn.
+    fn toggle_kind(&mut self, i: usize) {
+        self.kinds[i] = !self.kinds[i];
+        self.ensure_selection();
     }
 
     /// Keys for the `/` filter box. Esc clears and closes; Enter keeps the
     /// filter but hands the keyboard back to navigation.
-    fn on_filter_key(&mut self, key: KeyEvent) -> Action {
+    fn on_filter_key(&mut self, key: KeyEvent) -> Intent {
         match key.code {
             KeyCode::Esc => {
                 self.filter.clear();
@@ -581,7 +589,7 @@ impl ProjectMap {
             _ => {}
         }
         self.ensure_selection();
-        Action::None
+        Intent::None
     }
 
     /// Keep the cursor on something that is actually drawn.
@@ -687,7 +695,7 @@ fn nearest_free(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyEventKind;
+    use crossterm::event::{KeyEventKind, KeyModifiers};
     use std::fs;
 
     fn write(dir: &Path, rel: &str, body: &str) {
@@ -720,6 +728,12 @@ mod tests {
 
     fn ch(c: char) -> KeyEvent {
         k(KeyCode::Char(c))
+    }
+
+    /// What the shipped keyboard makes of a key. These tests are about the
+    /// view, not the bindings.
+    fn act(key: KeyEvent) -> Option<Action> {
+        crate::keys::Keymap::default().find(crate::keys::Context::Map, &key)
     }
 
     fn rel_of(view: &ProjectMap, i: usize) -> &str {
@@ -960,16 +974,16 @@ mod tests {
         view.pos[3] = (0.0, 100.0);
         view.pos[4] = (0.0, -100.0);
 
-        view.on_key(k(KeyCode::Right));
+        view.on_key(k(KeyCode::Right), act(k(KeyCode::Right)));
         assert_eq!(view.selected, 1);
         view.selected = 0;
-        view.on_key(k(KeyCode::Left));
+        view.on_key(k(KeyCode::Left), act(k(KeyCode::Left)));
         assert_eq!(view.selected, 2);
         view.selected = 0;
-        view.on_key(k(KeyCode::Up));
+        view.on_key(k(KeyCode::Up), act(k(KeyCode::Up)));
         assert_eq!(view.selected, 3, "up is up on screen");
         view.selected = 0;
-        view.on_key(k(KeyCode::Down));
+        view.on_key(k(KeyCode::Down), act(k(KeyCode::Down)));
         assert_eq!(view.selected, 4);
     }
 
@@ -985,7 +999,7 @@ mod tests {
             (-70.0, 0.0),
             (-80.0, 0.0),
         ];
-        view.on_key(k(KeyCode::Right));
+        view.on_key(k(KeyCode::Right), act(k(KeyCode::Right)));
         assert_eq!(view.selected, 0, "everything is to the left");
     }
 
@@ -995,7 +1009,7 @@ mod tests {
         let visible = view.visible_indices();
         view.selected = visible[0];
         for _ in 0..visible.len() {
-            view.on_key(k(KeyCode::Tab));
+            view.on_key(k(KeyCode::Tab), act(k(KeyCode::Tab)));
         }
         assert_eq!(view.selected, visible[0], "a full lap comes back round");
     }
@@ -1012,7 +1026,7 @@ mod tests {
             .unwrap();
         view.selected = alone;
 
-        view.on_key(ch('o')); // hide unconnected files again
+        view.on_key(ch('o'), act(ch('o'))); // hide unconnected files again
         assert!(!view.show_orphans);
         assert!(
             view.node_visible(view.selected),
@@ -1026,7 +1040,7 @@ mod tests {
     fn escape_and_w_both_close_the_graph() {
         for key in [k(KeyCode::Esc), ch('m'), ch('q')] {
             let (_td, mut view) = fixture();
-            assert!(matches!(view.on_key(key), Action::Close));
+            assert!(matches!(view.on_key(key, act(key)), Intent::Close));
         }
     }
 
@@ -1035,8 +1049,8 @@ mod tests {
         let (td, mut view) = fixture();
         view.selected = view.visible_indices()[0];
         let want = view.graph.nodes[view.selected].path.clone();
-        match view.on_key(k(KeyCode::Enter)) {
-            Action::Open(p) => {
+        match view.on_key(k(KeyCode::Enter), act(k(KeyCode::Enter))) {
+            Intent::Open(p) => {
                 assert_eq!(p, want);
                 assert!(p.starts_with(td.path()));
             }
@@ -1048,26 +1062,26 @@ mod tests {
     fn the_number_keys_toggle_edge_kinds() {
         let (_td, mut view) = fixture();
         assert!(view.kinds.iter().all(|k| *k));
-        view.on_key(ch('3'));
+        view.on_key(ch('3'), act(ch('3')));
         assert!(!view.kinds[kind_index(EdgeKind::Import)]);
-        view.on_key(ch('3'));
+        view.on_key(ch('3'), act(ch('3')));
         assert!(view.kinds[kind_index(EdgeKind::Import)]);
     }
 
     #[test]
     fn slash_opens_a_filter_that_takes_typing_and_escape_clears_it() {
         let (_td, mut view) = fixture();
-        view.on_key(ch('/'));
+        view.on_key(ch('/'), act(ch('/')));
         assert!(view.filtering);
         for c in "src".chars() {
-            view.on_key(ch(c));
+            view.on_key(ch(c), act(ch(c)));
         }
         assert_eq!(view.filter, "src");
         assert!(visible_names(&view).iter().all(|r| r.contains("src")));
 
-        view.on_key(k(KeyCode::Backspace));
+        view.on_key(k(KeyCode::Backspace), act(k(KeyCode::Backspace)));
         assert_eq!(view.filter, "sr");
-        view.on_key(k(KeyCode::Esc));
+        view.on_key(k(KeyCode::Esc), act(k(KeyCode::Esc)));
         assert!(!view.filtering);
         assert!(view.filter.is_empty(), "escape clears the filter");
     }
@@ -1076,8 +1090,8 @@ mod tests {
     fn keys_that_mean_something_elsewhere_do_not_close_the_graph() {
         let (_td, mut view) = fixture();
         // `q` closes, but only when it is not being typed into the filter.
-        view.on_key(ch('/'));
-        assert!(matches!(view.on_key(ch('q')), Action::None));
+        view.on_key(ch('/'), act(ch('/')));
+        assert!(matches!(view.on_key(ch('q'), act(ch('q'))), Intent::None));
         assert_eq!(view.filter, "q");
     }
 
@@ -1088,14 +1102,14 @@ mod tests {
             modifiers: KeyModifiers::CONTROL,
             ..ch('c')
         };
-        assert!(matches!(view.on_key(ctrl_c), Action::None));
+        assert!(matches!(view.on_key(ctrl_c, act(ctrl_c)), Intent::None));
     }
 
     #[test]
     fn r_lays_the_graph_out_again_to_the_same_place() {
         let (_td, mut view) = fixture();
         let before = view.pos.clone();
-        view.on_key(ch('r'));
+        view.on_key(ch('r'), act(ch('r')));
         for (a, b) in before.iter().zip(view.pos.iter()) {
             assert!((a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9);
         }
