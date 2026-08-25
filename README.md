@@ -49,6 +49,7 @@ Press `?` in the program to see all controls.
 | `R` `F5`    | re-read the project from disk              |
 | `^B`        | fold the tree away, and bring it back      |
 | `q`         | quit                                       |
+
 (When creating a new directory, you can type the entire desired filepath)
 
 **Search and commands**
@@ -61,6 +62,7 @@ Press `?` in the program to see all controls.
 | `,` `F2`   | the settings area                          |
 | `Ctrl+F`   | search, from anywhere including the editor |
 | `Ctrl+P`   | commands, from anywhere                    |
+
 (autofill search results pop up while typing. on hover, the preview will show the contents. press enter to jump to it)
 
 Commands read as plain English, and `Tab` completes every part of them — the
