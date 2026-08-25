@@ -12,7 +12,8 @@
 //!
 //! An index is the obvious optimisation and the wrong one here. It would need
 //! building on startup, invalidating on every save, and persisting somewhere
-//! under `.tiny/` — and it can go stale, which means search can start lying.
+//! on disk — which tiny does not do, since it writes nothing into a project.
+//! It can also go stale, which means search can start lying.
 //! A linear scan over a folder of notes and source finishes in single-digit
 //! milliseconds and is correct by construction. The size caps below
 //! ([`MAX_FILE_BYTES`], `max_results`) are what keep it that way; if a project

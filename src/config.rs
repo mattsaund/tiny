@@ -1,8 +1,10 @@
 //! Configuration.
 //!
-//! Two places, both optional:
-//!   - `~/.config/tiny/tiny.conf`     user defaults
-//!   - `<project>/.tiny/tiny.conf`    per-project overrides
+//! One file, and only one: `tiny.conf`, next to whatever else the platform
+//! keeps a user's settings in (see [`config_dir`]). How the program behaves is
+//! a property of the person using it, not of the folder they happen to have
+//! open, so there is deliberately no per-project override — every project on a
+//! machine draws the same tree the same way.
 //!
 //! Every field has a default, so a partial or malformed file never stops the
 //! program starting — it falls back and says so in the status bar.
@@ -11,15 +13,6 @@
 //! carry weight as well as hue: `"bold"`, `"underline"`, `"white on black"`,
 //! `"#7dcfff bold"`. The shipped defaults are deliberately monochrome and use
 //! the terminal's own palette, so tiny looks like the terminal it runs in.
-//!
-//! # Layering
-//!
-//! The project file **replaces** the user file rather than merging into it.
-//! Fields a project omits fall back to the library defaults, not to the user's
-//! settings. That is a real trade: it means a project config has to restate
-//! anything it wants kept, but it also means opening someone else's project
-//! gives you exactly what they specified, with no half-understood blend of two
-//! files to reason about. See [`Config::load_from`].
 //!
 //! # Adding a setting
 //!
@@ -50,10 +43,7 @@ use anyhow::{Result, anyhow};
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};
 
-/// Directory name marking a folder as a tiny project.
-pub const PROJECT_DIR: &str = ".tiny";
-/// Config file name, used identically at both layers: `~/.config/tiny/tiny.conf`
-/// and `<project>/.tiny/tiny.conf`.
+/// The config file, in [`config_dir`]. There is exactly one of these.
 pub const CONF_NAME: &str = "tiny.conf";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,8 +82,10 @@ pub enum Markers {
 pub struct Config {
     /// Fallback when the working directory cannot be read.
     pub default_root: PathBuf,
-    /// Initialise a project in any directory opened without one.
-    pub auto_init: bool,
+    /// Write a starter `README.md` into a folder tiny creates or finds empty.
+    /// The only file it ever writes into a project; turn it off and it writes
+    /// nothing at all.
+    pub starter_readme: bool,
     pub show_hidden: bool,
     pub tab_width: usize,
 
@@ -138,7 +130,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             default_root: home(),
-            auto_init: true,
+            starter_readme: true,
             show_hidden: false,
             tab_width: 4,
             tree_side: Side::Left,
@@ -175,28 +167,20 @@ impl Config {
         config_dir().map(|d| d.join(CONF_NAME))
     }
 
-    /// `<project>/.tiny/tiny.conf`.
-    pub fn project_path(root: &Path) -> PathBuf {
-        root.join(PROJECT_DIR).join(CONF_NAME)
-    }
-
-    /// Load user config, then let the project's own file override it.
-    /// Returns the config plus anything worth telling the user about.
+    /// Read the one config file, if it is there. Returns the config plus
+    /// anything worth telling the user about.
     ///
-    /// Called twice during startup — once with `None` before the project is
-    /// known, then again with the resolved root. See `main::real_main`.
-    pub fn load(project_root: Option<&Path>) -> (Self, Option<String>) {
-        Self::load_from(Self::user_path().as_deref(), project_root)
+    /// Called once, before the project is even resolved — nothing about which
+    /// folder is open can change the answer.
+    pub fn load() -> (Self, Option<String>) {
+        Self::load_from(Self::user_path().as_deref())
     }
 
-    /// The body of `load`, with both paths passed in. Tests use this so they
+    /// The body of `load`, with the path passed in. Tests use this so they
     /// never depend on — or touch — whatever config the machine really has.
-    pub fn load_from(
-        user_conf: Option<&Path>,
-        project_root: Option<&Path>,
-    ) -> (Self, Option<String>) {
+    pub fn load_from(user_conf: Option<&Path>) -> (Self, Option<String>) {
         let mut warning = None;
-        let mut cfg = match user_conf {
+        let cfg = match user_conf {
             Some(p) if p.exists() => match Self::read(p) {
                 Ok(c) => c,
                 Err(e) => {
@@ -206,18 +190,6 @@ impl Config {
             },
             _ => Self::default(),
         };
-        if let Some(root) = project_root {
-            let p = Self::project_path(root);
-            if p.exists() {
-                match Self::read(&p) {
-                    // A project file is a full config; fields it omits fall
-                    // back to library defaults, not to the user file. Keeping
-                    // it simple beats a half-understood merge.
-                    Ok(c) => cfg = c,
-                    Err(e) => warning = Some(format!("project {CONF_NAME}: {e}")),
-                }
-            }
-        }
         (cfg.sanitized(), warning)
     }
 
@@ -226,7 +198,7 @@ impl Config {
         Ok(toml::from_str::<Config>(&text)?)
     }
 
-    /// Write to the user config path, creating the directory if needed.
+    /// Write to the config path, creating the directory if needed.
     ///
     /// Writes the *whole* config, including everything left at its default, so
     /// the generated file doubles as documentation of what can be set. Bound
@@ -263,7 +235,7 @@ impl Config {
     /// in-program settings area lists, so the two can never drift apart.
     pub fn settings_index() -> &'static [(&'static str, &'static str)] {
         &[
-            ("auto_init", "initialise any folder opened"),
+            ("starter_readme", "write README.md into an empty folder"),
             ("show_hidden", "list dotfiles in the tree"),
             ("tab_width", "spaces inserted by Tab"),
             ("tree_side", "tree side: left, right"),
@@ -307,7 +279,7 @@ impl Config {
     /// unknown setting.
     pub fn get(&self, key: &str) -> Option<String> {
         Some(match key {
-            "auto_init" => self.auto_init.to_string(),
+            "starter_readme" => self.starter_readme.to_string(),
             "show_hidden" => self.show_hidden.to_string(),
             "tab_width" => self.tab_width.to_string(),
             "tree_side" => side_name(self.tree_side).into(),
@@ -352,7 +324,7 @@ impl Config {
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let v = value.trim();
         match key {
-            "auto_init" => self.auto_init = parse_bool(v)?,
+            "starter_readme" => self.starter_readme = parse_bool(v)?,
             "show_hidden" => self.show_hidden = parse_bool(v)?,
             "tab_width" => self.tab_width = parse_num(v)?,
             "tree_side" => {
@@ -622,30 +594,47 @@ fn pos_name(p: Position) -> &'static str {
     }
 }
 
-/// `$XDG_CONFIG_HOME/tiny`, falling back to `~/.config/tiny`.
+/// The one directory `tiny.conf` lives in, in the order the platforms are
+/// asked: `$XDG_CONFIG_HOME/tiny`, then `%APPDATA%\tiny` on Windows, then
+/// `~/.config/tiny` on Linux and macOS.
 ///
-/// Returns `None` when neither variable is set, which is why `--config` can
-/// fail and why first-run config writing is best-effort.
+/// `XDG_CONFIG_HOME` comes first everywhere because setting it is an explicit
+/// choice, and `APPDATA` before the home directory because a Windows shell that
+/// also defines `HOME` (git-bash, msys) should still put the file where the
+/// rest of Windows keeps such things.
+///
+/// Returns `None` when none of them are set, which is why `--config` can fail
+/// and why first-run config writing is best-effort.
 fn config_dir() -> Option<PathBuf> {
     if let Ok(x) = std::env::var("XDG_CONFIG_HOME")
         && !x.is_empty()
     {
         return Some(Path::new(&x).join("tiny"));
     }
-    std::env::var("HOME")
-        .ok()
-        .filter(|h| !h.is_empty())
-        .map(|h| Path::new(&h).join(".config").join("tiny"))
+    if let Ok(appdata) = std::env::var("APPDATA")
+        && !appdata.is_empty()
+    {
+        return Some(Path::new(&appdata).join("tiny"));
+    }
+    home_dir().map(|h| h.join(".config").join("tiny"))
 }
 
-/// `$HOME`, or `.` when it is unset — used only as `default_root`, the
-/// fallback for when the working directory cannot be read at all.
+/// The user's home directory: `$HOME`, or `%USERPROFILE%` on Windows, which is
+/// where Windows puts it and does not set `HOME`.
+pub fn home_dir() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"].into_iter().find_map(|var| {
+        std::env::var(var)
+            .ok()
+            .filter(|h| !h.is_empty())
+            .map(PathBuf::from)
+    })
+}
+
+/// The home directory, or `.` when there isn't one — used only as
+/// `default_root`, the fallback for when the working directory cannot be read
+/// at all.
 fn home() -> PathBuf {
-    std::env::var("HOME")
-        .ok()
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[cfg(test)]
@@ -743,16 +732,6 @@ mod tests {
     }
 
     #[test]
-    fn a_user_conf_is_read_when_the_project_has_none() {
-        let td = tempfile::tempdir().unwrap();
-        let user = td.path().join(CONF_NAME);
-        fs::write(&user, "tab_width = 3\n").unwrap();
-        let (cfg, warning) = Config::load_from(Some(&user), None);
-        assert_eq!(cfg.tab_width, 3);
-        assert!(warning.is_none());
-    }
-
-    #[test]
     fn roundtrips_through_the_conf_file() {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join(CONF_NAME);
@@ -767,17 +746,12 @@ mod tests {
     }
 
     #[test]
-    fn a_project_conf_overrides_the_user_one() {
+    fn the_one_conf_file_is_what_gets_read() {
         let td = tempfile::tempdir().unwrap();
-        let root = td.path();
-        fs::create_dir_all(root.join(PROJECT_DIR)).unwrap();
-        fs::write(
-            Config::project_path(root),
-            "tab_width = 2\ntree_side = \"right\"\n",
-        )
-        .unwrap();
+        let path = td.path().join(CONF_NAME);
+        fs::write(&path, "tab_width = 2\ntree_side = \"right\"\n").unwrap();
 
-        let (cfg, warning) = Config::load_from(None, Some(root));
+        let (cfg, warning) = Config::load_from(Some(&path));
         assert_eq!(cfg.tab_width, 2);
         assert_eq!(cfg.tree_side, Side::Right);
         assert!(warning.is_none());
@@ -786,12 +760,19 @@ mod tests {
     #[test]
     fn a_broken_conf_file_warns_instead_of_stopping_the_program() {
         let td = tempfile::tempdir().unwrap();
-        let root = td.path();
-        fs::create_dir_all(root.join(PROJECT_DIR)).unwrap();
-        fs::write(Config::project_path(root), "tab_width = = =\n").unwrap();
+        let path = td.path().join(CONF_NAME);
+        fs::write(&path, "tab_width = = =\n").unwrap();
 
-        let (cfg, warning) = Config::load_from(None, Some(root));
+        let (cfg, warning) = Config::load_from(Some(&path));
         assert_eq!(cfg.tab_width, 4, "falls back to the default");
         assert!(warning.is_some_and(|w| w.contains(CONF_NAME)));
+    }
+
+    #[test]
+    fn a_missing_conf_file_is_simply_the_defaults() {
+        let td = tempfile::tempdir().unwrap();
+        let (cfg, warning) = Config::load_from(Some(&td.path().join("nothing-here.conf")));
+        assert_eq!(cfg.tab_width, Config::default().tab_width);
+        assert!(warning.is_none());
     }
 }

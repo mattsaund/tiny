@@ -1,9 +1,18 @@
-//! Working out what `tiny <thing>` meant, and making a project if there
-//! isn't one.
+//! Working out what `tiny <thing>` meant, and what to write if it is not
+//! there yet.
 //!
-//! A project is just a directory with a `.tiny/` folder in it. That folder
-//! holds an optional per-project `tiny.conf` and, later, the link-graph
-//! cache. Nothing about a project lives outside the directory it describes.
+//! A project is a directory. That is the whole definition — no marker folder,
+//! no registry, no database, and no state anywhere else on the machine. Point
+//! tiny at a folder and it opens the folder; move the folder and nothing
+//! breaks, because nothing ever knew where it was.
+//!
+//! # Nothing is written into your project
+//!
+//! tiny creates exactly one file, ever: a starter `README.md`, and only in a
+//! directory it just made or found empty. No dotfiles, no caches, no
+//! per-project settings — how the program behaves comes from one config file
+//! per user (see [`crate::config`]), never from the folder being opened. An
+//! existing folder of someone's work is left exactly as it was found.
 //!
 //! # Why there is no `tiny new`
 //!
@@ -13,27 +22,19 @@
 //! silently creates a directory instead of erroring — a trade the design
 //! accepts, because the alternative is a `new` command nobody remembers.
 //!
-//! # The scaffolding rule
+//! # Naming a file
 //!
-//! Two different things happen when tiny meets a directory without a `.tiny/`:
-//!
-//! - **Marker only.** An existing folder full of someone's work gets a
-//!   `.tiny/` and nothing else. Dropping a `README.md` and a `notes/` folder
-//!   into a stranger's thesis directory would be rude, and unrecoverable
-//!   without a diff.
-//! - **Marker plus scaffolding.** A directory tiny just created, or one that
-//!   was already effectively empty, gets a starter `README.md` and
-//!   `notes/welcome.md` so a brand-new project is not a blank screen.
-//!
-//! `resolve` decides which, and `init`'s `scaffold` flag carries the answer.
-//! Both paths are idempotent: an existing file is never overwritten.
+//! `tiny todo.txt` opens that one file in the editor with the tree beside it,
+//! which is how tiny stands in for a plain text editor when a whole project is
+//! more than you wanted. A name that is not on disk yet is created either way;
+//! the extension is what decides which — see [`names_a_file`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::config::{Config, PROJECT_DIR};
+use crate::config::{self, Config};
 
 /// What to open: a directory for the tree, and optionally a file to land on.
 #[derive(Debug, Clone, PartialEq)]
@@ -42,42 +43,24 @@ pub struct Target {
     /// Set when the argument named a file — the tree opens on its directory
     /// and the cursor starts on the file itself.
     pub file: Option<PathBuf>,
-    /// True when this run created the project.
+    /// True when this run made the directory, or found it empty and wrote a
+    /// starter README into it.
     pub created: bool,
 }
 
-/// A directory is a project if it holds a `.tiny/` folder. That is the whole
-/// definition — there is no registry, no database, and no state anywhere else
-/// on the machine. Move the folder and the project moves with it.
-pub fn is_project(dir: &Path) -> bool {
-    dir.join(PROJECT_DIR).is_dir()
-}
-
-/// Walk up from `start` looking for a directory that is already a project.
+/// Turn the command-line argument into something to open, creating whatever
+/// is named if it does not exist yet.
 ///
-/// This is what makes `tiny` with no argument do the right thing from a
-/// subdirectory: standing in `myproject/src/deep/` and running `tiny` opens
-/// `myproject/`, the same way `git` finds its repo root. Returns `None` when
-/// the walk reaches the filesystem root without finding a marker, in which
-/// case the caller falls back to the working directory itself.
-pub fn find_root(start: &Path) -> Option<PathBuf> {
-    let mut cur = Some(start);
-    while let Some(dir) = cur {
-        if is_project(dir) {
-            return Some(dir.to_path_buf());
-        }
-        cur = dir.parent();
-    }
-    None
-}
-
-/// Turn the command-line argument into something to open, creating the
-/// project if it does not exist yet.
-///
-/// - no argument: the working directory, or the project it sits inside
-/// - a file: its directory, with the cursor on the file
+/// - no argument: the working directory
 /// - a directory: itself
-/// - a path that does not exist: created, then treated as a directory
+/// - a file: its folder, with the file in the editor
+/// - a name that does not exist, with an extension: an empty file, opened
+/// - a name that does not exist, without one: a new folder
+///
+/// There is no walking up to find anything, because there is nothing to find:
+/// `tiny` opens where you are standing, and `tiny some/folder` opens that
+/// folder. Nothing on disk marks one directory as more of a project than
+/// another.
 ///
 /// Everything is canonicalized before it is returned, so the rest of the
 /// program can compare paths with `==` and use `strip_prefix` against the root
@@ -87,20 +70,20 @@ pub fn resolve(arg: Option<&str>, cfg: &Config) -> Result<Target> {
     let (mut root, file, mut created) = match arg {
         None => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| cfg.default_root.clone());
-            // Running bare inside a project opens the project, not the
-            // subdirectory you happen to be standing in.
-            (find_root(&cwd).unwrap_or(cwd), None, false)
+            (cwd, None, false)
         }
         Some(a) => {
             let path = expand(a);
             if path.is_file() {
-                let dir = path
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| PathBuf::from("."));
-                (dir, Some(path), false)
+                (folder_of(&path), Some(path), false)
             } else if path.is_dir() {
                 (path, None, false)
+            } else if names_a_file(a, &path) {
+                // `tiny todo.txt` on a name that is not there yet writes the
+                // file and edits it, rather than making a folder called
+                // `todo.txt` — which is what a `.` in the name always meant.
+                touch(&path)?;
+                (folder_of(&path), Some(path), false)
             } else {
                 // Naming somewhere that isn't there yet is how you start a
                 // project now that there is no separate `new` command.
@@ -114,18 +97,26 @@ pub fn resolve(arg: Option<&str>, cfg: &Config) -> Result<Target> {
     root = root
         .canonicalize()
         .with_context(|| format!("cannot open {}", root.display()))?;
-    let file = file.map(|f| f.canonicalize().unwrap_or(f));
+    let mut file = file.map(|f| f.canonicalize().unwrap_or(f));
 
-    if !is_project(&root) {
-        if cfg.auto_init {
-            // Scaffold only into a directory tiny just made or found empty.
-            // Opening an existing folder full of work should add a marker,
-            // not a README and a welcome note.
-            let empty = is_effectively_empty(&root);
-            init(&root, created || empty)?;
-            created = created || empty;
-        } else {
-            created = false;
+    // The one file tiny ever writes, and only into a folder it just made or
+    // found empty. An existing folder of work is left exactly as it was — and
+    // a folder that just gained the file named on the command line is no
+    // longer empty, so `tiny new/todo.txt` gets the file it asked for and
+    // nothing besides.
+    if cfg.starter_readme {
+        created = created || is_effectively_empty(&root);
+        if created {
+            write_readme(&root)?;
+        }
+    }
+
+    // A brand-new folder opens on its README, so the first frame is the page
+    // explaining where you are rather than an empty pane.
+    if file.is_none() && created {
+        let readme = root.join(README);
+        if readme.is_file() {
+            file = Some(readme);
         }
     }
 
@@ -136,52 +127,71 @@ pub fn resolve(arg: Option<&str>, cfg: &Config) -> Result<Target> {
     })
 }
 
-/// Mark a directory as a project. With `scaffold`, also lay down a starting
-/// note so a brand-new project is not an empty screen.
-///
-/// Idempotent by construction: every write is guarded by an `exists()` check,
-/// so running it twice — which `:init` lets a user do deliberately — never
-/// clobbers an edited README or welcome note. Called both from `resolve` on
-/// startup and from the `:init` command.
-pub fn init(root: &Path, scaffold: bool) -> Result<()> {
-    let meta = root.join(PROJECT_DIR);
-    fs::create_dir_all(&meta).with_context(|| format!("cannot create {}", meta.display()))?;
+/// The folder a file argument opens the tree on: the one the file is in.
+fn folder_of(file: &Path) -> PathBuf {
+    // `Path::new("todo.txt").parent()` is `Some("")`, not `None`, so a bare
+    // filename has to be turned into the working directory by hand.
+    match file.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
 
+/// Does a name that is not on disk yet mean a file, or a folder to put a
+/// project in?
+///
+/// The extension decides: `tiny todo.txt` and `tiny scratch.py` write files,
+/// `tiny thesis` makes a project. A trailing slash always means a folder, since
+/// that is what it means everywhere else. The rule mis-reads a dotted folder
+/// name like `site.v2`, which is the price of not having a flag; an existing
+/// path never reaches here, so it only ever affects things being created.
+fn names_a_file(arg: &str, path: &Path) -> bool {
+    !arg.ends_with(std::path::is_separator) && path.extension().is_some()
+}
+
+/// Create an empty file, and any directories above it.
+///
+/// `create_new` rather than `create`: if something appeared at that path
+/// between the `is_file` check in `resolve` and here, the right answer is an
+/// error, not a truncated file.
+fn touch(path: &Path) -> Result<()> {
+    if let Some(dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    }
+    fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("cannot create {}", path.display()))?;
+    Ok(())
+}
+
+/// The only file tiny ever writes into a folder of yours.
+pub const README: &str = "README.md";
+
+/// Write the starter `README.md`, headed by the folder's own name, so a
+/// brand-new project is not an empty screen.
+///
+/// Guarded by an `exists()` check, so it can never clobber an edited README —
+/// which matters because "the folder was empty" is decided separately, and
+/// getting that wrong should cost nothing.
+fn write_readme(root: &Path) -> Result<()> {
+    let readme = root.join(README);
+    if readme.exists() {
+        return Ok(());
+    }
     let name = root
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "project".into());
-
-    let marker = meta.join("project.conf");
-    if !marker.exists() {
-        fs::write(
-            &marker,
-            format!("name = \"{name}\"\ncreated = \"{}\"\n", today()),
-        )?;
-    }
-
-    if scaffold {
-        let notes = root.join("notes");
-        if !notes.exists() {
-            fs::create_dir_all(&notes)?;
-            fs::write(notes.join("welcome.md"), WELCOME)?;
-        }
-        let readme = root.join("README.md");
-        if !readme.exists() {
-            fs::write(
-                &readme,
-                format!("# {name}\n\nA tiny project. Start in [[welcome]].\n"),
-            )?;
-        }
-    }
-    Ok(())
+    fs::write(&readme, welcome(&name)).with_context(|| format!("cannot write {}", readme.display()))
 }
 
 /// Empty enough to scaffold into: no visible files, ignoring dotfiles.
 ///
 /// Dotfiles are ignored so a directory holding only `.git/` or `.gitignore` —
 /// a freshly cloned or freshly `git init`-ed folder — still counts as empty
-/// and gets the welcome scaffolding. An unreadable directory returns `false`:
+/// and gets the starter README. An unreadable directory returns `false`:
 /// when in doubt, write nothing.
 fn is_effectively_empty(dir: &Path) -> bool {
     match fs::read_dir(dir) {
@@ -195,70 +205,49 @@ fn is_effectively_empty(dir: &Path) -> bool {
 /// Expand a leading `~`, which the shell leaves alone inside quotes.
 ///
 /// Needed because `tiny "~/notes"` and `tiny '~/notes'` reach us with a
-/// literal tilde — the shell only expands it unquoted. Deliberately handles
-/// just `~` and `~/...`; `~otheruser` is not supported and is left as a
-/// literal path, which will simply fail to open.
+/// literal tilde — the shell only expands it unquoted, and cmd.exe never does.
+/// Deliberately handles just `~` and `~/...`; `~otheruser` is not supported and
+/// is left as a literal path, which will simply fail to open.
 fn expand(s: &str) -> PathBuf {
-    if let Some(rest) = s.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME")
-        && !home.is_empty()
-    {
-        return Path::new(&home).join(rest);
+    let tail = if s == "~" {
+        Some("")
+    } else {
+        s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\"))
+    };
+    match tail.zip(config::home_dir()) {
+        Some(("", home)) => home,
+        Some((rest, home)) => home.join(rest),
+        None => PathBuf::from(s),
     }
-    if s == "~"
-        && let Ok(home) = std::env::var("HOME")
-        && !home.is_empty()
-    {
-        return PathBuf::from(home);
-    }
-    PathBuf::from(s)
 }
 
-/// `YYYY-MM-DD` from the system clock, without pulling in a date crate.
+/// The starter `README.md`, headed by the project's own name.
 ///
-/// Used once, for the `created =` line in `.tiny/project.conf`. Adding `chrono`
-/// or `time` to the dependency tree for a single date stamp was not worth it,
-/// so the civil-calendar conversion is inlined below.
-///
-/// This is UTC, not local time — a project created late at night may be dated
-/// tomorrow. The stamp is cosmetic, so that is accepted rather than fixed.
-fn today() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    // Civil-from-days, Howard Hinnant's algorithm.
-    let z = secs / 86_400 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}")
+/// It doubles as the first thing that exercises the markdown renderer, so if
+/// you change `markdown.rs`, this is a good page to look at.
+fn welcome(name: &str) -> String {
+    format!("# {name}\n{WELCOME}")
 }
 
-/// The starter note written into `notes/welcome.md` when a project is
-/// scaffolded. It doubles as the first thing that exercises the markdown
-/// renderer, so if you change `markdown.rs`, this is a good page to look at.
-pub const WELCOME: &str = r#"# Welcome
-
-This is a **tiny** project — a folder of markdown files, nothing more.
-Delete this note whenever you like.
+/// Everything below the heading in a scaffolded README.
+///
+/// Kept as one literal rather than assembled, so what a new user reads first
+/// can be proofread in one place.
+const WELCOME: &str = r#"
+A **tiny** project — a folder of plain files, nothing more. This page is one of
+them: edit it, or delete it, like anything else here.
 
 ## Moving around
 
-| key        | does                                   |
-|------------|----------------------------------------|
-| `up` `down`| move the cursor in the tree            |
-| `right`    | open a folder, or edit a file          |
-| `left`     | close a folder, or go up to its parent |
-| `/`        | search the whole project               |
-| `:`        | settings and find-replace              |
-| `?`        | the full keymap                        |
+| key         | does                                    |
+|-------------|-----------------------------------------|
+| `up` `down` | move the cursor in the tree             |
+| `enter`     | open or close a folder, or edit a file  |
+| `right`     | open a folder, or step inside an open one |
+| `left`      | close a folder, or go up to its parent  |
+| `/`         | search the whole project                |
+| `:`         | settings and find-replace               |
+| `?`         | the full keymap                         |
 
 ## Editing
 
@@ -274,9 +263,8 @@ def hello(name):
 
 ## Linking
 
-Write `[[wikilinks]]` to point one note at another. A link graph that draws
-these connections — and the ones between functions in your code — is the
-next thing being built.
+Write `[[wikilinks]]` to point one note at another. Press `w` for the graph
+that draws them, along with the imports and calls between your code files.
 
 > Everything here is a plain file. Nothing is locked in a database.
 "#;
@@ -289,38 +277,112 @@ mod tests {
         Config::default()
     }
 
+    /// Every visible and hidden name directly inside `dir`.
+    fn listing(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
     #[test]
-    fn a_missing_path_becomes_a_new_scaffolded_project() {
+    fn a_missing_path_becomes_a_new_folder_holding_only_a_readme() {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("project1");
         let t = resolve(Some(path.to_str().unwrap()), &cfg()).unwrap();
 
         assert!(t.created);
-        assert!(is_project(&t.root));
-        assert!(t.root.join("README.md").is_file());
-        assert!(t.root.join("notes").join("welcome.md").is_file());
-        assert_eq!(t.file, None);
+        assert_eq!(listing(&t.root), ["README.md"], "one file, nothing hidden");
+        assert_eq!(
+            t.file,
+            Some(t.root.join(README)),
+            "a new project opens on its README"
+        );
     }
 
     #[test]
-    fn an_existing_folder_of_work_gets_a_marker_but_no_scaffolding() {
+    fn the_starter_readme_is_headed_by_the_folder_name() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("thesis");
+        let t = resolve(Some(path.to_str().unwrap()), &cfg()).unwrap();
+
+        let text = fs::read_to_string(t.root.join(README)).unwrap();
+        assert!(text.starts_with("# thesis\n"), "{text:?}");
+        assert!(text.contains("[[wikilinks]]"), "the welcome text is in it");
+    }
+
+    #[test]
+    fn an_existing_folder_of_work_is_left_exactly_as_it_was() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().join("existing");
         fs::create_dir(&root).unwrap();
         fs::write(root.join("thesis.txt"), "words").unwrap();
 
         let t = resolve(Some(root.to_str().unwrap()), &cfg()).unwrap();
-        assert!(is_project(&t.root), "it is a project now");
-        assert!(
-            !t.root.join("README.md").exists(),
-            "someone else's folder must not gain a README"
+        assert_eq!(
+            listing(&t.root),
+            ["thesis.txt"],
+            "no README, and above all no dotfiles"
         );
-        assert!(!t.root.join("notes").exists());
         assert!(!t.created);
     }
 
     #[test]
-    fn naming_a_file_opens_its_directory_with_the_cursor_on_it() {
+    fn a_folder_holding_only_dotfiles_still_counts_as_empty() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("fresh-clone");
+        fs::create_dir_all(root.join(".git")).unwrap();
+
+        let t = resolve(Some(root.to_str().unwrap()), &cfg()).unwrap();
+        assert!(t.created);
+        assert_eq!(listing(&t.root), [".git", "README.md"]);
+    }
+
+    #[test]
+    fn opening_the_same_new_folder_twice_writes_nothing_the_second_time() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("twice");
+        resolve(Some(root.to_str().unwrap()), &cfg()).unwrap();
+        fs::write(root.join(README), "# mine\n").unwrap();
+
+        let t = resolve(Some(root.to_str().unwrap()), &cfg()).unwrap();
+        assert!(!t.created, "it has a file in it now");
+        assert_eq!(
+            fs::read_to_string(t.root.join(README)).unwrap(),
+            "# mine\n",
+            "an edited README is never written over"
+        );
+    }
+
+    #[test]
+    fn starter_readme_off_writes_nothing_at_all() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("hands-off");
+
+        let mut c = cfg();
+        c.starter_readme = false;
+        let t = resolve(Some(root.to_str().unwrap()), &c).unwrap();
+        assert!(t.root.is_dir(), "the folder is still made");
+        assert!(listing(&t.root).is_empty(), "and left completely empty");
+        assert_eq!(t.file, None);
+    }
+
+    #[test]
+    fn a_folder_is_opened_where_it_is_with_nothing_to_walk_up_to() {
+        let td = tempfile::tempdir().unwrap();
+        let deep = td.path().join("proj").join("src");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("main.py"), "print(1)").unwrap();
+
+        let t = resolve(Some(deep.to_str().unwrap()), &cfg()).unwrap();
+        assert_eq!(t.root, deep.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn naming_a_file_opens_its_folder_with_the_cursor_on_it() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().join("code");
         fs::create_dir(&root).unwrap();
@@ -330,89 +392,65 @@ mod tests {
         let t = resolve(Some(file.to_str().unwrap()), &cfg()).unwrap();
         assert_eq!(t.root, root.canonicalize().unwrap());
         assert_eq!(t.file, Some(file.canonicalize().unwrap()));
-        assert!(is_project(&t.root), "its folder becomes a project");
+        assert_eq!(listing(&t.root), ["main.py"], "opening it wrote nothing");
     }
 
     #[test]
-    fn an_existing_project_is_opened_not_re_scaffolded() {
+    fn naming_a_file_that_is_not_there_yet_writes_an_empty_one() {
         let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("proj");
+        let root = td.path().join("scratch");
         fs::create_dir(&root).unwrap();
-        init(&root, true).unwrap();
-        fs::write(root.join("README.md"), "# mine\n").unwrap();
+        let file = root.join("todo.txt");
 
-        let t = resolve(Some(root.to_str().unwrap()), &cfg()).unwrap();
-        assert!(!t.created);
+        let t = resolve(Some(file.to_str().unwrap()), &cfg()).unwrap();
+        assert!(file.is_file(), "the file is created, not a folder");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "");
+        assert_eq!(t.root, root.canonicalize().unwrap());
+        assert_eq!(t.file, Some(file.canonicalize().unwrap()));
         assert_eq!(
-            fs::read_to_string(t.root.join("README.md")).unwrap(),
-            "# mine\n",
-            "an existing README is never overwritten"
+            listing(&t.root),
+            ["todo.txt"],
+            "asking for one file gets one file"
         );
     }
 
     #[test]
-    fn auto_init_off_leaves_the_directory_untouched() {
+    fn a_new_file_brings_its_folders_with_it() {
         let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("hands-off");
-        fs::create_dir(&root).unwrap();
-        fs::write(root.join("a.txt"), "x").unwrap();
+        let file = td.path().join("a").join("b").join("notes.md");
 
-        let mut c = cfg();
-        c.auto_init = false;
-        let t = resolve(Some(root.to_str().unwrap()), &c).unwrap();
-        assert!(!is_project(&t.root), "no .tiny/ appears");
-        assert_eq!(fs::read_dir(&t.root).unwrap().count(), 1);
+        let t = resolve(Some(file.to_str().unwrap()), &cfg()).unwrap();
+        assert!(file.is_file());
+        assert_eq!(t.root, file.parent().unwrap().canonicalize().unwrap());
+        assert_eq!(listing(&t.root), ["notes.md"]);
     }
 
     #[test]
-    fn find_root_walks_up_to_the_project() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("proj");
-        let deep = root.join("a").join("b").join("c");
-        fs::create_dir_all(&deep).unwrap();
-        init(&root, false).unwrap();
-
-        assert_eq!(find_root(&deep), Some(root.clone()));
-        assert_eq!(find_root(&root), Some(root));
-    }
-
-    #[test]
-    fn find_root_gives_up_outside_any_project() {
-        let td = tempfile::tempdir().unwrap();
-        // A temp dir under /tmp is not inside a project unless one is made.
-        let deep = td.path().join("x").join("y");
-        fs::create_dir_all(&deep).unwrap();
-        assert_eq!(find_root(&deep), None);
-    }
-
-    #[test]
-    fn init_is_idempotent() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path().to_path_buf();
-        init(&root, true).unwrap();
-        let first = fs::read_to_string(root.join("README.md")).unwrap();
-        fs::write(root.join("README.md"), "edited by hand\n").unwrap();
-        init(&root, true).unwrap();
-        assert_ne!(fs::read_to_string(root.join("README.md")).unwrap(), first);
+    fn an_extension_is_what_separates_a_new_file_from_a_new_folder() {
+        assert!(names_a_file("todo.txt", Path::new("todo.txt")));
+        assert!(names_a_file(
+            "~/code/scratch.py",
+            Path::new("/home/x/scratch.py")
+        ));
+        assert!(!names_a_file("thesis", Path::new("thesis")));
+        assert!(
+            !names_a_file("notes.d/", Path::new("notes.d")),
+            "a trailing slash means a folder whatever the name looks like"
+        );
     }
 
     #[test]
     fn tilde_expands_to_the_home_directory() {
-        let home = std::env::var("HOME").unwrap();
-        assert_eq!(expand("~/notes"), Path::new(&home).join("notes"));
-        assert_eq!(expand("~"), PathBuf::from(&home));
+        let home = config::home_dir().unwrap();
+        assert_eq!(expand("~/notes"), home.join("notes"));
+        assert_eq!(expand("~"), home);
+        assert_eq!(
+            expand("~\\notes"),
+            home.join("notes"),
+            "cmd.exe never expands a tilde, so the backslash form has to work too"
+        );
         assert_eq!(expand("/tmp/x"), PathBuf::from("/tmp/x"));
         assert_eq!(expand("relative/x"), PathBuf::from("relative/x"));
-    }
-
-    #[test]
-    fn today_is_a_plausible_iso_date() {
-        let d = today();
-        let parts: Vec<&str> = d.split('-').collect();
-        assert_eq!(parts.len(), 3, "{d}");
-        let y: i32 = parts[0].parse().unwrap();
-        assert!((2024..2100).contains(&y), "{d}");
-        assert!((1..=12).contains(&parts[1].parse::<u32>().unwrap()));
-        assert!((1..=31).contains(&parts[2].parse::<u32>().unwrap()));
+        assert_eq!(expand("~notes"), PathBuf::from("~notes"), "not a home path");
     }
 }

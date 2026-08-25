@@ -1,9 +1,3 @@
 /target
 **/*.rs.bk
 *.pdb
-
-# Per-project state. `.tiny/tiny.conf` is worth committing — it is how a
-# project overrides settings for everyone who opens it — but the marker and
-# any cache are local.
-.tiny/project.conf
-.tiny/cache/

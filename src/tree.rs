@@ -222,8 +222,8 @@ impl Tree {
         }
     }
 
-    /// Expand a collapsed directory or collapse an expanded one.
-    #[allow(dead_code)]
+    /// Expand a collapsed directory or collapse an expanded one. This is what
+    /// Enter does in the tree pane.
     pub fn toggle(&mut self, path: &Path) -> bool {
         match self.find(path) {
             Some(n) if n.is_dir && n.expanded => self.collapse(path),

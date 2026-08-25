@@ -338,6 +338,17 @@ pub struct App {
     pub media: Option<MediaCache>,
     /// The graph, while it is being looked at.
     pub graph_view: Option<GraphView>,
+    /// What `Ctrl+C` picked up, waiting for a `Ctrl+V`. A path, not a copy of
+    /// the bytes: the file is read at paste time, so editing it in between
+    /// pastes what is there now rather than a stale snapshot.
+    pub clipboard: Option<PathBuf>,
+    /// `Ctrl+B` folds the tree away to give the whole window to the file.
+    /// Purely a view state — nothing about the tree itself changes, so
+    /// bringing it back costs no reading.
+    pub tree_hidden: bool,
+    /// Which pane had the keyboard when the tree was folded away, so unfolding
+    /// puts it back and the key is a true toggle.
+    focus_before_hide: Focus,
     /// The message on the status line. Every action sets this — it is the
     /// program's only channel for telling the user what just happened.
     pub status: String,
@@ -392,6 +403,9 @@ impl App {
             highlighter,
             media: None,
             graph_view: None,
+            clipboard: None,
+            tree_hidden: false,
+            focus_before_hide: Focus::Tree,
             status: warning.or(theme_warning).unwrap_or(opening),
             should_quit: false,
             last_edit_height: 20,
@@ -401,9 +415,14 @@ impl App {
 
         // `tiny <file>` lands on that file with the editor already open, which
         // is the whole point of naming a file instead of a folder.
+        //
+        // A project tiny just scaffolded also arrives with a file — its
+        // README — but only shows it. There is nothing to type into a page you
+        // have not read yet, and leaving the keyboard on the tree keeps the
+        // "new project" hint on the status line.
         if let Some(file) = target.file {
             app.reveal(&file);
-            if matches!(app.preview, Preview::Buffer { .. }) {
+            if !target.created && matches!(app.preview, Preview::Buffer { .. }) {
                 app.focus_editor();
             }
         }
@@ -782,13 +801,17 @@ impl App {
             KeyCode::Char('q') if ctrl => self.request_quit(),
             KeyCode::Char('f') if ctrl => self.open_bar(BarKind::Search),
             KeyCode::Char('p') if ctrl => self.open_bar(BarKind::Command),
+            KeyCode::Char('c') if ctrl => self.copy_selection(),
+            KeyCode::Char('v') if ctrl => self.paste_clipboard(),
+            KeyCode::Char('b') if ctrl => self.toggle_tree_pane(),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::PageUp => self.move_selection(-page),
             KeyCode::PageDown => self.move_selection(page),
             KeyCode::Home | KeyCode::Char('g') => self.select_index(0),
             KeyCode::End | KeyCode::Char('G') => self.select_index(usize::MAX),
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => self.activate(),
+            KeyCode::Right | KeyCode::Char('l') => self.activate(),
+            KeyCode::Enter => self.toggle_or_open(),
             KeyCode::Left | KeyCode::Char('h') => self.collapse_or_parent(),
             KeyCode::Tab => self.focus_editor(),
             KeyCode::Char('/') => self.open_bar(BarKind::Search),
@@ -830,8 +853,12 @@ impl App {
             // Ctrl+P reaches the command bar without leaving the editor, where
             // a bare `:` is just a character being typed.
             KeyCode::Char('p') if ctrl => return self.open_bar(BarKind::Command),
+            KeyCode::Char('b') if ctrl => return self.toggle_tree_pane(),
+            // Esc means "back to the tree" even when the tree is folded away,
+            // so it brings the pane back rather than handing the keyboard to
+            // something that is not on screen.
             KeyCode::Esc => {
-                self.focus = Focus::Tree;
+                self.focus_tree();
                 self.status = "back to tree".into();
                 return;
             }
@@ -912,7 +939,7 @@ impl App {
         self.mode = Mode::Bar(Bar::new(kind));
         self.status = match kind {
             BarKind::Search => "search the project — Enter to jump, Esc to close".into(),
-            BarKind::Command => "command — :set, :replace, :config, :help".into(),
+            BarKind::Command => "command — :new, :copy, :delete, :set — Tab completes".into(),
         };
     }
 
@@ -975,7 +1002,7 @@ impl App {
             }
             KeyCode::Tab => {
                 if b.kind == BarKind::Command {
-                    complete_command(&mut b);
+                    complete_command(&mut b, self.tree.root_path(), self.config.show_hidden);
                 }
                 self.mode = Mode::Bar(b);
                 return;
@@ -1119,13 +1146,8 @@ impl App {
             }
             "new" => self.cmd_new(rest, false),
             "mkdir" => self.cmd_new(rest, true),
-            "init" => {
-                let root = self.root().to_path_buf();
-                project::init(&root, false).map(|()| {
-                    self.refresh();
-                    "project initialised".to_string()
-                })
-            }
+            "delete" | "rm" => self.cmd_delete(rest),
+            "copy" | "cp" => self.cmd_copy(rest),
             other => Err(anyhow!("unknown command `{other}` — try :help")),
         };
         match result {
@@ -1189,6 +1211,146 @@ impl App {
             .ok_or_else(|| anyhow!("give a name: :new notes/today.md"))?;
         let base = self.creation_base();
         self.create_entry(&base, name, is_dir)
+    }
+
+    /// `:copy <src> to <dst>` — `:cp` is the same command.
+    ///
+    /// The word `to` is the separator, and everything on each side of it is one
+    /// path, so a name with spaces in it needs no quoting: `copy my notes to
+    /// old work` does what it reads like. Two arguments with no `to` between
+    /// them are accepted as well, since `copy a b` is unambiguous.
+    ///
+    /// Both paths are relative to the project root and go through
+    /// [`safe_join`], so neither end can point outside the project.
+    fn cmd_copy(&mut self, args: &[String]) -> Result<String> {
+        let (from, into) = split_on_to(args)?;
+        let root = self.tree.root_path().to_path_buf();
+        let src = safe_join(&root, &from, &root)?;
+        let dst = safe_join(&root, &into, &root)?;
+        self.copy_entry(&src, &dst)
+    }
+
+    /// `Ctrl+C`: remember what the cursor is on. Nothing is read or written
+    /// until the paste.
+    fn copy_selection(&mut self) {
+        let Some(row) = self.selected_row().cloned() else {
+            return;
+        };
+        if row.path == self.tree.root_path() {
+            self.status = "cannot copy the project root".into();
+            return;
+        }
+        self.status = format!("copied {} — ^V to paste", row.name);
+        self.clipboard = Some(row.path);
+    }
+
+    /// `Ctrl+V`: drop the clipboard into the folder the cursor is in.
+    ///
+    /// Where `:copy` refuses to write over something — you named that
+    /// destination, so a collision means you were wrong about it — a paste
+    /// picks the next free name instead. The destination here is implied
+    /// rather than stated, and pasting into the folder you copied from is the
+    /// ordinary way to duplicate a file; erroring there would make the gesture
+    /// useless.
+    fn paste_clipboard(&mut self) {
+        let Some(src) = self.clipboard.clone() else {
+            self.status = "nothing copied — ^C first".into();
+            return;
+        };
+        let base = self.creation_base();
+        let dst = match free_name(&base, &src) {
+            Ok(p) => p,
+            Err(e) => {
+                self.status = format!("{e:#}");
+                return;
+            }
+        };
+        match self.copy_entry(&src, &dst) {
+            Ok(msg) => self.status = msg,
+            Err(e) => self.status = format!("{e:#}"),
+        }
+    }
+
+    /// Copy a file, or a whole folder, to a new path inside the project.
+    ///
+    /// Naming an existing folder as the destination copies *into* it, which is
+    /// what `copy README.md to notes` reads like. Anything else is the new name
+    /// itself, and an existing one is never written over.
+    fn copy_entry(&mut self, src: &Path, dst: &Path) -> Result<String> {
+        let meta = fs::symlink_metadata(src)
+            .with_context(|| format!("cannot copy {}", display_name(src)))?;
+        // `copy a to notes` means "put a in notes", not "rename a to notes".
+        let dst = if dst.is_dir() {
+            match src.file_name() {
+                Some(name) => dst.join(name),
+                None => return Err(anyhow!("cannot copy {}", display_name(src))),
+            }
+        } else {
+            dst.to_path_buf()
+        };
+        if dst == src {
+            return Err(anyhow!("{} is already there", display_name(src)));
+        }
+        if dst.exists() {
+            return Err(anyhow!("{} already exists", display_name(&dst)));
+        }
+        // Copying a folder into itself would walk into what it is writing.
+        if meta.is_dir() && dst.starts_with(src) {
+            return Err(anyhow!("cannot copy {} into itself", display_name(src)));
+        }
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("cannot create {}", parent.display()))?;
+        }
+
+        if meta.is_dir() {
+            copy_tree(src, &dst)
+        } else {
+            fs::copy(src, &dst).map(|_| ())
+        }
+        .with_context(|| {
+            format!(
+                "cannot copy {} to {}",
+                display_name(src),
+                display_name(&dst)
+            )
+        })?;
+
+        self.tree.refresh_all();
+        self.reveal(&dst);
+        Ok(format!(
+            "copied {} to {}",
+            display_name(src),
+            display_name(&dst)
+        ))
+    }
+
+    /// `:delete`, or `:delete <path>`; `:rm` is the same command.
+    ///
+    /// With no argument it takes whatever the tree cursor is on, which is what
+    /// `d` does. Opening a file moves that cursor onto it, so a bare `:delete`
+    /// from inside the editor removes the file being edited — which is most of
+    /// why this exists as a command as well as a key, since `d` in the editor
+    /// is just the letter d.
+    ///
+    /// An argument is a path relative to the *project root*, not to the cursor,
+    /// so `:delete notes/old.md` means the same thing wherever it is typed.
+    /// [`safe_join`] keeps it inside the project.
+    ///
+    /// Like `d`, this only asks the question. Nothing is removed until `y`.
+    fn cmd_delete(&mut self, args: &[String]) -> Result<String> {
+        let path = match args.first() {
+            None => self
+                .selected_row()
+                .map(|r| r.path.clone())
+                .ok_or_else(|| anyhow!("nothing selected"))?,
+            Some(name) => {
+                let root = self.tree.root_path().to_path_buf();
+                safe_join(&root, name, &root)?
+            }
+        };
+        self.arm_delete(&path)?;
+        Ok(String::new())
     }
 
     /// Re-derive everything a settings change can affect.
@@ -1413,8 +1575,12 @@ impl App {
 
     // ---- actions ----------------------------------------------------------
 
-    /// Right-arrow / Enter on the tree: expand a closed folder, step into an
+    /// Right-arrow on the tree: expand a closed folder, step into an
     /// already-open one, or focus the preview for a file.
+    ///
+    /// This is the "inwards" key, and the mirror of
+    /// [`App::collapse_or_parent`]: holding it down walks you down a branch.
+    /// Enter is deliberately different — see [`App::toggle_or_open`].
     fn activate(&mut self) {
         let Some(row) = self.selected_row().cloned() else {
             return;
@@ -1426,6 +1592,24 @@ impl App {
                 self.tree.expand(&row.path);
                 self.rebuild_rows();
             }
+        } else {
+            self.focus_editor();
+        }
+    }
+
+    /// Enter on the tree: open a closed folder, close an open one, or focus
+    /// the preview for a file.
+    ///
+    /// Unlike [`App::activate`], the cursor never moves. Pressing Enter twice
+    /// on a folder leaves the tree exactly as it was found, which is what most
+    /// file browsers do and what the key reads as — one thing, toggled.
+    fn toggle_or_open(&mut self) {
+        let Some(row) = self.selected_row().cloned() else {
+            return;
+        };
+        if row.is_dir {
+            self.tree.toggle(&row.path);
+            self.rebuild_rows();
         } else {
             self.focus_editor();
         }
@@ -1477,6 +1661,34 @@ impl App {
         if let Some(i) = self.rows.iter().position(|r| r.path == parent) {
             self.select_index(i);
         }
+    }
+
+    /// `Ctrl+B`: fold the tree away, or bring it back.
+    ///
+    /// The keyboard cannot sit in a pane that is not on screen, so folding
+    /// moves it to the preview and unfolding puts it back where it was. Press
+    /// the key twice and nothing has changed, which is what a toggle should
+    /// mean.
+    fn toggle_tree_pane(&mut self) {
+        if self.tree_hidden {
+            self.tree_hidden = false;
+            // Back to whichever pane had it, so the key is a true toggle.
+            self.focus = self.focus_before_hide;
+            self.status = "tree back — ^B to hide".into();
+        } else {
+            self.tree_hidden = true;
+            self.focus_before_hide = self.focus;
+            self.focus = Focus::Editor;
+            self.status = "tree hidden — ^B to bring it back".into();
+        }
+    }
+
+    /// Put the tree on screen and give it the keyboard. What Esc means from
+    /// the preview, whether or not the tree was folded away — "back to the
+    /// tree" has to end up at the tree either way.
+    fn focus_tree(&mut self) {
+        self.tree_hidden = false;
+        self.focus = Focus::Tree;
     }
 
     /// `.`: show or hide dotfiles. Writes through to the config so the setting
@@ -1674,27 +1886,44 @@ impl App {
         let Some(row) = self.selected_row().cloned() else {
             return;
         };
-        if row.path == self.tree.root_path() {
-            self.status = "cannot delete the project root".into();
-            return;
+        if let Err(e) = self.arm_delete(&row.path) {
+            self.status = format!("{e:#}");
         }
+    }
+
+    /// Put up the yes/no question for removing `path`.
+    ///
+    /// The single gate on every delete: `d` and `:delete` both arrive here, so
+    /// there is one place deciding what may be removed and one question to
+    /// answer. Nothing touches the disk until [`App::do_delete`].
+    fn arm_delete(&mut self, path: &Path) -> Result<()> {
+        if path == self.tree.root_path() {
+            return Err(anyhow!("cannot delete the project root"));
+        }
+        // `symlink_metadata` rather than `exists`, which follows links and so
+        // reports a broken symlink as missing — that is a thing you very much
+        // want to be able to delete.
+        let meta = fs::symlink_metadata(path)
+            .with_context(|| format!("cannot delete {}", display_name(path)))?;
+        let name = display_name(path);
         // Say how much is at stake before asking — deleting a folder takes
         // everything under it.
-        let message = if row.is_dir {
-            let n = fs::read_dir(&row.path).map(|d| d.count()).unwrap_or(0);
+        let message = if meta.is_dir() {
+            let n = fs::read_dir(path).map(|d| d.count()).unwrap_or(0);
             format!(
                 "Delete folder {} and its {} entr{}?  (y/n)",
-                row.name,
+                name,
                 n,
                 if n == 1 { "y" } else { "ies" }
             )
         } else {
-            format!("Delete {}?  (y/n)", row.name)
+            format!("Delete {name}?  (y/n)")
         };
         self.mode = Mode::Confirm(Confirm {
-            kind: ConfirmKind::Delete(row.path),
+            kind: ConfirmKind::Delete(path.to_path_buf()),
             message,
         });
+        Ok(())
     }
 
     /// Carry out a confirmed delete, then put the cursor somewhere sensible.
@@ -1704,7 +1933,11 @@ impl App {
     /// parent directory where it can, rather than staying on an index that now
     /// points at a different file.
     fn do_delete(&mut self, path: &Path) {
-        let is_dir = path.is_dir();
+        // `symlink_metadata` again, so a link is unlinked rather than followed
+        // into: deleting a shortcut must never delete what it points at.
+        let is_dir = fs::symlink_metadata(path)
+            .map(|m| m.is_dir())
+            .unwrap_or(false);
         let result = if is_dir {
             fs::remove_dir_all(path)
         } else {
@@ -1723,6 +1956,14 @@ impl App {
                     self.selected = self.selected.min(self.rows.len().saturating_sub(1));
                 }
                 self.sync_preview();
+                // `:delete` can be run from the editor. If the pane holding the
+                // keyboard just lost its file, the tree is the only place left
+                // with something to point at.
+                if self.focus == Focus::Editor
+                    && !matches!(self.preview, Preview::Buffer { .. } | Preview::Media { .. })
+                {
+                    self.focus_tree();
+                }
                 self.status = format!("deleted {}", display_name(path));
             }
             Err(e) => self.status = format!("delete failed: {e}"),
@@ -1766,6 +2007,131 @@ fn char_byte(s: &str, ci: usize) -> usize {
     s.char_indices().nth(ci).map_or(s.len(), |(b, _)| b)
 }
 
+/// Entries that could finish the path fragment `typed`, as whole paths
+/// relative to the project root.
+///
+/// Only the one directory being typed into is read — a `read_dir`, never a
+/// walk — so completing a path costs the same in a huge project as in a small
+/// one. Folders come back with a separator on the end so Tab can carry straight
+/// on into them.
+///
+/// Dotfiles stay out of the way unless they are being shown, or unless the
+/// fragment already starts with a dot, which is the only time someone is
+/// plainly asking for one.
+fn path_candidates(root: &Path, typed: &str, show_hidden: bool) -> Vec<String> {
+    // Everything up to the last separator names the folder; the rest is the
+    // part being completed inside it.
+    let cut = typed.rfind(std::path::is_separator).map_or(0, |i| i + 1);
+    let (dir_part, fragment) = typed.split_at(cut);
+    let Ok(dir) = safe_join(root, dir_part, root) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') && !show_hidden && !fragment.starts_with('.') {
+                return None;
+            }
+            let tail = if e.path().is_dir() {
+                std::path::MAIN_SEPARATOR_STR
+            } else {
+                ""
+            };
+            Some(format!("{dir_part}{name}{tail}"))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Split `copy <src> to <dst>` on the word `to`.
+///
+/// Everything before the separator is one path and everything after it is the
+/// other, joined back together with the spaces they were typed with — which is
+/// what lets `copy my notes to old work` mean two names rather than four
+/// arguments. Without a `to`, exactly two arguments are still accepted, since
+/// `copy a b` cannot be read any other way.
+///
+/// Returns the two sides as owned strings; the error is the sentence to show
+/// when it does not parse.
+fn split_on_to(args: &[String]) -> Result<(String, String)> {
+    const HINT: &str = "say it like: copy README.md to notes";
+    let sep = args.iter().position(|a| a.eq_ignore_ascii_case("to"));
+    let (left, right) = match sep {
+        Some(i) => (&args[..i], &args[i + 1..]),
+        None if args.len() == 2 => (&args[..1], &args[1..]),
+        None => return Err(anyhow!(HINT)),
+    };
+    if left.is_empty() || right.is_empty() {
+        return Err(anyhow!(HINT));
+    }
+    Ok((left.join(" "), right.join(" ")))
+}
+
+/// Copy a directory and everything under it.
+///
+/// Recurses on directories and copies everything else with `fs::copy`, which
+/// carries permissions across on every platform. A symlink counts as
+/// "everything else": its target is copied as a plain file rather than
+/// followed as a directory, so a link pointing back up its own tree cannot
+/// send this into a loop.
+fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dst.join(entry.file_name());
+        // `DirEntry::file_type` does not follow links, which is what keeps the
+        // symlink case out of the recursive branch.
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// A free path in `dir` for something named after `src`: `notes.md`, then
+/// `notes copy.md`, then `notes copy 2.md`.
+///
+/// Only paste uses this. The words are spelled out rather than punctuated —
+/// `notes copy.md`, not `notes(1).md` — because everything else the command
+/// bar shows reads as English too.
+fn free_name(dir: &Path, src: &Path) -> Result<PathBuf> {
+    let name = src
+        .file_name()
+        .ok_or_else(|| anyhow!("cannot copy {}", display_name(src)))?;
+    let first = dir.join(name);
+    if !first.exists() {
+        return Ok(first);
+    }
+    let name = Path::new(name);
+    let stem = name
+        .file_stem()
+        .unwrap_or(name.as_os_str())
+        .to_string_lossy();
+    let ext = name.extension().map(|e| e.to_string_lossy());
+    for n in 1..100 {
+        let base = if n == 1 {
+            format!("{stem} copy")
+        } else {
+            format!("{stem} copy {n}")
+        };
+        let candidate = match &ext {
+            Some(e) => dir.join(format!("{base}.{e}")),
+            None => dir.join(base),
+        };
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(anyhow!("too many copies of {}", display_name(src)))
+}
+
 /// Split a command line on whitespace, keeping double-quoted runs together so
 /// `:replace "old thing" "new thing"` works.
 ///
@@ -1802,44 +2168,59 @@ pub fn split_args(line: &str) -> Vec<String> {
     out
 }
 
-/// Fill in the rest of a command name, or a setting name after `set`.
+/// Fill in the rest of whatever is being typed: a command name, a setting name
+/// after `set`, the word `to` in the middle of a copy, or a path.
 ///
 /// Completes to the longest common prefix of the matches rather than to the
 /// first one, so Tab on an ambiguous prefix advances as far as it safely can
 /// and then stops — the shell behaviour. Returns without changing anything
 /// when that would add nothing.
 ///
+/// The whole of `copy README.md to notes/today.md` can be typed with Tab, which
+/// is the point: a command that reads like a sentence is no use if every word
+/// of it has to be spelled out by hand.
+///
 /// Any new command added to [`App::run_command`] needs adding to `COMMANDS`
-/// here too, or it will work but never complete.
-fn complete_command(b: &mut Bar) {
+/// here too, or it will work but never complete — and one that takes a path
+/// needs adding to `TAKES_PATHS` as well.
+fn complete_command(b: &mut Bar, root: &Path, show_hidden: bool) {
     const COMMANDS: &[&str] = &[
         "set", "replace", "config", "settings", "graph", "web", "write", "save", "quit", "help",
-        "reload", "new", "mkdir", "init",
+        "reload", "new", "mkdir", "delete", "rm", "copy", "cp",
     ];
+    const TAKES_PATHS: &[&str] = &["new", "mkdir", "delete", "rm", "copy", "cp"];
+
     let args = split_args(&b.input);
     let trailing_space = b.input.ends_with(' ');
-    let (prefix, candidates): (String, Vec<String>) = match args.len() {
-        0 => (
-            String::new(),
-            COMMANDS.iter().map(|s| s.to_string()).collect(),
+    // Which argument the cursor is in the middle of. A trailing space means the
+    // one after the last complete argument has been started but not typed into.
+    let position = if trailing_space {
+        args.len()
+    } else {
+        args.len().saturating_sub(1)
+    };
+    let typed = if trailing_space {
+        String::new()
+    } else {
+        args.last().cloned().unwrap_or_default()
+    };
+
+    let (prefix, candidates): (String, Vec<String>) = match args.first().map(String::as_str) {
+        // Still on the command name itself.
+        _ if position == 0 => (typed, COMMANDS.iter().map(|s| s.to_string()).collect()),
+        Some("set") => (
+            typed,
+            Config::settings_index()
+                .iter()
+                .map(|(k, _)| k.to_string())
+                .collect(),
         ),
-        1 if !trailing_space => (
-            args[0].clone(),
-            COMMANDS.iter().map(|s| s.to_string()).collect(),
-        ),
-        _ if args[0] == "set" => {
-            let typed = if trailing_space {
-                String::new()
-            } else {
-                args.last().cloned().unwrap_or_default()
-            };
-            (
-                typed,
-                Config::settings_index()
-                    .iter()
-                    .map(|(k, _)| k.to_string())
-                    .collect(),
-            )
+        // `copy README.md ` — what comes next is the word joining the two
+        // halves, so offer that and nothing else. Anyone copying a name with
+        // spaces in it can type the two letters themselves.
+        Some("copy" | "cp") if position == 2 => (typed, vec!["to".to_string()]),
+        Some(c) if TAKES_PATHS.contains(&c) => {
+            (typed.clone(), path_candidates(root, &typed, show_hidden))
         }
         _ => return,
     };
@@ -1992,6 +2373,20 @@ mod tests {
         app.on_key(ch(':'));
         type_str(app, line);
         app.on_key(k(KeyCode::Enter));
+    }
+
+    /// Type `line` into the command bar, press Tab, and give back what the bar
+    /// holds afterwards.
+    fn completed(app: &mut App, line: &str) -> String {
+        app.on_key(ch(':'));
+        type_str(app, line);
+        app.on_key(k(KeyCode::Tab));
+        let Mode::Bar(b) = &app.mode else {
+            panic!("the bar closed")
+        };
+        let out = b.input.clone();
+        app.on_key(k(KeyCode::Esc));
+        out
     }
 
     fn select(app: &mut App, name: &str) {
@@ -2321,6 +2716,125 @@ mod tests {
     }
 
     #[test]
+    fn enter_opens_and_closes_a_folder_without_moving_the_cursor() {
+        let (_td, mut app) = fixture();
+        app.on_key(k(KeyCode::Down));
+        assert_eq!(app.selected_row().unwrap().name, "notes");
+
+        app.on_key(k(KeyCode::Enter));
+        assert!(app.selected_row().unwrap().expanded, "it opened");
+        assert_eq!(app.selected_row().unwrap().name, "notes", "and stayed put");
+
+        app.on_key(k(KeyCode::Enter));
+        assert!(
+            !app.selected_row().unwrap().expanded,
+            "the same key shuts it"
+        );
+        assert_eq!(app.selected_row().unwrap().name, "notes");
+    }
+
+    #[test]
+    fn right_still_steps_into_a_folder_that_is_already_open() {
+        let (_td, mut app) = fixture();
+        app.on_key(k(KeyCode::Down));
+        app.on_key(k(KeyCode::Right));
+        assert!(app.selected_row().unwrap().expanded);
+        app.on_key(k(KeyCode::Right));
+        assert_eq!(
+            app.selected_row().unwrap().name,
+            "design.md",
+            "right walks inwards where Enter toggles"
+        );
+    }
+
+    #[test]
+    fn an_open_folders_marker_is_drawn_in_the_text_colour() {
+        let (_td, mut app) = fixture();
+        // Move off the root row so nothing selected is being highlighted over.
+        app.on_key(k(KeyCode::Down));
+        let (text_fg, dim_fg) = (app.palette.text.fg, app.palette.dim.fg);
+
+        let mut t = Terminal::new(TestBackend::new(90, 24)).unwrap();
+        t.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        let marker = (0..buf.area.height)
+            .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+            .find_map(|(x, y)| buf.cell((x, y)).filter(|c| c.symbol() == "\u{25be}"))
+            .expect("the open root folder draws a marker");
+
+        assert_eq!(marker.fg, text_fg.unwrap());
+        assert_ne!(Some(marker.fg), dim_fg, "it is no longer chrome-coloured");
+    }
+
+    #[test]
+    fn ctrl_b_folds_the_tree_away_and_brings_it_back() {
+        let (_td, mut app) = fixture();
+        assert!(joined(&mut app).contains("PROJECT"));
+
+        app.on_key(ctrl('b'));
+        let out = joined(&mut app);
+        assert!(!out.contains("PROJECT"), "the pane is gone:\n{out}");
+        assert!(
+            !out.contains("┐┌"),
+            "and the file has the whole width:\n{out}"
+        );
+        assert_eq!(app.focus, Focus::Editor, "keys cannot go to an unseen pane");
+
+        app.on_key(ctrl('b'));
+        assert!(joined(&mut app).contains("PROJECT"));
+        assert_eq!(app.focus, Focus::Tree, "the keyboard comes back with it");
+    }
+
+    #[test]
+    fn folding_the_tree_while_editing_leaves_you_editing() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "main.py");
+        app.on_key(k(KeyCode::Enter));
+
+        app.on_key(ctrl('b'));
+        assert!(app.tree_hidden);
+        assert_eq!(app.focus, Focus::Editor);
+        app.on_key(ctrl('b'));
+        assert_eq!(
+            app.focus,
+            Focus::Editor,
+            "you were typing before and still are"
+        );
+        type_str(&mut app, "X");
+        assert!(app.active_buffer().unwrap().lines()[0].starts_with('X'));
+    }
+
+    #[test]
+    fn esc_brings_the_tree_back_and_lands_on_it() {
+        let (_td, mut app) = fixture();
+        select(&mut app, "main.py");
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ctrl('b'));
+
+        app.on_key(k(KeyCode::Esc));
+        assert!(
+            !app.tree_hidden,
+            "Esc means the tree, so the tree comes back"
+        );
+        assert_eq!(app.focus, Focus::Tree);
+    }
+
+    #[test]
+    fn search_still_gets_a_pane_while_the_tree_is_folded_away() {
+        let (_td, mut app) = fixture();
+        app.on_key(ctrl('b'));
+        app.on_key(ctrl('f'));
+        type_str(&mut app, "widget");
+
+        let out = joined(&mut app);
+        assert!(
+            out.contains("MATCH"),
+            "results need somewhere to go:\n{out}"
+        );
+        assert!(out.contains("hello widget"), "{out}");
+    }
+
+    #[test]
     fn the_cursor_cannot_run_off_either_end() {
         let (_td, mut app) = fixture();
         for _ in 0..50 {
@@ -2429,6 +2943,28 @@ mod tests {
             out.contains("README.md"),
             "the folder is still listed:\n{out}"
         );
+    }
+
+    #[test]
+    fn a_new_project_shows_its_readme_with_the_keyboard_still_on_the_tree() {
+        let td = tempfile::tempdir().unwrap();
+        build(td.path());
+        let mut app = App::new(
+            project::Target {
+                root: td.path().to_path_buf(),
+                file: Some(td.path().join("README.md")),
+                created: true,
+            },
+            Config::default(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(app.selected_row().unwrap().name, "README.md");
+        assert_eq!(app.focus, Focus::Tree, "there is nothing to type yet");
+        assert!(app.status.contains("new project"), "{}", app.status);
+        let out = joined(&mut app);
+        assert!(out.contains("hello widget"), "the README is drawn:\n{out}");
     }
 
     #[test]
@@ -2883,6 +3419,305 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_folder_takes_everything_under_it() {
+        let (td, mut app) = fixture();
+        select(&mut app, "notes");
+        app.on_key(ch('d'));
+        let out = joined(&mut app);
+        assert!(out.contains("Delete folder notes"), "{out}");
+        app.on_key(ch('y'));
+        assert!(!td.path().join("notes").exists(), "the folder is gone");
+        assert!(!td.path().join("notes/design.md").exists());
+        assert!(app.status.contains("deleted"), "{}", app.status);
+    }
+
+    #[test]
+    fn the_delete_command_removes_the_selection_when_given_no_path() {
+        let (td, mut app) = fixture();
+        select(&mut app, "README.md");
+        command(&mut app, "delete");
+        assert!(joined(&mut app).contains("Delete README.md?"));
+        app.on_key(ch('y'));
+        assert!(!td.path().join("README.md").exists());
+    }
+
+    #[test]
+    fn the_delete_command_takes_a_path_from_the_project_root() {
+        let (td, mut app) = fixture();
+        // Cursor parked somewhere else entirely: the path is not relative to it.
+        select(&mut app, "main.py");
+        command(&mut app, "rm notes/design.md");
+        app.on_key(ch('y'));
+        assert!(!td.path().join("notes/design.md").exists());
+        assert!(td.path().join("src/main.py").exists(), "nothing else went");
+    }
+
+    #[test]
+    fn deleting_the_file_being_edited_hands_the_keyboard_back_to_the_tree() {
+        let (td, mut app) = fixture();
+        select(&mut app, "main.py");
+        app.on_key(k(KeyCode::Enter));
+        assert_eq!(app.focus, Focus::Editor);
+
+        // In the editor `d` is the letter d and `:` is a colon — Ctrl+P is the
+        // way to the command bar from here, and this is why delete needs to be
+        // a command and not only a key.
+        app.on_key(ctrl('p'));
+        type_str(&mut app, "delete");
+        app.on_key(k(KeyCode::Enter));
+        app.on_key(ch('y'));
+        assert!(!td.path().join("src/main.py").exists());
+        assert_eq!(app.focus, Focus::Tree);
+        assert!(app.active_buffer().is_none(), "its buffer went with it");
+    }
+
+    #[test]
+    fn the_delete_command_reports_a_path_that_is_not_there() {
+        let (_td, mut app) = fixture();
+        command(&mut app, "delete notes/nope.md");
+        assert!(app.status.contains("cannot delete"), "{}", app.status);
+        assert!(
+            matches!(app.mode, Mode::Normal),
+            "nothing to confirm, so nothing is armed"
+        );
+    }
+
+    #[test]
+    fn the_delete_command_cannot_escape_the_project() {
+        let (_td, mut app) = fixture();
+        command(&mut app, "delete ../../etc/hosts");
+        assert!(app.status.contains("escapes the project"), "{}", app.status);
+    }
+
+    // ---- copying ----------------------------------------------------------
+
+    #[test]
+    fn copy_reads_like_a_sentence() {
+        let (td, mut app) = fixture();
+        command(&mut app, "copy README.md to notes");
+        assert!(
+            td.path().join("notes/README.md").is_file(),
+            "naming a folder copies into it"
+        );
+        assert!(td.path().join("README.md").is_file(), "the original stays");
+        assert!(app.status.contains("copied README.md"), "{}", app.status);
+    }
+
+    #[test]
+    fn copy_to_a_name_that_is_not_there_yet_uses_that_name() {
+        let (td, mut app) = fixture();
+        command(&mut app, "copy README.md to notes/intro.md");
+        assert!(td.path().join("notes/intro.md").is_file());
+        assert_eq!(
+            fs::read_to_string(td.path().join("notes/intro.md")).unwrap(),
+            fs::read_to_string(td.path().join("README.md")).unwrap()
+        );
+    }
+
+    #[test]
+    fn copying_a_folder_takes_everything_under_it() {
+        let (td, mut app) = fixture();
+        fs::create_dir_all(td.path().join("notes/deep/deeper")).unwrap();
+        fs::write(td.path().join("notes/deep/deeper/buried.md"), "# buried\n").unwrap();
+        app.on_key(ch('R'));
+
+        command(&mut app, "copy notes to archive");
+        assert!(td.path().join("archive/design.md").is_file());
+        assert!(
+            td.path().join("archive/deep/deeper/buried.md").is_file(),
+            "subfolders come along"
+        );
+        assert_eq!(
+            fs::read_to_string(td.path().join("archive/deep/deeper/buried.md")).unwrap(),
+            "# buried\n"
+        );
+    }
+
+    #[test]
+    fn copy_takes_names_with_spaces_without_quoting_them() {
+        let (td, mut app) = fixture();
+        fs::write(td.path().join("my notes.md"), "# mine\n").unwrap();
+        app.on_key(ch('R'));
+
+        // `to` is the separator, so both sides can be several words.
+        command(&mut app, "copy my notes.md to old work.md");
+        assert!(td.path().join("old work.md").is_file(), "{}", app.status);
+    }
+
+    #[test]
+    fn copy_without_the_word_to_still_works_with_two_names() {
+        let (td, mut app) = fixture();
+        command(&mut app, "cp README.md notes");
+        assert!(
+            td.path().join("notes/README.md").is_file(),
+            "{}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn copy_says_how_to_say_it_when_it_cannot_parse() {
+        let (_td, mut app) = fixture();
+        command(&mut app, "copy");
+        assert!(app.status.contains("say it like"), "{}", app.status);
+        command(&mut app, "copy README.md to");
+        assert!(app.status.contains("say it like"), "{}", app.status);
+    }
+
+    #[test]
+    fn copy_never_writes_over_something_that_is_already_there() {
+        let (td, mut app) = fixture();
+        command(&mut app, "copy notes/design.md to README.md");
+        assert!(app.status.contains("already exists"), "{}", app.status);
+        assert_eq!(
+            fs::read_to_string(td.path().join("README.md")).unwrap(),
+            "# Fixture\n\nhello widget\n",
+            "the original is untouched"
+        );
+    }
+
+    #[test]
+    fn a_folder_cannot_be_copied_inside_itself() {
+        let (_td, mut app) = fixture();
+        command(&mut app, "copy notes to notes/backup");
+        assert!(app.status.contains("into itself"), "{}", app.status);
+    }
+
+    #[test]
+    fn copy_cannot_reach_outside_the_project() {
+        let (_td, mut app) = fixture();
+        command(&mut app, "copy README.md to ../escaped.md");
+        assert!(app.status.contains("escapes the project"), "{}", app.status);
+    }
+
+    #[test]
+    fn ctrl_c_and_ctrl_v_move_a_file_into_another_folder() {
+        let (td, mut app) = fixture();
+        select(&mut app, "README.md");
+        app.on_key(ctrl('c'));
+        assert!(app.status.contains("copied README.md"), "{}", app.status);
+
+        select(&mut app, "notes");
+        app.on_key(ctrl('v'));
+        assert!(
+            td.path().join("notes/README.md").is_file(),
+            "{}",
+            app.status
+        );
+        assert!(td.path().join("README.md").is_file(), "a copy, not a move");
+    }
+
+    #[test]
+    fn pasting_beside_the_original_picks_the_next_free_name() {
+        let (td, mut app) = fixture();
+        select(&mut app, "README.md");
+        app.on_key(ctrl('c'));
+        app.on_key(ctrl('v'));
+        assert!(td.path().join("README copy.md").is_file(), "{}", app.status);
+
+        select(&mut app, "README.md");
+        app.on_key(ctrl('v'));
+        assert!(
+            td.path().join("README copy 2.md").is_file(),
+            "{}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn pasting_a_folder_brings_its_contents() {
+        let (td, mut app) = fixture();
+        select(&mut app, "notes");
+        app.on_key(ctrl('c'));
+        select(&mut app, "src");
+        app.on_key(ctrl('v'));
+        assert!(
+            td.path().join("src/notes/design.md").is_file(),
+            "{}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn pasting_with_an_empty_clipboard_says_so() {
+        let (_td, mut app) = fixture();
+        app.on_key(ctrl('v'));
+        assert!(app.status.contains("nothing copied"), "{}", app.status);
+    }
+
+    // ---- completion -------------------------------------------------------
+
+    #[test]
+    fn tab_completes_a_command_name() {
+        let (_td, mut app) = fixture();
+        assert_eq!(completed(&mut app, "cop"), "copy");
+        assert_eq!(completed(&mut app, "del"), "delete");
+    }
+
+    #[test]
+    fn tab_completes_a_path_argument() {
+        let (_td, mut app) = fixture();
+        assert_eq!(completed(&mut app, "copy REA"), "copy README.md");
+        assert_eq!(
+            completed(&mut app, "delete notes/des"),
+            "delete notes/design.md"
+        );
+    }
+
+    #[test]
+    fn tab_completes_a_folder_with_a_separator_so_it_can_carry_on() {
+        let (_td, mut app) = fixture();
+        let sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(completed(&mut app, "copy not"), format!("copy notes{sep}"));
+        assert_eq!(
+            completed(&mut app, &format!("copy notes{sep}")),
+            format!("copy notes{sep}design.md"),
+        );
+    }
+
+    #[test]
+    fn tab_fills_in_the_word_to_in_the_middle_of_a_copy() {
+        let (_td, mut app) = fixture();
+        assert_eq!(completed(&mut app, "copy README.md "), "copy README.md to");
+        assert_eq!(completed(&mut app, "copy README.md t"), "copy README.md to");
+    }
+
+    #[test]
+    fn tab_completes_the_destination_after_to() {
+        let (_td, mut app) = fixture();
+        assert_eq!(
+            completed(&mut app, "copy README.md to sr"),
+            format!("copy README.md to src{}", std::path::MAIN_SEPARATOR)
+        );
+    }
+
+    #[test]
+    fn tab_stops_where_the_candidates_stop_agreeing() {
+        let (td, mut app) = fixture();
+        fs::write(td.path().join("report-one.md"), "").unwrap();
+        fs::write(td.path().join("report-two.md"), "").unwrap();
+        app.on_key(ch('R'));
+        // Two matches, so it fills in only what they share.
+        assert_eq!(completed(&mut app, "copy rep"), "copy report-");
+    }
+
+    #[test]
+    fn completion_leaves_dotfiles_alone_unless_asked_for() {
+        let (td, mut app) = fixture();
+        fs::write(td.path().join(".secret.md"), "").unwrap();
+        app.on_key(ch('R'));
+
+        assert_eq!(
+            completed(&mut app, "delete .sec"),
+            "delete .secret.md",
+            "a leading dot is someone asking for one"
+        );
+        // Without the dot it is not a candidate at all, so the visible entries
+        // are all that is left and they share no prefix to fill in.
+        assert_eq!(completed(&mut app, "delete "), "delete ");
+    }
+
+    #[test]
     fn the_project_root_cannot_be_deleted_or_renamed() {
         let (_td, mut app) = fixture();
         app.selected = 0;
@@ -3030,9 +3865,18 @@ mod tests {
             select(&mut app, &f);
         }
         if let Ok(keys) = std::env::var("TINY_SHOT_KEYS") {
-            for c in keys.chars() {
+            let mut chars = keys.chars();
+            while let Some(c) = chars.next() {
                 match c {
+                    // `^b` sends Ctrl+B, so a shot can be taken of anything a
+                    // key can reach.
+                    '^' => {
+                        if let Some(n) = chars.next() {
+                            app.on_key(ctrl(n));
+                        }
+                    }
                     '\n' => app.on_key(k(KeyCode::Enter)),
+                    '\t' => app.on_key(k(KeyCode::Tab)),
                     '↓' => app.on_key(k(KeyCode::Down)),
                     _ => app.on_key(ch(c)),
                 }

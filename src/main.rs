@@ -64,17 +64,19 @@ const USAGE: &str = "\
 tiny — a terminal knowledge manager
 
 USAGE:
-    tiny                open the current directory, or the project it is inside
-    tiny <PATH>         open a folder; a path that does not exist is created
-    tiny <FILE>         open the file's folder, with the file already in the editor
+    tiny                open the current directory
+    tiny <DIR>          open a folder; one that does not exist is created
+    tiny <FILE>         edit one file, with its folder in the tree beside it;
+                        a file that does not exist is created too
 
 OPTIONS:
     -h, --help          show this message
     -V, --version       show the version
         --config        print the path of the config file
 
-Any folder opened without a project gets one: a `.tiny/` directory, and
-nothing else. Turn that off with `auto_init = false`.
+tiny writes nothing into a folder of yours except a starting `README.md`, and
+only into one it just created or found empty. Turn even that off with
+`starter_readme = false`.
 
 KEYS:
     ?                   the full keymap, from inside the app
@@ -100,20 +102,17 @@ fn main() {
 ///
 /// 1. Handle the options that never touch the disk (`--help`, `--version`,
 ///    `--config`) and return early.
-/// 2. Load the *user* config, because [`project::resolve`] needs `auto_init`
-///    and `default_root` to decide what to do with the argument.
+/// 2. Load the config, which [`project::resolve`] needs for `starter_readme`
+///    and `default_root` before it can decide what to do with the argument.
 /// 3. Resolve the argument into a [`project::Target`], creating the project
 ///    if it does not exist.
-/// 4. Reload the config now that the project root is known, so
-///    `<project>/.tiny/tiny.conf` can override the user's settings. This is
-///    why the config is read twice; there is no way around it without
-///    splitting the file into two parsers.
-/// 5. Write out the defaults on first run.
-/// 6. Build the `App`, take over the terminal, loop, and restore.
+/// 4. Write out the defaults on first run.
+/// 5. Build the `App`, take over the terminal, loop, and restore.
 ///
-/// Only one warning survives to the status bar, most-specific first: a broken
-/// project config is more interesting than a broken user config, which is more
-/// interesting than "we just wrote you a config file".
+/// There is one config file and it is read once, before anything else: which
+/// folder ends up open cannot change how the program behaves. Only one warning
+/// survives to the status bar, the more urgent first — a broken config file
+/// beats "we just wrote you a config file".
 fn real_main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -138,11 +137,8 @@ fn real_main() -> Result<()> {
         _ => {}
     }
 
-    // The project has to be located before its own config can be read, so the
-    // user config is loaded first and the project's file layered on after.
-    let (user_cfg, warn_user) = Config::load(None);
-    let target = project::resolve(args.first().map(String::as_str), &user_cfg)?;
-    let (cfg, warn_project) = Config::load(Some(&target.root));
+    let (cfg, warn_config) = Config::load();
+    let target = project::resolve(args.first().map(String::as_str), &cfg)?;
 
     // First run: write the defaults out so there is a file to edit. Done here
     // rather than in `load` so `--help` never touches the disk.
@@ -154,7 +150,7 @@ fn real_main() -> Result<()> {
         _ => None,
     };
 
-    let warning = warn_project.or(warn_user).or(warn_first_run);
+    let warning = warn_config.or(warn_first_run);
     let mut app = App::new(target, cfg, warning)?;
 
     // A clean message beats a panic when there is no terminal to draw on —

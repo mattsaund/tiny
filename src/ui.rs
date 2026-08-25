@@ -128,34 +128,45 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         return;
     }
 
-    // A wider list while searching: results are longer than file names.
-    let share = if bar_open && matches!(&app.mode, Mode::Bar(b) if b.kind == BarKind::Search) {
-        app.config.tree_width.max(0.42)
+    let searching = bar_open && matches!(&app.mode, Mode::Bar(b) if b.kind == BarKind::Search);
+
+    // The side pane is where search results are listed, so a search brings it
+    // back for as long as the bar is open — hiding the tree must not take the
+    // results with it.
+    let (side_area, preview_area) = if app.tree_hidden && !searching {
+        (None, main)
     } else {
-        app.config.tree_width
-    };
-    let side_w = ((main.width as f32) * share).round() as u16;
-    let side_w = side_w.clamp(14, main.width.saturating_sub(12).max(14));
+        // A wider list while searching: results are longer than file names.
+        let share = if searching {
+            app.config.tree_width.max(0.42)
+        } else {
+            app.config.tree_width
+        };
+        let side_w = ((main.width as f32) * share).round() as u16;
+        let side_w = side_w.clamp(14, main.width.saturating_sub(12).max(14));
 
-    let (left, right) = match app.config.tree_side {
-        Side::Left => (Constraint::Length(side_w), Constraint::Min(10)),
-        Side::Right => (Constraint::Min(10), Constraint::Length(side_w)),
-    };
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([left, right])
-        .split(main);
-    let (tree_area, preview_area) = match app.config.tree_side {
-        Side::Left => (panes[0], panes[1]),
-        Side::Right => (panes[1], panes[0]),
-    };
-
-    match &app.mode {
-        Mode::Bar(b) if b.kind == BarKind::Search => {
-            let b = b.clone();
-            draw_results(f, app, tree_area, &b);
+        let (left, right) = match app.config.tree_side {
+            Side::Left => (Constraint::Length(side_w), Constraint::Min(10)),
+            Side::Right => (Constraint::Min(10), Constraint::Length(side_w)),
+        };
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([left, right])
+            .split(main);
+        match app.config.tree_side {
+            Side::Left => (Some(panes[0]), panes[1]),
+            Side::Right => (Some(panes[1]), panes[0]),
         }
-        _ => draw_tree(f, app, tree_area),
+    };
+
+    if let Some(side_area) = side_area {
+        match &app.mode {
+            Mode::Bar(b) if b.kind == BarKind::Search => {
+                let b = b.clone();
+                draw_results(f, app, side_area, &b);
+            }
+            _ => draw_tree(f, app, side_area),
+        }
     }
     draw_preview(f, app, preview_area);
 
@@ -261,10 +272,17 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         .skip(app.tree_scroll)
         .take(height)
     {
-        let marker = if row.is_dir {
-            if row.expanded { open } else { closed }
+        // An open folder's marker is drawn in the text colour, not the dim
+        // one: it is the only glyph that says "you are inside here", so it
+        // reads as part of the name rather than as chrome.
+        let (marker, marker_style) = if row.is_dir {
+            if row.expanded {
+                (open, pal.text)
+            } else {
+                (closed, pal.dim)
+            }
         } else {
-            leaf
+            (leaf, pal.dim)
         };
         let name_style = if row.unreadable {
             pal.dim
@@ -275,7 +293,7 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         };
         let mut spans = vec![
             Span::styled("  ".repeat(row.depth), pal.dim),
-            Span::styled(marker, pal.dim),
+            Span::styled(marker, marker_style),
             Span::styled(row.name.clone(), name_style),
         ];
         if app.is_dirty(&row.path) {
@@ -1263,14 +1281,17 @@ fn centred(area: Rect, w: u16, h: u16) -> Rect {
 const HELP: &[(&str, &str)] = &[
     ("", "TREE"),
     ("up down  k j", "move the cursor"),
-    ("right  Enter", "open a folder, or edit a file"),
+    ("Enter", "open or close a folder, or edit a file"),
+    ("right", "open a folder, or step inside an open one"),
     ("left", "close a folder, or jump to its parent"),
     ("g  G", "first / last entry"),
     ("n  N", "new file / new folder"),
     ("r", "rename"),
-    ("d", "delete (asks first)"),
+    ("Ctrl+C  Ctrl+V", "copy · paste into this folder"),
+    ("d", "delete (asks first) — also :delete"),
     (".", "show or hide dotfiles"),
     ("R  F5", "re-read the project from disk"),
+    ("Ctrl+B", "fold the tree away, and bring it back"),
     ("", ""),
     ("", "GRAPH"),
     ("w", "draw the project as a graph"),
@@ -1282,7 +1303,8 @@ const HELP: &[(&str, &str)] = &[
     ("", ""),
     ("", "SEARCH AND COMMANDS"),
     ("/", "search names and contents"),
-    (":", "commands — :set :replace :config"),
+    (":", "commands — :new :copy :delete :set"),
+    ("", "  they read as English: copy README.md to notes"),
     (",  F2", "the settings area"),
     ("", ""),
     ("", "PREVIEW"),

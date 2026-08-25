@@ -21,28 +21,34 @@ the installer will offer to install rust and its dependencies if you do not have
 ```sh
 tiny                      # this folder, or the project it sits inside
 tiny ~/Desktop/project1   # that folder — created, with a project in it, if missing
-tiny ~/code/main.py       # that file's folder, with the file already in the editor
+tiny ~/code/main.py       # that one file, in the editor, with its project beside it
+tiny notes.txt            # same, and the file is written if it isn't there yet
 ```
 
-Any foler you open without a config will get a `.tiny` directory holding an optional `tiny.conf` file for per-project configuration. you can turn off that setting in the global configuration (`auto_init = false`).
+To turn off the starting README.md in tiny projects change this in config
+
+`starter_readme = false`.
 ## Controls and Commands:
 
 Press `?` in the program to see all controls.
 
 **Tree**
 
-| key         | does                                  |
-|-------------|---------------------------------------|
-| `↑` `↓`     | move the cursor (`k` `j` also work)   |
-| `→` `Enter` | open a folder, or edit a file         |
-| `←`         | close a folder, or jump to its parent |
-| `g` `G`     | first / last entry                    |
-| `n` `N`     | new file / new folder                 |
-| `r`         | rename                                |
-| `d`         | delete (asks first)                   |
-| `.`         | show or hide dotfiles                 |
-| `R` `F5`    | re-read the project from disk         |
-| `q`         | quit                                  |
+| key         | does                                       |
+|-------------|--------------------------------------------|
+| `↑` `↓`     | move the cursor (`k` `j` also work)        |
+| `Enter`     | open or close a folder, or edit a file     |
+| `→`         | open a folder, or step inside an open one  |
+| `←`         | close a folder, or jump to its parent      |
+| `g` `G`     | first / last entry                         |
+| `n` `N`     | new file / new folder                      |
+| `r`         | rename                                     |
+| `^C` `^V`   | copy, and paste into the folder you are in |
+| `d`         | delete (asks first)                        |
+| `.`         | show or hide dotfiles                      |
+| `R` `F5`    | re-read the project from disk              |
+| `^B`        | fold the tree away, and bring it back      |
+| `q`         | quit                                       |
 (When creating a new directory, you can type the entire desired filepath)
 
 **Search and commands**
@@ -57,16 +63,23 @@ Press `?` in the program to see all controls.
 | `Ctrl+P`   | commands, from anywhere                    |
 (autofill search results pop up while typing. on hover, the preview will show the contents. press enter to jump to it)
 
-Commands, with `Tab` to complete:
+Commands read as plain English, and `Tab` completes every part of them — the
+command, the paths, and the `to` in the middle:
+
 ```
 :set tab_width 2              change a setting; :set <key> alone reports it
 :set theme.heading cyan bold  repaint without a restart
+:new notes/today.md           make a file; :mkdir for a folder
+:copy README.md to notes      copy into a folder, or to a new name
+:copy notes to archive        a folder brings everything under it
+:delete                       delete what the cursor is on, after confirming
+:delete notes/old.md          delete a path, counted from the project root
 :replace old new              find-replace across the project, after confirming
 :replace "old thing" "new"    quote anything with spaces in it
 :graph                        open the graph
 :config                       open the settings area
 :w  :q  :wq                   save, quit
-:help  :reload  :init
+:help  :reload
 ```
 
 **Editor**
@@ -118,14 +131,21 @@ borders         = true      # false for a plainer screen
 markers         = "arrows"  # or "ascii"
 ```
 
-`~/.config/tiny/tiny.conf`, written on first run. A project may override it with its own `.tiny/tiny.conf`. Any field may be left out; the defaults fill in. `tiny --config` prints the path.
+One file, written on first run, covering everything about how the program behaves — there is no per-project config, so every project on a machine looks and works the same way. Any field may be left out; the defaults fill in. `tiny --config` prints the path.
+
+| platform      | where                                          |
+|---------------|------------------------------------------------|
+| Linux / macOS | `~/.config/tiny/tiny.conf`                     |
+| Windows       | `%APPDATA%\tiny\tiny.conf`                     |
+
+`$XDG_CONFIG_HOME` wins over both when it is set.
 
 Theme entries are style specs, so a line can carry weight as well as color:
 
 `"bold"`, `"underline"`, `"white on black"`, `"#7dcfff bold"`, `"reverse"`.
 
 ```toml
-auto_init          = true
+starter_readme     = true
 show_hidden        = false
 tab_width          = 4
 line_numbers       = true
