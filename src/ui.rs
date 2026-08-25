@@ -3,8 +3,8 @@
 //! and the media cache, which can only be resolved once the pane size is
 //! known.
 //!
-//! Nothing here picks a colour. Every style comes from the palette, whose
-//! defaults name no colour at all — so tiny renders in whatever the terminal
+//! Nothing here picks a color. Every style comes from the palette, whose
+//! defaults name no color at all — so tiny renders in whatever the terminal
 //! is already using, and meaning is carried by weight, underline and reverse.
 //!
 //! # Reading order
@@ -27,7 +27,7 @@
 //! # `&mut App`, and why
 //!
 //! Most of these take `&mut App` even though drawing should be a pure read.
-//! Three things genuinely cannot be computed until the pane size is known, and
+//! Four things genuinely cannot be computed until the pane size is known, and
 //! the pane size is only known here:
 //!
 //! - **Scroll offsets.** The key handler that moved a cursor has no idea how
@@ -36,6 +36,9 @@
 //!   lines the content produced at *this* width, which means rendering it.
 //! - **The media cache.** An image is decoded to fit the pane, so the request
 //!   is only well-formed once the pane exists.
+//! - **The highlight cache.** Which lines the parser has to reach is decided
+//!   by which lines are on screen — see [`crate::highlight::Resume`]. It is
+//!   filled in by the parse that had to happen anyway.
 //!
 //! Everything else must stay read-only. If you find yourself wanting to set
 //! application state from a draw function, it almost certainly belongs in
@@ -43,10 +46,10 @@
 //!
 //! # Styling rules
 //!
-//! Nothing here writes a literal colour. Every style comes from
-//! `app.palette`, and the shipped palette names no colour at all — meaning is
+//! Nothing here writes a literal color. Every style comes from
+//! `app.palette`, and the shipped palette names no color at all — meaning is
 //! carried by bold, dim, underline and reverse, so tiny inherits the user's
-//! terminal theme. The one exception is syntax highlighting, whose colours
+//! terminal theme. The one exception is syntax highlighting, whose colors
 //! come from the syntect theme by design.
 //!
 //! Widths are measured with `unicode-width`, never `chars().count()`. A CJK
@@ -69,8 +72,8 @@ use crate::config::{Config, Markers, Palette, Position, Side};
 use crate::graph::EdgeKind;
 use crate::keys::{Action, Keymap};
 use crate::markdown;
-use crate::projectmap::{self, Placed, ProjectMap};
-use crate::search::HitKind;
+use crate::projectmap::{self, Channels, Placed, ProjectMap};
+use crate::search::{HitKind, Matcher};
 
 /// Paint one frame. Called once per keypress by the event loop in `main`.
 ///
@@ -280,7 +283,7 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         .skip(app.tree_scroll)
         .take(height)
     {
-        // An open folder's marker is drawn in the text colour, not the dim
+        // An open folder's marker is drawn in the text color, not the dim
         // one: it is the only glyph that says "you are inside here", so it
         // reads as part of the name rather than as chrome.
         let (marker, marker_style) = if row.is_dir {
@@ -316,11 +319,17 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// Extend a row's styling across the pane so the cursor reads as a row, not
-/// just as coloured text.
+/// just as colored text.
 ///
-/// Pads to the full width first, then patches the selection style over every
-/// span — otherwise a reversed selection would stop at the end of the text and
-/// look like a highlighted word rather than a selected line.
+/// Pads to the full width first, then restyles every span — otherwise a
+/// reversed selection would stop at the end of the text and look like a
+/// highlighted word rather than a selected line.
+///
+/// The row's own colors are *replaced*, not patched over. Patching kept each
+/// span's foreground, and the default palette dims the indent and the fold
+/// marker — so under reverse video that foreground became a background and the
+/// left of every selected row was a grey block with the name in white beside
+/// it. One style across the whole row is what makes it read as one row.
 ///
 /// An unfocused pane still shows its cursor, dimmed, so you can see where you
 /// will land when focus comes back.
@@ -329,14 +338,14 @@ fn highlight_row(spans: &mut Vec<Span>, width: usize, pal: Palette, focused: boo
     if used < width {
         spans.push(Span::raw(" ".repeat(width - used)));
     }
-    let sel = if focused {
-        pal.selection
+    let style = if focused {
+        pal.text.patch(pal.selection)
     } else {
         // An unfocused pane still shows where the cursor is, but quietly.
-        pal.dim
+        pal.text.patch(pal.dim)
     };
     for s in spans.iter_mut() {
-        *s = Span::styled(s.content.clone(), s.style.patch(sel));
+        *s = Span::styled(s.content.clone(), style);
     }
 }
 
@@ -391,7 +400,7 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect, b: &Bar) {
 
     let root = app.root().to_path_buf();
     let width = inner.width as usize;
-    let query_len = b.input.trim().chars().count();
+    let query = Matcher::new(&b.input);
     let mut lines: Vec<Line> = Vec::with_capacity(height);
     for (i, hit) in b.results.iter().enumerate().skip(scroll).take(height) {
         let rel = hit
@@ -408,7 +417,11 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect, b: &Bar) {
             HitKind::Content => vec![Span::styled(format!("{}:{} ", rel, hit.line + 1), pal.dim)],
         };
         if hit.kind == HitKind::Content {
-            spans.extend(emphasize(&hit.text, hit.col, query_len, pal));
+            let text = vec![Span::styled(hit.text.clone(), pal.text)];
+            match &query {
+                Some(q) => spans.extend(mark_query(text, q)),
+                None => spans.extend(text),
+            }
         }
         if i == b.selected {
             highlight_row(&mut spans, width, pal, true);
@@ -418,27 +431,62 @@ fn draw_results(f: &mut Frame, app: &mut App, area: Rect, b: &Bar) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-/// Show a matching line with the matched run standing out.
+/// Re-cut drawn spans so every occurrence of the search query stands out.
 ///
-/// Splits at character indices, matching how `search::Hit::col` is reported.
-/// The run is drawn reversed rather than coloured, so it stands out in any
-/// terminal theme without the palette having to name a highlight colour.
-fn emphasize(text: &str, col: usize, len: usize, pal: Palette) -> Vec<Span<'static>> {
-    let chars: Vec<char> = text.chars().collect();
-    if len == 0 || col >= chars.len() {
-        return vec![Span::styled(text.to_string(), pal.text)];
+/// Used by both sides of the screen: the result list marks the snippet it
+/// shows, and the preview marks the same word where it actually lives. One
+/// function rather than two is what keeps a match looking the same in both
+/// places, and the run is drawn reversed so it stands out in any terminal
+/// theme without the palette having to name a highlight color.
+///
+/// Works on already-drawn spans rather than on source text, which is what lets
+/// it serve both — rendered markdown has no source line to match against, and
+/// the editor's spans have already been clipped to the horizontal scroll.
+/// Splitting is by character index, matching how [`Matcher::all`] reports, and
+/// a match that runs across a span boundary is marked in both halves.
+///
+/// Styling is added to whatever each piece already had, so syntax highlighting
+/// survives underneath the mark.
+fn mark_query(spans: Vec<Span<'static>>, query: &Matcher) -> Vec<Span<'static>> {
+    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    let ranges = query.all(&text);
+    if ranges.is_empty() {
+        return spans;
     }
-    let end = (col + len).min(chars.len());
-    let before: String = chars[..col].iter().collect();
-    let hit: String = chars[col..end].iter().collect();
-    let after: String = chars[end..].iter().collect();
-    let mut out = Vec::new();
-    if !before.is_empty() {
-        out.push(Span::styled(before, pal.text));
-    }
-    out.push(Span::styled(hit, pal.text.add_modifier(Modifier::REVERSED)));
-    if !after.is_empty() {
-        out.push(Span::styled(after, pal.text));
+
+    let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len() + ranges.len() * 2);
+    let mut push = |chars: &[char], style: Style| {
+        if !chars.is_empty() {
+            out.push(Span::styled(chars.iter().collect::<String>(), style));
+        }
+    };
+    // `at` is the character position of the current span within the whole
+    // line; `next` is the first range not yet dealt with.
+    let mut at = 0usize;
+    let mut next = 0usize;
+    for span in spans {
+        let chars: Vec<char> = span.content.chars().collect();
+        let len = chars.len();
+        let mut cut = 0usize;
+        while next < ranges.len() && ranges[next].0 < at + len {
+            let (start, end) = ranges[next];
+            let from = start.saturating_sub(at);
+            let to = (end - at).min(len);
+            push(&chars[cut..from], span.style);
+            push(
+                &chars[from..to],
+                span.style.add_modifier(Modifier::REVERSED),
+            );
+            cut = to;
+            // A range that overruns this span is left for the next one.
+            if end <= at + len {
+                next += 1;
+            } else {
+                break;
+            }
+        }
+        push(&chars[cut..], span.style);
+        at += len;
     }
     out
 }
@@ -496,15 +544,20 @@ fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
+    // Prepared once per frame, before the pane borrows `app` mutably. This is
+    // what makes stepping through search results show where each hit sits in
+    // the file, and not only which file it is in.
+    let query = app.live_query().and_then(Matcher::new);
+
     match app.preview.clone() {
         Preview::Buffer { path, kind } => {
             // Rendered while the tree still has the keyboard — the preview is
             // a picture of the file then, with no cursor in it. The moment it
             // is focused it becomes the editor, markdown formatting and all.
             if kind.reads_first() && !focused {
-                draw_reading(f, app, area, inner, &path, kind);
+                draw_reading(f, app, area, inner, &path, kind, query.as_ref());
             } else {
-                draw_editor(f, app, inner, &path, kind, focused);
+                draw_editor(f, app, inner, &path, kind, focused, query.as_ref());
             }
         }
         Preview::Media { path, kind, size } => draw_media(f, app, inner, &path, kind, size),
@@ -624,6 +677,7 @@ fn draw_reading(
     inner: Rect,
     path: &std::path::Path,
     kind: TextKind,
+    query: Option<&Matcher>,
 ) {
     let pal = app.palette;
     let Some(ed) = app.buffers.get(path) else {
@@ -645,10 +699,16 @@ fn draw_reading(
     let max_scroll = lines.len().saturating_sub(height);
     app.preview_scroll = app.preview_scroll.min(max_scroll);
 
+    // Marked after slicing, so the cost is per visible row rather than per
+    // line of the document.
     let view: Vec<Line> = lines
         .into_iter()
         .skip(app.preview_scroll)
         .take(height)
+        .map(|line| match query {
+            Some(q) => Line::from(mark_query(line.spans, q)),
+            None => line,
+        })
         .collect();
     f.render_widget(Paragraph::new(view).style(pal.text), inner);
 
@@ -692,6 +752,7 @@ fn draw_editor(
     path: &std::path::Path,
     kind: TextKind,
     focused: bool,
+    query: Option<&Matcher>,
 ) {
     let pal = app.palette;
     if !app.buffers.contains_key(path) {
@@ -712,10 +773,20 @@ fn draw_editor(
     // key handler, which has no idea how big the window is. Live preview does
     // its own vertical scrolling in drawn rows rather than source lines, since
     // the two stop being the same thing once a block is formatted.
-    let (scroll_y, scroll_x, cur_line, cur_col) = {
+    // `touched` comes out here because this is the one place the buffer is
+    // held mutably, and asking clears it — so it has to be asked exactly once
+    // per frame, whether or not anything ends up being highlighted.
+    let (scroll_y, scroll_x, cur_line, cur_col, touched) = {
         let ed = app.buffers.get_mut(path).expect("checked above");
         ed.sync_scroll(text_w.saturating_sub(1), if live { 0 } else { height });
-        (ed.scroll_y, ed.scroll_x, ed.cursor_line, ed.cursor_col)
+        let touched = ed.take_touched();
+        (
+            ed.scroll_y,
+            ed.scroll_x,
+            ed.cursor_line,
+            ed.cursor_col,
+            touched,
+        )
     };
 
     let (rows, top) = if live {
@@ -746,9 +817,20 @@ fn draw_editor(
     let first_line = ed.lines().first().map(String::as_str).unwrap_or("");
     let syntax = app.highlighter.syntax_for_path(path, first_line).clone();
     let highlighted = match (raw.first(), raw.last()) {
-        (Some(&a), Some(&b)) => app
-            .highlighter
-            .highlight_window(ed.lines(), &syntax, a, b + 1 - a),
+        (Some(&a), Some(&b)) => {
+            // Resume from the last saved state above the window rather than
+            // from line 0. This is the difference between a keystroke deep in
+            // a long file taking a third of a second and taking two
+            // milliseconds.
+            app.highlight_cache.sync(path, &syntax.name, touched);
+            app.highlighter.highlight_cached(
+                &mut app.highlight_cache,
+                ed.lines(),
+                &syntax,
+                a,
+                b + 1 - a,
+            )
+        }
         _ => Vec::new(),
     };
     let piece_of = |n: usize| raw.first().and_then(|a| highlighted.get(n - a));
@@ -774,18 +856,24 @@ fn draw_editor(
             };
             spans.push(Span::styled(label, style));
         }
+        // Built apart from the gutter so a query can be marked in the text
+        // without ever landing on a line number.
+        let mut content: Vec<Span> = Vec::new();
         match row {
             Row::Raw(n) => {
                 if *n == cur_line {
                     cursor_row = Some(i);
                 }
-                match piece_of(*n) {
-                    Some(pieces) => spans.extend(clip_pieces(pieces, scroll_x, text_w, pal)),
-                    None => spans.push(Span::raw("")),
+                if let Some(pieces) = piece_of(*n) {
+                    content.extend(clip_pieces(pieces, scroll_x, text_w, pal));
                 }
             }
-            Row::Made { content, .. } => spans.extend(content.spans.iter().cloned()),
+            Row::Made { content: made, .. } => content.extend(made.spans.iter().cloned()),
         }
+        if let Some(q) = query {
+            content = mark_query(content, q);
+        }
+        spans.extend(content);
         lines.push(Line::from(spans));
     }
     f.render_widget(Paragraph::new(lines).style(pal.text), inner);
@@ -1026,13 +1114,6 @@ fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(view.filter.clone(), pal.text),
             Span::styled(if view.filtering { "_ " } else { " " }, pal.dim),
         ]));
-    } else if !view.show_orphans && view.orphan_count() > 0 {
-        // Say that `o` has something to show, rather than leaving those files
-        // silently missing.
-        block = block.title_bottom(Line::from(Span::styled(
-            format!(" o: {} unconnected ", view.orphan_count()),
-            pal.dim,
-        )));
     }
     if placement.offscreen > 0 {
         // A map cut off at the edge must not read as a finished picture. The
@@ -1057,23 +1138,40 @@ fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     let glyphs = Glyphs::for_markers(markers);
     let mut ink = Ink::new(inner.width as usize, inner.height as usize);
 
-    // Lines first, so a box always sits on top of whatever runs past it. One
-    // line per pair of files, however many symbols they share — the parallel
-    // bundles were most of what made this unreadable.
+    // Lines first, so a box always sits on top of whatever runs past it.
+    //
+    // Only the file under the cursor's, and that is the single biggest thing
+    // that makes this readable. A real project is a dense graph — this one is
+    // nineteen files with seventy-five connections between them, which is not
+    // a picture, it is a hatch pattern. Drawing every line at once meant no
+    // individual line could be followed, which is what "the arrows look
+    // detached" is: not that they were broken, but that no eye could trace one
+    // to its end.
+    //
+    // So the map answers one question at a time — *what does this file
+    // touch?* — and the arrow keys are how you ask it about another. Every
+    // file is still drawn, the strip below still names every connection, and
+    // the summary still counts them all.
     for l in view.links() {
-        let (Some(&a), Some(&b)) = (slot_of.get(&l.a), slot_of.get(&l.b)) else {
+        // Orient every line out of the selected file, so they can share one
+        // trunk. `to_them` and `to_us` then say which ends get an arrowhead.
+        let (them, to_them, to_us) = match (l.a == selected, l.b == selected) {
+            (true, _) => (l.b, l.a_to_b, l.b_to_a),
+            (_, true) => (l.a, l.b_to_a, l.a_to_b),
+            _ => continue,
+        };
+        let (Some(&us), Some(&them)) = (slot_of.get(&selected), slot_of.get(&them)) else {
             continue;
         };
-        let hot = l.a == selected || l.b == selected;
-        let (a, b) = (&placement.boxes[a], &placement.boxes[b]);
-        // Routing twice for a mutual link retraces the same path and lands an
-        // arrowhead on each end, which is exactly what "both ways" looks like.
-        if l.a_to_b {
-            route(&mut ink, a, b, hot, &glyphs);
-        }
-        if l.b_to_a {
-            route(&mut ink, b, a, hot, &glyphs);
-        }
+        route(
+            &mut ink,
+            &placement.boxes[us],
+            &placement.boxes[them],
+            &glyphs,
+            placement.channels,
+            to_them,
+            to_us,
+        );
     }
 
     for p in &placement.boxes {
@@ -1181,9 +1279,6 @@ struct Ink {
     w: usize,
     h: usize,
     bits: Vec<u8>,
-    /// Set where a line touches the file under the cursor, so it stays legible
-    /// where dimmer lines cross it.
-    hot: Vec<bool>,
     text: Vec<Option<(char, InkStyle)>>,
 }
 
@@ -1193,7 +1288,6 @@ impl Ink {
             w,
             h,
             bits: vec![0; w * h],
-            hot: vec![false; w * h],
             text: vec![None; w * h],
         }
     }
@@ -1207,10 +1301,9 @@ impl Ink {
         Some(y as usize * self.w + x as usize)
     }
 
-    fn mark(&mut self, x: i32, y: i32, dirs: u8, hot: bool) {
+    fn mark(&mut self, x: i32, y: i32, dirs: u8) {
         if let Some(i) = self.at(x, y) {
             self.bits[i] |= dirs;
-            self.hot[i] |= hot;
         }
     }
 
@@ -1220,9 +1313,15 @@ impl Ink {
         }
     }
 
+    /// The arrowhead where a line meets the box it points at, which is the
+    /// whole difference between "calls" and "is called by".
+    fn head(&mut self, x: i32, y: i32, arrow: char) {
+        self.put(x, y, arrow, InkStyle::Near);
+    }
+
     /// A run of horizontal line. Endpoints only get the bit pointing along the
     /// run, so a corner formed with a vertical run turns properly.
-    fn hline(&mut self, y: i32, x1: i32, x2: i32, hot: bool) {
+    fn hline(&mut self, y: i32, x1: i32, x2: i32) {
         let (a, b) = (x1.min(x2), x1.max(x2));
         for x in a..=b {
             let mut dirs = 0;
@@ -1232,11 +1331,11 @@ impl Ink {
             if x < b {
                 dirs |= RIGHT;
             }
-            self.mark(x, y, dirs, hot);
+            self.mark(x, y, dirs);
         }
     }
 
-    fn vline(&mut self, x: i32, y1: i32, y2: i32, hot: bool) {
+    fn vline(&mut self, x: i32, y1: i32, y2: i32) {
         let (a, b) = (y1.min(y2), y1.max(y2));
         for y in a..=b {
             let mut dirs = 0;
@@ -1246,7 +1345,7 @@ impl Ink {
             if y < b {
                 dirs |= DOWN;
             }
-            self.mark(x, y, dirs, hot);
+            self.mark(x, y, dirs);
         }
     }
 
@@ -1282,7 +1381,9 @@ impl Ink {
         let style_of = |s: InkStyle| match s {
             InkStyle::Selected => pal.text.add_modifier(Modifier::REVERSED),
             InkStyle::Near => pal.text.add_modifier(Modifier::BOLD),
-            InkStyle::Far => pal.text,
+            // Everything the cursor does not touch steps back, so the handful
+            // of lines that are drawn have the picture to themselves.
+            InkStyle::Far => pal.dim,
             InkStyle::Folder => pal.heading,
         };
         let mut out = Vec::with_capacity(self.h);
@@ -1294,10 +1395,7 @@ impl Ink {
                 let i = y * self.w + x;
                 let (ch, style) = match self.text[i] {
                     Some((ch, s)) => (ch, style_of(s)),
-                    None if self.bits[i] != 0 => (
-                        g.lines[self.bits[i] as usize],
-                        if self.hot[i] { pal.text } else { pal.dim },
-                    ),
+                    None if self.bits[i] != 0 => (g.lines[self.bits[i] as usize], pal.text),
                     None => (' ', pal.dim),
                 };
                 if run_style != Some(style) {
@@ -1320,76 +1418,102 @@ impl Ink {
     }
 }
 
-/// Draw the connection from one box to another as two turns of a line.
+/// Draw the connection between the file under the cursor and one of its
+/// neighbours.
+///
+/// `a` is always the selected file, whichever way the connection runs. `to_b`
+/// and `to_a` say which directions exist, and each puts an arrowhead on that
+/// end — a mutual link is one line with a head at both ends rather than two
+/// lines lying on top of each other.
 ///
 /// Orthogonal on purpose. A character grid has no diagonals worth the name —
-/// a diagonal has to be faked out of dots, and reads as a smear rather than as
-/// a diagram. Right angles are what anyone drawing this on paper would use, and
-/// they land on cell boundaries exactly.
+/// a diagonal has to be faked out of dots and reads as a smear rather than as
+/// a diagram. Right angles are what anyone drawing this on paper would use,
+/// and they land on cell boundaries exactly.
 ///
-/// Which way the line leaves depends on where the other box is: side to side
-/// when there is clear air between them, top to bottom when one is above the
-/// other. Either way it goes out, across the middle, and back in, so the turn
-/// happens in the gutter between boxes rather than over one of them.
-fn route(ink: &mut Ink, a: &Placed, b: &Placed, hot: bool, g: &Glyphs) {
-    let (arrow, ax, ay, bx, by, vertical) = if b.col > a.right() {
-        // Clear air to the right.
-        (
-            g.arrows[1],
-            a.right() as i32,
-            a.middle() as i32,
-            b.col as i32 - 1,
-            b.middle() as i32,
-            false,
-        )
-    } else if a.col > b.right() {
-        (
-            g.arrows[0],
-            a.col as i32 - 1,
-            a.middle() as i32,
-            b.right() as i32,
-            b.middle() as i32,
-            false,
-        )
-    } else if b.row > a.row {
-        // Overlapping columns: go under.
-        (
-            g.arrows[3],
-            a.centre() as i32,
-            a.bottom() as i32,
-            b.centre() as i32,
-            b.row as i32 - 1,
-            true,
-        )
-    } else if a.row > b.row {
-        (
-            g.arrows[2],
-            a.centre() as i32,
-            a.row as i32 - 1,
-            b.centre() as i32,
-            b.bottom() as i32,
-            true,
-        )
-    } else {
+/// # One trunk, many branches
+///
+/// Two rules keep this readable, and both were learned by breaking them.
+///
+/// **A line only travels in a channel.** The grid leaves two clear rows under
+/// every box and a clear column beside every slot ([`Channels`]), and a route
+/// made of those is visible along its whole length. Aiming straight at the
+/// other box and turning at the halfway point — the obvious approach — puts
+/// that corner inside some third box, and since boxes are drawn last and win,
+/// what you see is a stub leaving one file and an unrelated stub arriving at
+/// another with nothing joining them.
+///
+/// **Every line out of one file shares one trunk.** The vertical always runs
+/// down [`Channels::column_by`] of the *selected* file's slot, never the other
+/// one's. So a file with ten neighbours draws one spine with ten branches off
+/// it, instead of ten separate routes that cross each other on the way. It is
+/// the difference between a diagram and a hatch pattern, and it costs nothing:
+/// the trunk is a column no box occupies either way.
+///
+/// The one shape that skips all of this is two neighbours side by side in the
+/// same row, which connect straight across the gap between them. Nothing is in
+/// the way, and it is the plainest line on the map.
+fn route(ink: &mut Ink, a: &Placed, b: &Placed, g: &Glyphs, ch: Channels, to_b: bool, to_a: bool) {
+    if a.col == b.col && a.row == b.row {
         return; // the same slot: nothing to draw between them
-    };
-
-    if vertical {
-        let mid = (ay + by) / 2;
-        ink.vline(ax, ay, mid, hot);
-        ink.hline(mid, ax, bx, hot);
-        ink.vline(bx, mid, by, hot);
-    } else {
-        let mid = (ax + bx) / 2;
-        ink.hline(ay, ax, mid, hot);
-        ink.vline(mid, ay, by, hot);
-        ink.hline(by, mid, bx, hot);
     }
-    // The arrowhead says which way the connection runs, which is the whole
-    // difference between "calls" and "is called by".
-    if let Some(i) = ink.at(bx, by) {
-        ink.text[i] = Some((arrow, if hot { InkStyle::Near } else { InkStyle::Far }));
-        ink.hot[i] |= hot;
+
+    // Side to side, for neighbours in the same row.
+    if a.row == b.row && a.col.abs_diff(b.col) == ch.slot_w {
+        let y = a.middle() as i32;
+        let right = b.col > a.col;
+        let (near, far) = if right {
+            (a.right() as i32, b.col as i32 - 1)
+        } else {
+            (a.col as i32 - 1, b.right() as i32)
+        };
+        let (into_b, into_a) = if right {
+            (g.arrows[1], g.arrows[0])
+        } else {
+            (g.arrows[0], g.arrows[1])
+        };
+        ink.hline(y, near, far);
+        if to_b {
+            ink.head(far, y, into_b);
+        }
+        if to_a {
+            ink.head(near, y, into_a);
+        }
+        return;
+    }
+
+    // Out of the selected file's right edge, down its own trunk, then along a
+    // row channel into the other box's top or bottom.
+    let ay = a.middle() as i32;
+    let cx = ch.column_by(a.col) as i32;
+    let below = b.row > a.row;
+    let (by, into_b) = if below {
+        (b.row as i32 - 1, g.arrows[3])
+    } else {
+        // Above, or level with other boxes in between: either way the line
+        // arrives underneath and points up.
+        (b.bottom() as i32, g.arrows[2])
+    };
+    let bx = b.col as i32 + 1;
+
+    ink.hline(ay, a.right() as i32, cx);
+    ink.vline(cx, ay, by);
+    ink.hline(by, cx, bx);
+    if to_b {
+        ink.head(bx, by, into_b);
+    } else {
+        // Nothing runs this way, but the line still has to reach the box: a
+        // run that stops one cell short of a border, with no arrowhead to
+        // explain why, reads as an unfinished line rather than as a connection
+        // that only goes the other way. One more bit turns the end into a
+        // junction that visibly touches the box.
+        ink.mark(bx, by, if below { DOWN } else { UP });
+    }
+    // Everything arriving at the selected file lands on the same cell, which
+    // is the point: one arrowhead on its edge says "things come in here", and
+    // the strip below names them.
+    if to_a {
+        ink.head(a.right() as i32, ay, g.arrows[0]);
     }
 }
 
@@ -1610,7 +1734,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 let line = Line::from(vec![
                     Span::styled(format!(" {}", app.status), pal.text),
                     Span::styled(
-                        "   arrows move | Enter open | 1-3 kinds | o unconnected | / filter | Esc back",
+                        "   arrows move | Enter open | 1-3 kinds | / filter | Esc back",
                         pal.dim,
                     ),
                 ]);
@@ -1852,10 +1976,7 @@ const KEYS: &[KeyRow] = &[
         &[Action::MapWikilinks, Action::MapLinks, Action::MapCalls],
         "wikilinks | links | calls",
     ),
-    Bound(
-        &[Action::MapOrphans, Action::MapReload],
-        "orphans | rebuild",
-    ),
+    Bound(&[Action::MapReload], "rebuild"),
     Blank,
     Heading("THE BAR"),
     Bound(&[Action::TreeBar], "search"),
@@ -2248,24 +2369,271 @@ mod tests {
     }
 
     #[test]
-    fn emphasize_marks_only_the_matched_run() {
+    fn marking_leaves_the_text_alone_and_reverses_every_match() {
         let pal = Palette::default();
-        let spans = emphasize("the widget plan", 4, 6, pal);
-        let text: String = spans.iter().map(|s| s.content.as_ref()).collect::<String>();
-        assert_eq!(text, "the widget plan", "no characters are lost");
-        let marked: Vec<&str> = spans
-            .iter()
-            .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert_eq!(marked, ["widget"]);
+        let q = Matcher::new("widget").unwrap();
+        let spans = mark_query(
+            vec![Span::styled(
+                "the widget plan, one widget".to_string(),
+                pal.text,
+            )],
+            &q,
+        );
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(
+            text, "the widget plan, one widget",
+            "no characters are lost"
+        );
+        assert_eq!(marked(&spans), ["widget", "widget"]);
     }
 
     #[test]
-    fn emphasize_survives_an_out_of_range_column() {
+    fn marking_spans_a_match_that_straddles_two_of_them() {
         let pal = Palette::default();
-        let spans = emphasize("short", 99, 4, pal);
-        let text: String = spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        // What syntax highlighting does all the time: one word, several spans.
+        let q = Matcher::new("widget").unwrap();
+        let spans = mark_query(
+            vec![
+                Span::styled("a wid".to_string(), pal.text),
+                Span::styled("get b".to_string(), pal.heading),
+            ],
+            &q,
+        );
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "a widget b");
+        assert_eq!(marked(&spans), ["wid", "get"], "marked in both halves");
+    }
+
+    #[test]
+    fn marking_a_line_with_no_match_in_it_changes_nothing() {
+        let pal = Palette::default();
+        let q = Matcher::new("widget").unwrap();
+        let spans = mark_query(vec![Span::styled("short".to_string(), pal.text)], &q);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "short");
+        assert!(marked(&spans).is_empty());
+    }
+
+    /// The text of every span drawn reversed.
+    fn marked<'a>(spans: &'a [Span<'a>]) -> Vec<&'a str> {
+        spans
+            .iter()
+            .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+            .map(|s| s.content.as_ref())
+            .collect()
+    }
+
+    // ---- map routing ------------------------------------------------------
+
+    fn placed(node: usize, col: u16, row: u16, width: u16) -> Placed {
+        Placed {
+            node,
+            col,
+            row,
+            width,
+        }
+    }
+
+    /// The geometry `place` would produce for boxes this wide.
+    fn channels(slot_w: u16) -> Channels {
+        Channels {
+            slot_w,
+            slot_h: Placed::HEIGHT + 2,
+            gutter: slot_w - 3,
+        }
+    }
+
+    /// Whether a cell is inside a box's borders.
+    fn in_box(p: &Placed, x: i32, y: i32) -> bool {
+        (p.col as i32..p.col as i32 + p.width as i32).contains(&x)
+            && (p.row as i32..p.row as i32 + Placed::HEIGHT as i32).contains(&y)
+    }
+
+    /// Assert the drawn route has no dangling end: wherever a line points, it
+    /// must reach a line pointing back, an arrowhead, or a box.
+    ///
+    /// This is the property the whole router exists to satisfy. A route that
+    /// stops in empty space is one that went behind a box and came out the far
+    /// side, and it is what makes the map look like disconnected stubs.
+    fn assert_no_loose_ends(ink: &Ink, boxes: &[&Placed]) {
+        let dirs = [
+            (UP, 0, -1, DOWN),
+            (DOWN, 0, 1, UP),
+            (LEFT, -1, 0, RIGHT),
+            (RIGHT, 1, 0, LEFT),
+        ];
+        for y in 0..ink.h as i32 {
+            for x in 0..ink.w as i32 {
+                let Some(i) = ink.at(x, y) else { continue };
+                if ink.bits[i] == 0 {
+                    continue;
+                }
+                for (bit, dx, dy, back) in dirs {
+                    if ink.bits[i] & bit == 0 {
+                        continue;
+                    }
+                    let (nx, ny) = (x + dx, y + dy);
+                    let Some(n) = ink.at(nx, ny) else { continue };
+                    let joined = ink.bits[n] & back != 0
+                        || ink.text[n].is_some()
+                        || boxes.iter().any(|p| in_box(p, nx, ny));
+                    assert!(
+                        joined,
+                        "the line at ({x},{y}) points at nothing:\n{}",
+                        sketch(ink)
+                    );
+                }
+            }
+        }
+    }
+
+    /// The grid as text, for a failure message.
+    fn sketch(ink: &Ink) -> String {
+        let g = Glyphs::for_markers(Markers::Arrows);
+        (0..ink.h)
+            .map(|y| {
+                (0..ink.w)
+                    .map(|x| match ink.text[y * ink.w + x] {
+                        Some((c, _)) => c,
+                        None => g.lines[ink.bits[y * ink.w + x] as usize],
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Every arrangement two boxes can be in, in slot coordinates.
+    fn arrangements() -> Vec<(Placed, Placed, &'static str)> {
+        let ch = channels(14);
+        let slot = |c: u16, r: u16, w: u16| placed(0, c * ch.slot_w, 1 + r * ch.slot_h, w);
+        vec![
+            (slot(0, 0, 8), slot(1, 0, 9), "neighbours in a row"),
+            (slot(0, 0, 8), slot(3, 0, 9), "same row, far apart"),
+            (slot(0, 0, 8), slot(0, 1, 11), "directly below"),
+            (slot(0, 2, 8), slot(0, 0, 11), "directly above"),
+            (slot(1, 0, 8), slot(0, 2, 11), "down and to the left"),
+            (slot(0, 0, 8), slot(3, 2, 9), "down and to the right"),
+            (slot(3, 2, 9), slot(0, 0, 8), "up and to the left"),
+        ]
+    }
+
+    #[test]
+    fn a_route_never_leaves_a_loose_end() {
+        let g = Glyphs::for_markers(Markers::Arrows);
+        let ch = channels(14);
+        for (a, b, what) in arrangements() {
+            for (to_b, to_a) in [(true, false), (false, true), (true, true)] {
+                let mut ink = Ink::new(90, 40);
+                route(&mut ink, &a, &b, &g, ch, to_b, to_a);
+                assert_no_loose_ends(&ink, &[&a, &b]);
+                assert!(
+                    ink.bits.iter().any(|b| *b != 0),
+                    "{what} should have drawn something"
+                );
+            }
+        }
+    }
+
+    /// Whether the drawn route visibly meets this box.
+    ///
+    /// Orientation matters, and it is the whole point of the check. A `─`
+    /// sitting immediately right of a border runs *into* it and reads as
+    /// attached; the same `─` on the row above a box runs *past* it, parallel,
+    /// and reads as a line that stopped nearby for no reason. So a horizontal
+    /// end counts on the left and right, a vertical end counts above and
+    /// below, and an arrowhead counts anywhere.
+    fn touches(ink: &Ink, p: &Placed) -> bool {
+        let (x0, y0) = (p.col as i32, p.row as i32);
+        let (x1, y1) = (x0 + p.width as i32 - 1, y0 + Placed::HEIGHT as i32 - 1);
+        let met = |x: i32, y: i32, along: u8| match ink.at(x, y) {
+            Some(i) => ink.text[i].is_some() || ink.bits[i] & along != 0,
+            None => false,
+        };
+        let sides = (y0..=y1).any(|y| met(x0 - 1, y, LEFT | RIGHT) || met(x1 + 1, y, LEFT | RIGHT));
+        let ends = (x0..=x1).any(|x| met(x, y0 - 1, UP | DOWN) || met(x, y1 + 1, UP | DOWN));
+        sides || ends
+    }
+
+    #[test]
+    fn a_route_meets_both_of_the_boxes_it_joins() {
+        // The complement of `a_route_never_leaves_a_loose_end`: that one says
+        // the line does not point at nothing, this one says it actually
+        // arrives. A run that stops one cell short of a border satisfies the
+        // first and fails the second, and that is exactly what a connection
+        // running only the other way used to look like.
+        let g = Glyphs::for_markers(Markers::Arrows);
+        let ch = channels(14);
+        for (a, b, what) in arrangements() {
+            for (to_b, to_a) in [(true, false), (false, true), (true, true)] {
+                let mut ink = Ink::new(90, 40);
+                route(&mut ink, &a, &b, &g, ch, to_b, to_a);
+                assert!(
+                    touches(&ink, &a),
+                    "{what} ({to_b}, {to_a}): the line never reaches the first box:\n{}",
+                    sketch(&ink)
+                );
+                assert!(
+                    touches(&ink, &b),
+                    "{what} ({to_b}, {to_a}): the line never reaches the second box:\n{}",
+                    sketch(&ink)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_route_never_passes_through_a_box() {
+        let g = Glyphs::for_markers(Markers::Arrows);
+        let ch = channels(14);
+        // A third box in the middle of the grid, of the widest kind, standing
+        // in for whatever the layout put between the two being joined.
+        for (a, b, what) in arrangements() {
+            let mut ink = Ink::new(90, 40);
+            route(&mut ink, &a, &b, &g, ch, true, true);
+            for slot_c in 0..5u16 {
+                for slot_r in 0..3u16 {
+                    let other =
+                        placed(9, slot_c * ch.slot_w, 1 + slot_r * ch.slot_h, ch.slot_w - 4);
+                    if other.col == a.col && other.row == a.row {
+                        continue;
+                    }
+                    if other.col == b.col && other.row == b.row {
+                        continue;
+                    }
+                    for y in other.row as i32..other.row as i32 + Placed::HEIGHT as i32 {
+                        for x in other.col as i32..other.col as i32 + other.width as i32 {
+                            let i = ink.at(x, y).expect("inside the grid");
+                            assert_eq!(
+                                ink.bits[i],
+                                0,
+                                "{what}: a line crosses the box at slot ({slot_c},{slot_r}) \
+                                 — it would vanish behind it:\n{}",
+                                sketch(&ink)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_arrowhead_lands_on_the_end_that_the_connection_runs_to() {
+        let g = Glyphs::for_markers(Markers::Arrows);
+        let ch = channels(14);
+        let heads = |ink: &Ink| {
+            ink.text
+                .iter()
+                .filter(|t| t.is_some_and(|(c, _)| "◂▸▴▾".contains(c)))
+                .count()
+        };
+        for (a, b, what) in arrangements() {
+            for (to_b, to_a, want) in [(true, false, 1), (false, true, 1), (true, true, 2)] {
+                let mut ink = Ink::new(90, 40);
+                route(&mut ink, &a, &b, &g, ch, to_b, to_a);
+                assert_eq!(heads(&ink), want, "{what} with ({to_b}, {to_a})");
+            }
+        }
     }
 }

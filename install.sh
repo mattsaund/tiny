@@ -77,7 +77,8 @@ say ""
 say "installed $BIN"
 case ":$PATH:" in
     *":$PREFIX:"*)
-        say "run it with:  tiny ~/notes"
+        say "run it with:      tiny ~/notes"
+        say "remove it with:   tiny --uninstall"
         ;;
     *)
         say "$PREFIX is not on your PATH. Add it:"
@@ -89,5 +90,7 @@ case ":$PATH:" in
         esac
         say ""
         say "then run:  tiny ~/notes"
+        say ""
+        say "to remove tiny later:  tiny --uninstall"
         ;;
 esac

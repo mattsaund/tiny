@@ -84,7 +84,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::config::{Config, Markers, Palette};
 use crate::editor::Editor;
 use crate::graph;
-use crate::highlight::Highlighter;
+use crate::highlight::{Highlighter, Resume};
 use crate::keys::{Action, Context as KeyContext, Keymap};
 use crate::media;
 use crate::project;
@@ -399,8 +399,14 @@ pub struct App {
     /// Parsed styles. Rebuilt from `config.theme` by [`App::apply_config`], so
     /// a theme change repaints without a restart.
     pub palette: Palette,
-    /// Rebuilt alongside the palette when `syntax_theme` changes.
+    /// The theme is swapped in place when `syntax_theme` changes; the grammars
+    /// are loaded once and kept.
     pub highlighter: Highlighter,
+    /// Saved syntax-parser state for the buffer being edited, so a window deep
+    /// in a long file does not have to be reached by parsing everything above
+    /// it on every keystroke. Written by `ui` while drawing, like the media
+    /// cache and for the same reason — see the module docs.
+    pub highlight_cache: Resume,
     pub media: Option<MediaCache>,
     /// The project map, while it is being looked at.
     pub project_map: Option<ProjectMap>,
@@ -408,7 +414,7 @@ pub struct App {
     /// the bytes: the file is read at paste time, so editing it in between
     /// pastes what is there now rather than a stale snapshot.
     pub clipboard: Option<PathBuf>,
-    /// `Ctrl+B` folds the tree away to give the whole window to the file.
+    /// `Ctrl+Space` folds the tree away to give the whole window to the file.
     /// Purely a view state — nothing about the tree itself changes, so
     /// bringing it back costs no reading.
     pub tree_hidden: bool,
@@ -472,6 +478,7 @@ impl App {
             keymap,
             palette,
             highlighter,
+            highlight_cache: Resume::default(),
             media: None,
             project_map: None,
             clipboard: None,
@@ -488,8 +495,14 @@ impl App {
         };
         app.sync_preview();
 
-        // `tiny <file>` lands on that file with the editor already open, which
-        // is the whole point of naming a file instead of a folder.
+        // `tiny <file>` opens as an editor and nothing else: the tree folded
+        // away, the file across the whole window, the keyboard already in it.
+        // Naming one file is asking to edit that file, and everything else on
+        // screen is in the way of it. Esc, or the fold key, brings the project
+        // back — nothing is lost, it is just not shown first.
+        //
+        // Only for a file there is something to type into. A picture cannot
+        // take the keyboard, so it keeps the tree.
         //
         // A project tiny just scaffolded also arrives with a file — its
         // README — but only shows it. There is nothing to type into a page you
@@ -499,6 +512,7 @@ impl App {
             app.reveal(&file);
             if !target.created && matches!(app.preview, Preview::Buffer { .. }) {
                 app.focus_editor();
+                app.tree_hidden = true;
             }
         }
         Ok(app)
@@ -747,6 +761,11 @@ impl App {
         match fs::read(path) {
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(text) if !text.contains('\0') => {
+                    // A fresh buffer reports no edits, so the highlight cache
+                    // would go on believing whatever it last knew about this
+                    // path — which, after a rename or a delete, is a different
+                    // file's contents.
+                    self.highlight_cache.clear();
                     self.buffers.insert(
                         path.to_path_buf(),
                         Editor::from_str(path.to_path_buf(), &text),
@@ -1172,6 +1191,19 @@ impl App {
         self.mode = Mode::Bar(b);
     }
 
+    /// The query the bar is currently searching for, if it is searching.
+    ///
+    /// `ui` uses this to mark the same word in the preview pane, so that
+    /// stepping through results shows you *where* in the file each one is
+    /// rather than only which file. `None` for a command, and for an empty
+    /// query — neither has a word to point at.
+    pub fn live_query(&self) -> Option<&str> {
+        match &self.mode {
+            Mode::Bar(b) if !b.is_command() => Some(b.input.trim()).filter(|q| !q.is_empty()),
+            _ => None,
+        }
+    }
+
     /// Re-run the query from scratch and reset the result cursor. Called on
     /// every keystroke — see `search`'s module docs for why that is fine.
     fn run_search(&mut self, b: &mut Bar) {
@@ -1428,7 +1460,7 @@ impl App {
 
     /// Whether `column` fell inside the tree pane as it was last drawn.
     ///
-    /// False whenever the tree is not on screen, which covers both `Ctrl+B`
+    /// False whenever the tree is not on screen, which covers both `Ctrl+Space`
     /// and the very first frame, before `ui` has said where anything is.
     fn over_tree(&self, column: u16) -> bool {
         matches!(self.last_tree_cols, Some((x0, x1)) if column >= x0 && column < x1)
@@ -1570,8 +1602,13 @@ impl App {
         if let Some(w) = warning {
             self.status = w;
         }
-        let (hl, _) = Highlighter::with_theme(&self.config.syntax_theme);
-        self.highlighter = hl;
+        // Swap the theme in place. Rebuilding the highlighter here would
+        // re-unpack all 213 grammars, which is the startup cost paid again
+        // every time any setting changes — including ones it has nothing to
+        // do with, since this runs after every successful `Config::set`.
+        self.highlighter.set_theme(&self.config.syntax_theme);
+        // The saved states carry styles taken from the old theme.
+        self.highlight_cache.clear();
         if self.tree.show_hidden() != self.config.show_hidden {
             self.tree.set_show_hidden(self.config.show_hidden);
             self.rebuild_rows();
@@ -2066,23 +2103,27 @@ impl App {
         }
     }
 
-    /// `Ctrl+B`: fold the tree away, or bring it back.
+    /// Fold the tree away, or bring it back.
     ///
     /// The keyboard cannot sit in a pane that is not on screen, so folding
     /// moves it to the preview and unfolding puts it back where it was. Press
     /// the key twice and nothing has changed, which is what a toggle should
     /// mean.
+    ///
+    /// The message names the key from the keymap rather than spelling it out,
+    /// because this one is rebindable and a hint that lies is worse than none.
     fn toggle_tree_pane(&mut self) {
+        let key = self.keymap.spec(Action::ToggleTreePane);
         if self.tree_hidden {
             self.tree_hidden = false;
             // Back to whichever pane had it, so the key is a true toggle.
             self.focus = self.focus_before_hide;
-            self.status = "tree back — ^B to hide".into();
+            self.status = format!("tree back — {key} to hide");
         } else {
             self.tree_hidden = true;
             self.focus_before_hide = self.focus;
             self.focus = Focus::Editor;
-            self.status = "tree hidden — ^B to bring it back".into();
+            self.status = format!("tree hidden — {key} to bring it back");
         }
     }
 
@@ -2318,6 +2359,7 @@ impl App {
         if let Some(mut ed) = self.buffers.remove(&row.path) {
             ed.path = target.clone();
             self.buffers.insert(target.clone(), ed);
+            self.highlight_cache.clear();
         }
         self.tree.refresh_all();
         self.reveal(&target);
@@ -2790,7 +2832,7 @@ mod tests {
     use crossterm::event::KeyEventKind;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::style::Color;
+    use ratatui::style::{Color, Modifier};
 
     /// A small project with one of each thing the panes have to handle.
     fn build(dir: &Path) {
@@ -2844,6 +2886,45 @@ mod tests {
 
     fn joined(app: &mut App) -> String {
         screen(app, 90, 24).join("\n")
+    }
+
+    /// Text drawn reversed, split by pane: the result list on the left, the
+    /// preview on the right. Kept apart because both mark their matches, and
+    /// counting them together would let either one pass for both.
+    fn marked_by_pane(app: &mut App, w: u16, h: u16) -> (String, String) {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| crate::ui::draw(f, app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        // The side pane is `tree_width` of the window; a couple of columns of
+        // slack covers its border either way.
+        let split = (w as f32 * Config::default().tree_width) as u16 + 2;
+        let read = |from: u16, to: u16| -> String {
+            let mut out = String::new();
+            for y in 0..buf.area.height {
+                for x in from..to {
+                    match buf.cell((x, y)) {
+                        Some(c) if c.modifier.contains(Modifier::REVERSED) => {
+                            out.push_str(c.symbol())
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            out
+        };
+        (read(0, split), read(split, buf.area.width))
+    }
+
+    /// Just the preview pane's marks.
+    fn marked_in_preview(app: &mut App, w: u16, h: u16) -> String {
+        marked_by_pane(app, w, h).1
+    }
+
+    fn type_search(app: &mut App, query: &str) {
+        app.on_key(ch('/'));
+        for c in query.chars() {
+            app.on_key(ch(c));
+        }
     }
 
     fn k(code: KeyCode) -> KeyEvent {
@@ -3020,7 +3101,7 @@ mod tests {
     // ---- the monochrome brief --------------------------------------------
 
     #[test]
-    fn the_chrome_names_no_colours_at_all() {
+    fn the_chrome_names_no_colors_at_all() {
         let (_td, mut app) = fixture();
         select(&mut app, "design.md");
         let mut t = Terminal::new(TestBackend::new(90, 24)).unwrap();
@@ -3028,7 +3109,7 @@ mod tests {
         let buf = t.backend().buffer().clone();
 
         // The tree pane holds only chrome — no syntax highlighting to excuse
-        // a colour. Everything in it should inherit the terminal's palette.
+        // a color. Everything in it should inherit the terminal's palette.
         for y in 0..buf.area.height {
             for x in 0..28 {
                 let Some(cell) = buf.cell((x, y)) else {
@@ -3395,7 +3476,43 @@ mod tests {
     }
 
     #[test]
-    fn an_open_folders_marker_is_drawn_in_the_text_colour() {
+    fn the_selected_row_is_highlighted_in_one_piece() {
+        let (_td, mut app) = fixture();
+        // A nested file, so the row has indent and a marker to the left of the
+        // name — the part that used to keep its own dim color and show up as
+        // a grey block once the row was reversed.
+        select(&mut app, "design.md");
+        app.focus = Focus::Tree;
+
+        let mut t = Terminal::new(TestBackend::new(90, 24)).unwrap();
+        t.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let buf = t.backend().buffer().clone();
+
+        // Inside the tree pane only — the preview's title carries the same
+        // file name, and it is on the same row as the tree's own title.
+        let (x0, x1) = app.last_tree_cols.expect("the tree is on screen");
+        let row = |y: u16| -> String {
+            (x0 + 1..x1 - 1)
+                .filter_map(|x| buf.cell((x, y)))
+                .map(|c| c.symbol())
+                .collect()
+        };
+        let y = (0..buf.area.height)
+            .find(|y| row(*y).contains("design.md"))
+            .expect("the selected file is on screen");
+
+        let styles: Vec<_> = (x0 + 1..x1 - 1)
+            .filter_map(|x| buf.cell((x, y)))
+            .map(|c| (c.fg, c.bg, c.modifier))
+            .collect();
+        assert!(
+            styles.iter().all(|s| *s == styles[0]),
+            "the row should be one block; it is drawn as {styles:?}"
+        );
+    }
+
+    #[test]
+    fn an_open_folders_marker_is_drawn_in_the_text_color() {
         let (_td, mut app) = fixture();
         // Move off the root row so nothing selected is being highlighted over.
         app.on_key(k(KeyCode::Down));
@@ -3410,15 +3527,15 @@ mod tests {
             .expect("the open root folder draws a marker");
 
         assert_eq!(marker.fg, text_fg.unwrap());
-        assert_ne!(Some(marker.fg), dim_fg, "it is no longer chrome-coloured");
+        assert_ne!(Some(marker.fg), dim_fg, "it is no longer chrome-colored");
     }
 
     #[test]
-    fn ctrl_b_folds_the_tree_away_and_brings_it_back() {
+    fn ctrl_space_folds_the_tree_away_and_brings_it_back() {
         let (_td, mut app) = fixture();
         assert!(joined(&mut app).contains("PROJECT"));
 
-        app.on_key(ctrl('b'));
+        app.on_key(ctrl(' '));
         let out = joined(&mut app);
         assert!(!out.contains("PROJECT"), "the pane is gone:\n{out}");
         assert!(
@@ -3427,7 +3544,7 @@ mod tests {
         );
         assert_eq!(app.focus, Focus::Editor, "keys cannot go to an unseen pane");
 
-        app.on_key(ctrl('b'));
+        app.on_key(ctrl(' '));
         assert!(joined(&mut app).contains("PROJECT"));
         assert_eq!(app.focus, Focus::Tree, "the keyboard comes back with it");
     }
@@ -3438,10 +3555,10 @@ mod tests {
         select(&mut app, "main.py");
         app.on_key(k(KeyCode::Enter));
 
-        app.on_key(ctrl('b'));
+        app.on_key(ctrl(' '));
         assert!(app.tree_hidden);
         assert_eq!(app.focus, Focus::Editor);
-        app.on_key(ctrl('b'));
+        app.on_key(ctrl(' '));
         assert_eq!(
             app.focus,
             Focus::Editor,
@@ -3456,7 +3573,7 @@ mod tests {
         let (_td, mut app) = fixture();
         select(&mut app, "main.py");
         app.on_key(k(KeyCode::Enter));
-        app.on_key(ctrl('b'));
+        app.on_key(ctrl(' '));
 
         app.on_key(k(KeyCode::Esc));
         assert!(
@@ -3469,7 +3586,7 @@ mod tests {
     #[test]
     fn search_still_gets_a_pane_while_the_tree_is_folded_away() {
         let (_td, mut app) = fixture();
-        app.on_key(ctrl('b'));
+        app.on_key(ctrl(' '));
         app.on_key(ctrl('f'));
         type_str(&mut app, "widget");
 
@@ -3926,7 +4043,7 @@ mod tests {
     // ---- opening a single file -------------------------------------------
 
     #[test]
-    fn naming_a_file_opens_its_folder_with_the_editor_already_on_it() {
+    fn naming_a_file_opens_it_alone_ready_to_type_into() {
         let td = tempfile::tempdir().unwrap();
         build(td.path());
         let file = td.path().join("src/main.py");
@@ -3939,13 +4056,47 @@ mod tests {
 
         assert_eq!(app.selected_row().unwrap().path, file);
         assert_eq!(app.focus, Focus::Editor, "it is ready to type into");
+        assert!(app.tree_hidden, "and nothing else is in the way of it");
         let out = joined(&mut app);
         assert!(out.contains("main.py"), "{out}");
         assert!(out.contains("import utils"), "{out}");
-        assert!(
-            out.contains("README.md"),
-            "the folder is still listed:\n{out}"
-        );
+        assert!(!out.contains("PROJECT"), "the tree is folded away:\n{out}");
+
+        // Typing lands in the file without pressing anything first.
+        type_str(&mut app, "X");
+        assert!(app.active_buffer().unwrap().lines()[0].starts_with('X'));
+    }
+
+    #[test]
+    fn the_project_is_one_key_away_from_a_file_opened_on_its_own() {
+        let td = tempfile::tempdir().unwrap();
+        build(td.path());
+        let mut app = App::new(
+            target(td.path(), Some(td.path().join("src/main.py"))),
+            Config::default(),
+            None,
+        )
+        .unwrap();
+
+        app.on_key(ctrl(' '));
+        let out = joined(&mut app);
+        assert!(out.contains("PROJECT"), "the tree comes back:\n{out}");
+        assert!(out.contains("README.md"), "with the folder in it:\n{out}");
+    }
+
+    #[test]
+    fn naming_a_picture_keeps_the_tree_since_there_is_nothing_to_type() {
+        let td = tempfile::tempdir().unwrap();
+        build(td.path());
+        let app = App::new(
+            target(td.path(), Some(td.path().join("logo.png"))),
+            Config::default(),
+            None,
+        )
+        .unwrap();
+
+        assert!(!app.tree_hidden, "a picture takes no keyboard");
+        assert_eq!(app.focus, Focus::Tree);
     }
 
     #[test]
@@ -4083,6 +4234,56 @@ mod tests {
             app.selected_path().unwrap(),
             paths[other],
             "the preview follows the highlighted result"
+        );
+    }
+
+    #[test]
+    fn a_search_marks_the_word_where_it_lives_in_the_preview() {
+        let (_td, mut app) = fixture();
+        type_search(&mut app, "widget");
+        let marked = marked_in_preview(&mut app, 100, 24);
+        assert!(
+            marked.contains("widget"),
+            "stepping through results should show where each hit is, got {marked:?}"
+        );
+    }
+
+    #[test]
+    fn the_result_list_marks_its_matches_too() {
+        let (_td, mut app) = fixture();
+        type_search(&mut app, "widget");
+        let (results, _) = marked_by_pane(&mut app, 100, 24);
+        assert!(
+            results.contains("widget"),
+            "the snippet in the list points at the word as well, got {results:?}"
+        );
+    }
+
+    #[test]
+    fn closing_the_search_leaves_the_preview_unmarked() {
+        let (_td, mut app) = fixture();
+        type_search(&mut app, "widget");
+        app.on_key(k(KeyCode::Esc));
+        let marked = marked_in_preview(&mut app, 100, 24);
+        assert!(
+            !marked.contains("widget"),
+            "the marking belongs to the search, not to the file: {marked:?}"
+        );
+    }
+
+    #[test]
+    fn marking_a_code_file_never_lands_on_a_line_number() {
+        let (td, mut app) = fixture();
+        // Line 3 holds a literal 3, so the gutter and the text both offer one
+        // to mark and only the text's should be taken.
+        fs::write(td.path().join("count.py"), "a = 1\nb = 2\nc = 3\n").unwrap();
+        app.on_key(k(KeyCode::F(5)));
+        type_search(&mut app, "3");
+
+        let marked = marked_in_preview(&mut app, 100, 24);
+        assert_eq!(
+            marked, "3",
+            "exactly the one in the source, not the one in the gutter"
         );
     }
 
@@ -4349,8 +4550,57 @@ mod tests {
         assert!(out.contains("│main.py│"), "{out}");
         assert!(out.contains("│utils.py│"), "{out}");
         assert!(
-            !out.contains("│design.md│"),
-            "the notes are unconnected now, so they drop out:\n{out}"
+            out.contains("unconnected"),
+            "the notes are unconnected now, so they are filed as such:\n{out}"
+        );
+    }
+
+    #[test]
+    fn the_map_draws_the_cursors_connections_and_nobody_elses() {
+        let (td, mut app) = linked_fixture();
+        // A file joined to nothing, so there is a selection with no lines.
+        fs::write(td.path().join("lonely.md"), "nothing points here\n").unwrap();
+        command(&mut app, "reload");
+        app.on_key(ch('m'));
+
+        let arrows = |app: &mut App| -> usize {
+            screen(app, 100, 34)
+                .join("")
+                .chars()
+                .filter(|c| "◂▸▴▾".contains(*c))
+                .count()
+        };
+        assert!(
+            arrows(&mut app) > 0,
+            "the map opens on a connected file, so it opens with lines"
+        );
+
+        // Walk to the lonely file. It is under its own heading at the end.
+        for _ in 0..12 {
+            app.on_key(k(KeyCode::Tab));
+            let map = app.project_map.as_ref().expect("the map is open");
+            if map
+                .selected_node()
+                .is_some_and(|n| n.rel.ends_with("lonely.md"))
+            {
+                break;
+            }
+        }
+        let map = app.project_map.as_ref().expect("the map is open");
+        assert!(
+            map.selected_node()
+                .is_some_and(|n| n.rel.ends_with("lonely.md")),
+            "Tab should have reached it"
+        );
+        let out = screen(&mut app, 100, 34).join("\n");
+        assert!(
+            out.contains("│lonely.md│"),
+            "it is still drawn, under its own heading:\n{out}"
+        );
+        assert_eq!(
+            arrows(&mut app),
+            0,
+            "and nothing is joined to it, so nothing is drawn:\n{out}"
         );
     }
 

@@ -82,9 +82,6 @@ pub struct ProjectMap {
     /// Which edge kinds to draw: wikilink, link, call. Indexed by
     /// [`kind_index`], and bound to the `1`-`3` keys.
     pub kinds: [bool; 3],
-    /// Show files with no visible connections. Off by default, because a big
-    /// project's unconnected files crowd out the structure you came to see.
-    pub show_orphans: bool,
     /// Substring matched against each node's relative path, case-insensitively.
     /// Empty means no filtering.
     pub filter: String,
@@ -123,11 +120,6 @@ impl Placed {
         self.row + 1
     }
 
-    /// The column the box is centred on, for lines leaving top or bottom.
-    pub fn centre(&self) -> u16 {
-        self.col + self.width / 2
-    }
-
     pub fn right(&self) -> u16 {
         self.col + self.width
     }
@@ -135,6 +127,23 @@ impl Placed {
     pub fn bottom(&self) -> u16 {
         self.row + Self::HEIGHT
     }
+}
+
+/// Which heading a file is filed under.
+///
+/// The order of the variants is the order the headings appear in, and that is
+/// deliberate rather than incidental: `Root` first because a project's front
+/// door is its top-level files, then folders by path so `src` is always in the
+/// same place, and `Unconnected` last because it is the pile of things the
+/// picture has nothing to say about.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Group {
+    Root,
+    Folder(String),
+    /// Files nothing drawn reaches. Kept on screen — a map that omits files is
+    /// a map you have to remember the gaps in — but out of the way of the part
+    /// that has structure in it.
+    Unconnected,
 }
 
 /// One folder's heading: the strip of dim text naming the folder whose files
@@ -161,6 +170,36 @@ pub struct Link {
 }
 
 /// Everything `ui` needs to draw one frame of the map.
+/// Where a line may travel without ever crossing a box.
+///
+/// The layout is a grid of slots, and a box sits in the top-left corner of its
+/// own. That leaves two kinds of channel no box in any row or column reaches
+/// into:
+///
+/// - the last two **rows** of every slot, clear across the full width;
+/// - the last few **columns** of every slot, clear down the full height,
+///   because [`Channels::gutter`] is measured from the widest name on screen
+///   and not from whichever box happens to be in that slot.
+///
+/// Routing that stays inside those stays visible. Routing that does not goes
+/// behind a box and comes out the far side, which is what makes one line read
+/// as two unrelated stubs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Channels {
+    pub slot_w: u16,
+    pub slot_h: u16,
+    /// Column offset within a slot that no box in it reaches.
+    pub gutter: u16,
+}
+
+impl Channels {
+    /// The clear column belonging to whichever slot `col` sits in.
+    pub fn column_by(&self, col: u16) -> u16 {
+        let w = self.slot_w.max(1);
+        col - col % w + self.gutter
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Placement {
     pub boxes: Vec<Placed>,
@@ -169,6 +208,8 @@ pub struct Placement {
     /// picture is cut off and the view has to say so rather than looking
     /// complete — moving the cursor is what reaches them.
     pub offscreen: usize,
+    /// The clear rows and columns, for routing.
+    pub channels: Channels,
 }
 
 /// The folder part of a project-relative path, `""` for a file in the root.
@@ -214,11 +255,10 @@ impl ProjectMap {
             root: root.to_path_buf(),
             selected: 0,
             kinds: [true; 3],
-            show_orphans: false,
             filter: String::new(),
             filtering: false,
         };
-        view.select_first_visible();
+        view.select_busiest();
         // `pos` is written by `place`, which only runs when a frame is drawn.
         // Seed it against a nominal pane so the arrow keys mean something if a
         // key ever arrives before the first draw; the first frame overwrites
@@ -233,23 +273,34 @@ impl ProjectMap {
     ///
     /// Two independent tests: it must match the filter, and — unless orphans
     /// are shown — it must touch at least one edge of a kind still switched
-    /// on. That second condition is why turning off `call` can make whole
-    /// files disappear, not just the lines between them.
+    /// Whether a file is drawn at all.
     ///
-    /// Scans every edge, and is called per node, so this is quadratic. Fine at
-    /// the scale a terminal can draw; the place to start if a huge project
-    /// ever feels sluggish.
+    /// Only the `/` filter can hide one. A file that links to nothing is still
+    /// part of the project — it is filed under its own heading rather than
+    /// left out, because a map that quietly omits things is a map you cannot
+    /// trust to tell you what is there. See [`ProjectMap::connected`].
     pub fn node_visible(&self, i: usize) -> bool {
         let Some(n) = self.graph.nodes.get(i) else {
             return false;
         };
-        if !self.filter.is_empty() && !n.rel.to_lowercase().contains(&self.filter.to_lowercase()) {
-            return false;
-        }
-        if self.show_orphans {
-            return true;
-        }
-        // A file counts as connected only through an edge kind still shown.
+        self.filter.is_empty() || n.rel.to_lowercase().contains(&self.filter.to_lowercase())
+    }
+
+    /// Whether any connection reaches this file, in either direction.
+    ///
+    /// Depends on which edge kinds are switched on, which is the point: turn
+    /// `call` off in a code project and most files move to the unconnected
+    /// heading, because with calls hidden nothing does connect them.
+    ///
+    /// Deliberately blind to the `/` filter. A filter narrows what you are
+    /// looking at; it does not change what a file is joined to, and filing
+    /// every file as unconnected the moment you type into the box would be
+    /// telling you something untrue about your project.
+    ///
+    /// Scans every edge, and is called per node, so this is quadratic. Fine at
+    /// the scale a terminal can draw; the place to start if a huge project
+    /// ever feels sluggish.
+    fn connected(&self, i: usize) -> bool {
         self.graph
             .edges
             .iter()
@@ -357,6 +408,15 @@ impl ProjectMap {
         let slot_w = (widest + 6).max(8) as u16;
         let slot_h = Placed::HEIGHT + 2;
         let cols = (width / slot_w).max(1);
+        // Three in from the right of the slot: past `widest + 2`, which is as
+        // wide as a box in it can be, and still inside the slot. Measured from
+        // the widest name rather than from each box, so the column is clear in
+        // every row and a line may run the whole height of it.
+        let channels = Channels {
+            slot_w,
+            slot_h,
+            gutter: slot_w - 3,
+        };
 
         // Walk the whole layout first, unbounded by the pane, so scrolling has
         // something to scroll through.
@@ -369,20 +429,19 @@ impl ProjectMap {
         let mut row: u16 = 0;
         let mut slot_row: usize = 0;
 
-        for (dir, members) in &groups {
+        for (group, members) in &groups {
             // Always headed, even when there is only one: the top heading names
             // the project folder, which is where the map starts and how far it
             // goes. A picture with no heading would not say either.
             folders.push(Folder {
-                label: if dir.is_empty() {
-                    format!("{}/", self.root_label())
-                } else {
-                    format!("{dir}/")
-                },
+                label: self.group_label(group),
                 row,
                 files: members.len(),
             });
-            row += 1;
+            // Two rows, not one. The blank is what makes the row above every
+            // box a row no heading occupies, which is where lines arriving
+            // from above have to land — see the routing in `ui`.
+            row += 2;
             for (n, &i) in members.iter().enumerate() {
                 let (c, r) = ((n % cols as usize) as u16, (n / cols as usize) as u16);
                 let name = label_of(&self.graph.nodes[i].name);
@@ -441,6 +500,7 @@ impl ProjectMap {
             boxes,
             folders,
             offscreen,
+            channels,
         }
     }
 
@@ -457,29 +517,44 @@ impl ProjectMap {
         p.bottom()
             .saturating_sub(height)
             .min(total.saturating_sub(height))
-            .min(p.row.saturating_sub(1))
+            .min(p.row.saturating_sub(2))
     }
 
-    /// The visible files, split by the folder they live in: root first, then
-    /// the rest in path order. Never empty when `visible` is not.
-    fn folder_groups(&self, visible: &[usize]) -> Vec<(String, Vec<usize>)> {
-        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    /// The visible files, split by heading. Never empty when `visible` is not.
+    ///
+    /// A file goes under its folder if anything drawn reaches it, and under
+    /// [`Group::Unconnected`] otherwise — which means the headings shift as
+    /// the `1`-`3` toggles change what counts as a connection. That is the
+    /// honest arrangement: the picture should say which files it is actually
+    /// telling you something about.
+    fn folder_groups(&self, visible: &[usize]) -> Vec<(Group, Vec<usize>)> {
+        let mut groups: Vec<(Group, Vec<usize>)> = Vec::new();
         for &i in visible {
-            let dir = folder_of(&self.graph.nodes[i].rel).to_string();
-            match groups.iter_mut().find(|(d, _)| *d == dir) {
+            let key = if !self.connected(i) {
+                Group::Unconnected
+            } else {
+                match folder_of(&self.graph.nodes[i].rel) {
+                    "" => Group::Root,
+                    dir => Group::Folder(dir.to_string()),
+                }
+            };
+            match groups.iter_mut().find(|(k, _)| *k == key) {
                 Some((_, members)) => members.push(i),
-                None => groups.push((dir, vec![i])),
+                None => groups.push((key, vec![i])),
             }
         }
-        // Root files first — they are the front door of a project — then
-        // every folder by path, so `src` always sits in the same place.
-        groups.sort_by(|a, b| {
-            a.0.is_empty()
-                .cmp(&b.0.is_empty())
-                .reverse()
-                .then(a.0.cmp(&b.0))
-        });
+        // Ordering is the enum's own — see [`Group`].
+        groups.sort_by(|a, b| a.0.cmp(&b.0));
         groups
+    }
+
+    /// The heading text for a group, which is the only place its name appears.
+    fn group_label(&self, group: &Group) -> String {
+        match group {
+            Group::Root => format!("{}/", self.root_label()),
+            Group::Folder(dir) => format!("{dir}/"),
+            Group::Unconnected => "unconnected".to_string(),
+        }
     }
 
     /// What to call the project folder itself in a heading.
@@ -528,6 +603,31 @@ impl ProjectMap {
     fn select_first_visible(&mut self) {
         if let Some(i) = self.visible_indices().first() {
             self.selected = *i;
+        }
+    }
+
+    /// Put the cursor on the file with the most connections.
+    ///
+    /// Only used when the map is first opened, and only because the map draws
+    /// the cursor's connections rather than everyone's: landing on whichever
+    /// file happens to sort first would often mean opening on a picture with
+    /// no lines in it. The busiest file is the one that says the most about
+    /// how a project fits together, so it is the right thing to be looking at
+    /// before you have asked for anything in particular.
+    fn select_busiest(&mut self) {
+        let degree = |i: usize| {
+            self.graph
+                .edges
+                .iter()
+                .filter(|e| self.kind_on(e) && (e.from == i || e.to == i))
+                .count()
+        };
+        if let Some(i) = self
+            .visible_indices()
+            .into_iter()
+            .max_by_key(|i| degree(*i))
+        {
+            self.selected = i;
         }
     }
 
@@ -628,10 +728,6 @@ impl ProjectMap {
             Action::MapWikilinks => self.toggle_kind(0),
             Action::MapLinks => self.toggle_kind(1),
             Action::MapCalls => self.toggle_kind(2),
-            Action::MapOrphans => {
-                self.show_orphans = !self.show_orphans;
-                self.ensure_selection();
-            }
             Action::MapReload => return Intent::Rebuild,
             _ => {}
         }
@@ -684,12 +780,6 @@ impl ProjectMap {
             out.push_str(&format!(" | {hidden} hidden"));
         }
         out
-    }
-
-    /// Files that link to nothing and are linked from nothing, whether they
-    /// are being shown or not. Tells you whether `o` has anything to reveal.
-    pub fn orphan_count(&self) -> usize {
-        self.graph.orphans
     }
 
     /// Languages whose calls can be followed, for the line beside the toggles.
@@ -769,7 +859,6 @@ mod tests {
     #[test]
     fn placed_boxes_never_overlap_and_stay_on_screen() {
         let (_td, mut view) = fixture();
-        view.show_orphans = true;
         let (w, h) = (80u16, 30u16);
         let place = view.place(w, h);
         assert!(!place.boxes.is_empty(), "something should fit in 80x30");
@@ -790,6 +879,70 @@ mod tests {
     }
 
     #[test]
+    fn a_channel_column_is_clear_of_every_box() {
+        // The invariant the whole of `ui::route` rests on: a line running down
+        // a slot's channel column cannot pass behind a box, at any row, in any
+        // slot. Break this and lines start disappearing mid-run.
+        let (_td, mut view) = fixture();
+        let place = view.place(90, 60);
+        let ch = place.channels;
+        assert!(ch.slot_w > 0, "the geometry came back");
+
+        for p in &place.boxes {
+            let column = ch.column_by(p.col);
+            for other in &place.boxes {
+                assert!(
+                    column < other.col || column >= other.right(),
+                    "the channel at {column} runs through {other:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_channel_column_stays_inside_its_own_slot() {
+        // If it strayed into the next slot, a route would cross the boundary
+        // and could end up on the far side of the box it was aiming at.
+        let (_td, mut view) = fixture();
+        let place = view.place(90, 60);
+        let ch = place.channels;
+        for p in &place.boxes {
+            let column = ch.column_by(p.col);
+            assert!(column >= p.right(), "the channel is past the box it serves");
+            assert!(
+                column < p.col + ch.slot_w,
+                "the channel belongs to the next slot along"
+            );
+        }
+    }
+
+    #[test]
+    fn the_row_above_a_box_is_never_a_heading() {
+        // Lines arriving from above land on it, and a heading there would be
+        // overwritten by them — or would cut the line in half.
+        let (_td, mut view) = fixture();
+        let place = view.place(90, 60);
+        for p in &place.boxes {
+            assert!(
+                !place.folders.iter().any(|g| g.row + 1 == p.row),
+                "{p:?} sits directly under a heading"
+            );
+        }
+    }
+
+    #[test]
+    fn the_map_opens_on_the_busiest_file() {
+        let (_td, view) = fixture();
+        // design.md and architecture.md point at each other, and main.py calls
+        // utils.py; alone.md is joined to nothing. Whichever is picked, it must
+        // not be the lonely one — the map would open showing no connections.
+        assert!(
+            view.connected(view.selected),
+            "opening on a file with no lines makes the map look broken"
+        );
+    }
+
+    #[test]
     fn a_box_is_wide_enough_for_the_name_it_holds() {
         let (_td, mut view) = fixture();
         for p in view.place(80, 30).boxes {
@@ -805,12 +958,14 @@ mod tests {
     #[test]
     fn files_sit_under_the_heading_for_the_folder_they_live_in() {
         let (_td, mut view) = fixture();
-        view.show_orphans = true;
         let place = view.place(90, 40);
         assert_eq!(place.offscreen, 0, "the fixture fits in 90x40");
 
         for p in &place.boxes {
             let rel = view.graph.nodes[p.node].rel.clone();
+            if !view.connected(p.node) {
+                continue; // filed by connectedness instead — see below
+            }
             let want = format!("{}/", folder_of(&rel));
             assert_eq!(
                 folder_of_box(&place, p),
@@ -819,8 +974,12 @@ mod tests {
             );
         }
         let labels: Vec<&str> = place.folders.iter().map(|g| g.label.as_str()).collect();
-        assert_eq!(labels, ["notes/", "src/"], "folders run in path order");
-        assert_eq!(place.folders[0].files, 3, "three notes");
+        assert_eq!(
+            labels,
+            ["notes/", "src/", "unconnected"],
+            "folders run in path order"
+        );
+        assert_eq!(place.folders[0].files, 2, "design and architecture");
     }
 
     #[test]
@@ -853,7 +1012,7 @@ mod tests {
             !labels[0].starts_with("notes/") && !labels[0].starts_with("src/"),
             "the project's own files head the map, not a subfolder: {labels:?}"
         );
-        assert_eq!(&labels[1..], ["notes/", "src/"]);
+        assert_eq!(&labels[1..], ["notes/", "src/", "unconnected"]);
     }
 
     #[test]
@@ -869,7 +1028,6 @@ mod tests {
         write(&root, "inside.md", "see [[notes]]\n");
 
         let mut view = ProjectMap::build(&root, &graph::Options::default());
-        view.show_orphans = true;
         for n in &view.graph.nodes {
             assert!(
                 root.join(&n.rel).starts_with(&root),
@@ -897,7 +1055,6 @@ mod tests {
     #[test]
     fn a_layout_taller_than_the_pane_says_what_it_left_out() {
         let (_td, mut view) = fixture();
-        view.show_orphans = true;
         let tall = view.place(90, 40);
         let short = view.place(90, 8);
         assert_eq!(tall.offscreen, 0);
@@ -912,7 +1069,6 @@ mod tests {
     #[test]
     fn a_heading_never_stands_over_files_that_were_left_out() {
         let (_td, mut view) = fixture();
-        view.show_orphans = true;
         let place = view.place(90, 8);
         for g in &place.folders {
             assert!(
@@ -926,7 +1082,6 @@ mod tests {
     #[test]
     fn the_view_follows_the_cursor_past_the_bottom() {
         let (_td, mut view) = fixture();
-        view.show_orphans = true;
         // The last file in walk order is the furthest down the layout.
         let last = *view.visible_indices().last().unwrap();
         view.selected = last;
@@ -953,7 +1108,6 @@ mod tests {
     #[test]
     fn every_node_gets_a_position_and_none_are_stacked() {
         let (_td, mut view) = fixture();
-        view.show_orphans = true;
         view.place(90, 40);
         assert_eq!(view.pos.len(), view.graph.nodes.len());
         assert!(view.pos.iter().all(|(x, y)| x.is_finite() && y.is_finite()));
@@ -994,7 +1148,6 @@ mod tests {
     #[test]
     fn files_in_one_folder_end_up_nearer_than_files_in_another() {
         let (_td, mut view) = fixture();
-        view.show_orphans = true;
         view.place(90, 40);
         let find = |rel: &str| view.graph.nodes.iter().position(|n| n.rel == rel).unwrap();
         let dist = |a: usize, b: usize| {
@@ -1015,7 +1168,6 @@ mod tests {
         write(td.path(), "only.md", "alone\n");
         let mut view = ProjectMap::build(td.path(), &graph::Options::default());
         assert_eq!(view.pos.len(), 1);
-        view.show_orphans = true;
         let placed = view.place(60, 20).boxes;
         assert_eq!(placed.len(), 1);
         assert!(placed[0].right() <= 60 && placed[0].bottom() <= 20);
@@ -1034,25 +1186,29 @@ mod tests {
     // ---- what is shown ----------------------------------------------------
 
     #[test]
-    fn unconnected_files_are_hidden_until_asked_for() {
+    fn turning_off_an_edge_kind_never_takes_a_file_off_the_map() {
         let (_td, mut view) = fixture();
-        assert!(!visible_names(&view).contains(&"notes/alone.md"));
-        view.show_orphans = true;
-        assert!(visible_names(&view).contains(&"notes/alone.md"));
-    }
+        let all: Vec<String> = visible_names(&view).iter().map(|s| s.to_string()).collect();
+        assert!(all.iter().any(|r| r == "notes/design.md"));
 
-    #[test]
-    fn turning_off_an_edge_kind_hides_what_only_it_connected() {
-        let (_td, mut view) = fixture();
-        assert!(visible_names(&view).contains(&"notes/design.md"));
-
+        // The notes are held on only by wikilinks, so switching those off
+        // leaves nothing reaching them — but they are still files in the
+        // project, and the map still has to show them.
         view.kinds[kind_index(EdgeKind::Wikilink)] = false;
-        let shown = visible_names(&view);
-        assert!(
-            !shown.contains(&"notes/design.md"),
-            "the notes were only held on by wikilinks: {shown:?}"
+        assert_eq!(
+            visible_names(&view),
+            all,
+            "what a connection kind changes is the arrangement, not the census"
         );
-        assert!(shown.contains(&"src/main.py"), "the code is still linked");
+        assert!(
+            !view.connected(
+                view.graph
+                    .nodes
+                    .iter()
+                    .position(|n| n.rel == "notes/design.md")
+                    .unwrap()
+            )
+        );
     }
 
     #[test]
@@ -1066,9 +1222,8 @@ mod tests {
 
     #[test]
     fn the_summary_counts_what_is_actually_drawn() {
-        let (_td, mut view) = fixture();
+        let (_td, view) = fixture();
         assert!(view.summary().contains("/5 files"), "{}", view.summary());
-        view.show_orphans = true;
         assert!(view.summary().starts_with("5/5"), "{}", view.summary());
     }
 
@@ -1092,7 +1247,6 @@ mod tests {
     #[test]
     fn arrows_move_to_the_nearest_file_in_that_direction() {
         let (_td, mut view) = fixture();
-        view.show_orphans = true;
         // Put two nodes in known places and check the cursor goes the right way.
         view.selected = 0;
         view.pos[0] = (0.0, 0.0);
@@ -1117,7 +1271,6 @@ mod tests {
     #[test]
     fn moving_towards_nothing_leaves_the_cursor_alone() {
         let (_td, mut view) = fixture();
-        view.show_orphans = true;
         view.selected = 0;
         view.pos = vec![
             (0.0, 0.0),
@@ -1144,7 +1297,6 @@ mod tests {
     #[test]
     fn the_cursor_never_sits_on_something_hidden() {
         let (_td, mut view) = fixture();
-        view.show_orphans = true;
         let alone = view
             .graph
             .nodes
@@ -1153,11 +1305,78 @@ mod tests {
             .unwrap();
         view.selected = alone;
 
-        view.on_key(ch('o'), act(ch('o'))); // hide unconnected files again
-        assert!(!view.show_orphans);
+        // The filter is the only thing that can take a file off the map now.
+        view.filtering = true;
+        for c in "utils".chars() {
+            view.on_key(ch(c), None);
+        }
         assert!(
             view.node_visible(view.selected),
             "the cursor should have moved to something still drawn"
+        );
+    }
+
+    #[test]
+    fn a_file_nothing_reaches_is_still_on_the_map() {
+        let (_td, view) = fixture();
+        let alone = view
+            .graph
+            .nodes
+            .iter()
+            .position(|n| n.rel == "notes/alone.md")
+            .unwrap();
+        assert!(
+            view.node_visible(alone),
+            "a file with no links is part of the project too"
+        );
+        assert!(!view.connected(alone), "it just has nothing pointing at it");
+    }
+
+    #[test]
+    fn unconnected_files_are_filed_under_their_own_heading_last() {
+        let (_td, mut view) = fixture();
+        let place = view.place(120, 60);
+        let headings: Vec<&str> = place.folders.iter().map(|f| f.label.as_str()).collect();
+
+        assert_eq!(
+            headings.last(),
+            Some(&"unconnected"),
+            "and it comes after the folders, not among them: {headings:?}"
+        );
+        let lonely = place
+            .folders
+            .last()
+            .expect("there is an unconnected heading");
+        assert_eq!(lonely.files, 1, "just alone.md");
+        assert!(
+            headings.contains(&"notes/") && headings.contains(&"src/"),
+            "the folders are still there: {headings:?}"
+        );
+    }
+
+    #[test]
+    fn turning_a_connection_kind_off_moves_its_files_to_unconnected() {
+        let (_td, mut view) = fixture();
+        let before = view.place(120, 60);
+        let notes = before
+            .folders
+            .iter()
+            .find(|f| f.label == "notes/")
+            .expect("design and architecture link to each other")
+            .files;
+        assert_eq!(notes, 2, "alone.md is already elsewhere");
+
+        // With wikilinks hidden, nothing reaches the two notes either.
+        view.toggle_kind(0);
+        let after = view.place(120, 60);
+        let lonely = after
+            .folders
+            .iter()
+            .find(|f| f.label == "unconnected")
+            .expect("still a heading for them");
+        assert_eq!(
+            lonely.files, 3,
+            "the map should say which files it has nothing to tell you about"
         );
     }
 

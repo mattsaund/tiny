@@ -121,6 +121,9 @@ pub struct Editor {
     /// Kind of the last edit, for coalescing. `None` means the next edit
     /// starts a fresh group whatever it is.
     last_edit: Option<EditKind>,
+    /// Lowest line index changed since [`Editor::take_touched`] last ran, or
+    /// `usize::MAX` when nothing has. See that method for who asks.
+    touched: usize,
 }
 
 impl Editor {
@@ -164,6 +167,7 @@ impl Editor {
             undo: Vec::new(),
             redo: Vec::new(),
             last_edit: None,
+            touched: usize::MAX,
         }
     }
 
@@ -210,6 +214,20 @@ impl Editor {
         &self.lines
     }
 
+    /// The lowest line changed since the last call, clearing the record.
+    ///
+    /// The syntax highlighter's resume cache is the only caller. It keeps
+    /// parser state every few dozen lines so that a window deep in a file does
+    /// not have to be reached by parsing from line 0, and this is how it learns
+    /// how much of that state an edit threw away: everything from here down.
+    ///
+    /// Clearing on read is what makes it cheap — the editor does not have to
+    /// know whether anyone is listening, and the answer is only ever asked for
+    /// once per frame.
+    pub fn take_touched(&mut self) -> Option<usize> {
+        (self.touched != usize::MAX).then(|| std::mem::replace(&mut self.touched, usize::MAX))
+    }
+
     pub fn line_count(&self) -> usize {
         self.lines.len()
     }
@@ -243,6 +261,11 @@ impl Editor {
     ///
     /// Any edit clears the redo stack, whether or not it coalesced.
     fn push_undo(&mut self, kind: EditKind) {
+        // Every mutation acts at the cursor and every mutation calls this, so
+        // this one line records what changed for the whole editor. One line of
+        // slack because a backspace at column 0 joins the cursor's line into
+        // the one above, changing that one instead.
+        self.touched = self.touched.min(self.cursor_line.saturating_sub(1));
         let coalesce = kind != EditKind::Structural && self.last_edit == Some(kind);
         self.last_edit = Some(kind);
         self.redo.clear();
@@ -287,6 +310,8 @@ impl Editor {
         self.cursor_col = prev.cursor_col;
         self.dirty = true;
         self.last_edit = None;
+        // A snapshot replaces every line at once, so nothing above is safe.
+        self.touched = 0;
         self.clamp_cursor();
         true
     }
@@ -306,6 +331,7 @@ impl Editor {
         self.cursor_col = next.cursor_col;
         self.dirty = true;
         self.last_edit = None;
+        self.touched = 0;
         self.clamp_cursor();
         true
     }
@@ -598,6 +624,67 @@ mod tests {
 
     fn ed(text: &str) -> Editor {
         Editor::from_str(PathBuf::from("/tmp/t.txt"), text)
+    }
+
+    #[test]
+    fn nothing_is_touched_until_something_is_edited() {
+        let mut e = ed("a\nb\nc\nd\n");
+        assert_eq!(e.take_touched(), None);
+        e.move_down();
+        e.move_end();
+        assert_eq!(e.take_touched(), None, "moving about changes no line");
+    }
+
+    #[test]
+    fn an_edit_reports_its_line_once() {
+        let mut e = ed("a\nb\nc\nd\n");
+        e.goto(2, 0);
+        e.insert_char('x');
+        assert_eq!(
+            e.take_touched(),
+            Some(1),
+            "line 2, with the one line of slack"
+        );
+        assert_eq!(e.take_touched(), None, "reading clears the record");
+    }
+
+    #[test]
+    fn a_backspace_at_the_start_of_a_line_reports_the_line_above() {
+        let mut e = ed("a\nb\nc\nd\n");
+        e.goto(2, 0);
+        e.backspace();
+        assert_eq!(e.to_text(), "a\nbc\nd\n", "the line joined upwards");
+        assert_eq!(
+            e.take_touched(),
+            Some(1),
+            "line 1 is what actually changed, and it is covered"
+        );
+    }
+
+    #[test]
+    fn the_lowest_of_several_edits_is_the_one_reported() {
+        let mut e = ed("a\nb\nc\nd\ne\n");
+        e.goto(4, 0);
+        e.insert_char('x');
+        e.goto(1, 0);
+        e.insert_char('y');
+        e.goto(3, 0);
+        e.insert_char('z');
+        assert_eq!(e.take_touched(), Some(0), "the earliest line wins");
+    }
+
+    #[test]
+    fn an_undo_puts_every_line_back_in_doubt() {
+        let mut e = ed("a\nb\nc\nd\n");
+        e.goto(3, 0);
+        e.insert_char('x');
+        e.take_touched();
+        assert!(e.undo());
+        assert_eq!(
+            e.take_touched(),
+            Some(0),
+            "a snapshot replaces the whole buffer"
+        );
     }
 
     #[test]

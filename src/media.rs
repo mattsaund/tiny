@@ -1,9 +1,9 @@
 //! Pictures and video in the preview pane.
 //!
-//! Images are drawn as coloured half-blocks: each terminal cell holds a `▀`
+//! Images are drawn as colored half-blocks: each terminal cell holds a `▀`
 //! whose foreground is the upper pixel and background the lower one, so one
 //! cell carries two pixels and the result comes out roughly square. This
-//! works in any terminal that does 24-bit colour — no graphics protocol, no
+//! works in any terminal that does 24-bit color — no graphics protocol, no
 //! sixel, nothing to detect.
 //!
 //! Video shows a poster frame, pulled with ffmpeg when it is installed. When
@@ -18,7 +18,7 @@
 //! to the bottom one, and a single cell carries a 1x2 column of pixels. The
 //! result is roughly square and doubles the vertical resolution for free.
 //!
-//! The only requirement is 24-bit colour, which every modern terminal has.
+//! The only requirement is 24-bit color, which every modern terminal has.
 //! Nothing here detects or negotiates a graphics protocol — no sixel, no
 //! kitty, no iTerm2 — which is why it works over ssh and inside tmux.
 //!
@@ -258,13 +258,13 @@ fn to_half_blocks(img: &DynamicImage, cols: usize, rows: usize) -> Vec<Line<'sta
     lines
 }
 
-/// A pixel's colour, or `None` where it is transparent enough to show the
+/// A pixel's color, or `None` where it is transparent enough to show the
 /// terminal's own background through.
 ///
 /// The threshold is a hard cutoff rather than a blend: there is nothing to
 /// blend *with*, since the terminal background is whatever the user's theme
 /// says and is not knowable from here. `None` becomes `Color::Reset`, which
-/// leaves that half-cell painted in the terminal's own colours.
+/// leaves that half-cell painted in the terminal's own colors.
 fn px(p: &Rgba<u8>) -> Option<Color> {
     if p.0[3] < 32 {
         None
@@ -390,10 +390,10 @@ mod tests {
     }
 
     #[test]
-    fn the_picture_is_in_the_colours_not_the_glyphs() {
+    fn the_picture_is_in_the_colors_not_the_glyphs() {
         let td = tempfile::tempdir().unwrap();
         // A dark disc on a light ground: every cell is the same character, so
-        // the shape can only survive if the colours do.
+        // the shape can only survive if the colors do.
         let (w, h) = (96u32, 96u32);
         let mut img = RgbaImage::new(w, h);
         for (x, y, p) in img.enumerate_pixels_mut() {

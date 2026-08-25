@@ -16,6 +16,14 @@ git clone https://github.com/mattsaund/tiny.git && cd tiny && sh install.sh
 ```
 
 the installer will offer to install rust and its dependencies if you do not have them. builds and drops `tiny` in `~/.local/bin`.
+
+**Uninstall:**
+```sh
+tiny --uninstall
+```
+
+shows what it is about to delete — the binary, `tiny.conf`, and it asks before doing it. your notes and projects are not touched.
+
 ## Use (in terminal):
 
 ```sh
@@ -23,6 +31,10 @@ tiny                      # this folder, or the project it sits inside
 tiny ~/Desktop/project1   # that folder — created, with a project in it, if missing
 tiny ~/code/main.py       # that one file, in the editor, with its project beside it
 tiny notes.txt            # same, and the file is written if it isn't there yet
+
+tiny --config             # where tiny.conf lives
+tiny --licenses           # terms of the bundled syntax definitions
+tiny --uninstall          # remove tiny, leaving your notes alone
 ```
 
 To turn off the starting README.md in tiny projects change this in config
@@ -49,7 +61,7 @@ Press `?` in the program: it lists every key and every command at once, side by 
 | `d`         | delete (asks first)                        |
 | `.`         | show or hide dotfiles                      |
 | `F5`        | re-read from disk (or `*reload`)           |
-| `^B`        | fold the tree away, and bring it back      |
+| `^Space`    | fold the tree away, and bring it back      |
 | `q`         | quit                                       |
 
 
@@ -63,6 +75,10 @@ Press `?` in the program: it lists every key and every command at once, side by 
 | `,`        | the settings area                           |
 | `Ctrl+F`   | the bar, from anywhere including the editor |
 | `Ctrl+P`   | the same, with the `*` already typed        |
+
+Results list as you type. Arrow up and down through them and the preview follows, with **every occurrence of the word marked in the file itself** — so you can see where a hit sits before committing to it. Enter opens the file with the cursor on the match.
+
+Search is smart-cased: `widget` matches `Widget`, `Widget` matches only `Widget`. The marking follows the same rule, so what is highlighted is exactly what was matched.
 
 
 ```
@@ -107,21 +123,26 @@ a directory it will save all files under that directory.
 
 **The Project Map**
 
-The project map `m` shows the entire project and linking between files in the project.
-any links between files or functions that call other functions will form a link in the map.
+The project map `m` shows every file in the project, grouped under the folder it lives in, and draws what the file under the cursor is joined to.
+
+Files that nothing reaches are grouped under `unconnected` at the bottom.
 
 ```
-tiny/  2 files
-╭─────────╮                        ╭────────╮
-│README.md│───────────────────────▸│LICENSE │
-╰─────────╯                        ╰────────╯
-
-src/  3 files
+src/  5 files
 ╭──────╮         ╭───────╮        ╭─────────╮
-│cli.py│────────▸│main.py│──────┬▸│utils.py │
-╰──────╯         ╰───────╯      │ ╰─────────╯
-                                │
-                     ───────────┘
+│cli.py│◂──────┬▸│main.py│        │utils.py │
+╰──────╯       │ ╰───────╯        ╰─────────╯
+               ├──────────────────────┘
+               │      ▾
+╭─────────╮    │ ╭────────╮
+│parser.py│    │ │store.py│
+╰─────────╯    │ ╰────────╯
+               └──────▾
+
+unconnected  1 file
+╭────────╮
+│notes.md│
+╰────────╯
 ```
 
 | key       | does                                        |
@@ -130,7 +151,6 @@ src/  3 files
 | `Tab`     | step through every file in turn             |
 | `Enter`   | open the file the cursor is on              |
 | `1`-`3`   | wikilinks / md links / calls                |
-| `o`       | show files connected to nothing             |
 | `/`       | filter to matching paths                    |
 | `r`       | build the map again                         |
 
@@ -189,7 +209,7 @@ binding added in a later version:
 tree.down    = "z"          # one key
 tree.up      = "up i w"     # or several, space separated
 editor.undo  = "ctrl+u"
-map.orphans  = ""           # or none at all
+map.reload   = ""           # or none at all
 ```
 
 Names are what the keybinds window shows in its left column. A key is written
@@ -244,7 +264,7 @@ Video shows a poster frame, pulled with `ffmpeg` when it is installed.
 | `editor.rs`    | the text buffer, cursor, and undo                   |
 | `search.rs`    | project-wide search and find-replace                |
 | `markdown.rs`  | markdown → styled terminal lines, wikilink scanning |
-| `highlight.rs` | syntax highlighting via syntect                     |
+| `highlight.rs` | syntax highlighting, and the parser-state cache     |
 | `media.rs`     | pictures and video frames as half-blocks            |
 | `graph.rs`     | the link graph: wikilinks, md links, calls          |
 | `projectmap.rs`| the map you look at: its layout, boxes and keys     |
@@ -256,13 +276,13 @@ Video shows a poster frame, pulled with `ffmpeg` when it is installed.
 **Current**
 - Markdown text editor, easy editing like obsidian, perfectly viewable
 - plaintext editor (.txt), no formatting
+- code editor with syntax highlighting for 213 languages
 - pictures and videos viewer
 - project map showing the connections and links between files
-- full project searchbar and command caller
+- full project searchbar and command caller, matches marked in the preview
 
 **Future**
 - PDF Viewer/editor
-- code editor with syntax highlighting for all languages.
 - source control and github integration
 - local AI implementation
 - HTML Viewer with local web server
@@ -294,5 +314,6 @@ Issues and pull requests welcome. `cargo test` should pass and `cargo clippy` sh
 ## Licence and Credits
 
 Created by Matthew Saunders https://msaunders.dev
-
 MIT. See [LICENSE](LICENSE).
+
+Syntax definitions come from the [bat](https://github.com/sharkdp/bat) project by way of [two-face](https://codeberg.org/CosmicHarper/two-face). They are third-party files with their own terms, which `tiny --licenses` prints.

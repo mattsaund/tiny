@@ -1,6 +1,6 @@
 [package]
 name = "tiny"
-version = "0.1.2"
+version = "0.1.5"
 edition = "2024"
 # Let-chains, which this uses throughout, landed in 1.88.
 rust-version = "1.88"
@@ -20,12 +20,24 @@ ratatui = "0.30.2"
 serde = { version = "1.0.229", features = ["derive"] }
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
 toml = "1.1.4"
-tree-sitter = "0.26.13"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-tags = "0.26.13"
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 unicode-width = "0.2.2"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# Release is what people install, and it is built once on their machine and
+# then run for months — so it is worth the extra build minute.
+#
+# `lto` and one codegen unit let the optimiser see across crate boundaries,
+# which matters here because the hot loop (syntect's regex matching, called
+# from `highlight`) sits behind two of them. `strip` drops symbols that only a
+# debugger would want, and takes about 2 MB off the binary.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

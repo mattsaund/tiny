@@ -136,7 +136,6 @@ pub enum Action {
     MapNext,
     MapPrevious,
     MapFilter,
-    MapOrphans,
     MapReload,
     MapWikilinks,
     MapLinks,
@@ -184,7 +183,7 @@ const TABLE: &[Row] = &[
         Context::Global,
         "fold_tree",
         "fold the tree away, and back",
-        "ctrl+b",
+        "ctrl+space",
     ),
     (Action::TreeUp, Context::Tree, "tree.up", "move up", "up i"),
     (
@@ -543,13 +542,6 @@ const TABLE: &[Row] = &[
         "map.filter",
         "filter by path",
         "/",
-    ),
-    (
-        Action::MapOrphans,
-        Context::Map,
-        "map.orphans",
-        "show unconnected files",
-        "o",
     ),
     (
         Action::MapReload,

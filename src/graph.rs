@@ -138,8 +138,6 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     /// Merged and counted connections.
     pub edges: Vec<Edge>,
-    /// Files that were unreachable from anything and reached nothing.
-    pub orphans: usize,
     /// Languages whose calls tiny can follow, so the view can say so rather
     /// than leaving you wondering why your Go files have no edges.
     pub languages: Vec<String>,
@@ -392,17 +390,9 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
         })
         .collect();
 
-    let mut connected = vec![false; nodes.len()];
-    for e in &edges {
-        connected[e.from] = true;
-        connected[e.to] = true;
-    }
-    let orphans = connected.iter().filter(|c| !**c).count();
-
     Graph {
         nodes,
         edges,
-        orphans,
         languages: supported_languages()
             .iter()
             .map(|s| s.to_string())
@@ -889,7 +879,6 @@ mod tests {
         );
         let g = graph(&td);
         assert!(g.edges.is_empty(), "{:?}", edges(&g));
-        assert_eq!(g.orphans, 1);
     }
 
     #[test]
@@ -1094,7 +1083,7 @@ mod tests {
     // ---- shape ------------------------------------------------------------
 
     #[test]
-    fn every_file_becomes_a_node_and_unconnected_ones_are_counted() {
+    fn every_file_becomes_a_node() {
         let td = tempfile::tempdir().unwrap();
         write(td.path(), "a.md", "[[b]]\n");
         write(td.path(), "b.md", "hi\n");
@@ -1102,7 +1091,6 @@ mod tests {
         fs::write(td.path().join("picture.png"), [0x89u8, b'P', b'N', b'G']).unwrap();
         let g = graph(&td);
         assert_eq!(g.nodes.len(), 4);
-        assert_eq!(g.orphans, 2, "lonely.md and picture.png");
         assert_eq!(
             g.nodes
                 .iter()
@@ -1156,6 +1144,5 @@ mod tests {
         let g = graph(&td);
         assert!(g.nodes.is_empty());
         assert!(g.edges.is_empty());
-        assert_eq!(g.orphans, 0);
     }
 }

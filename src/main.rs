@@ -22,12 +22,13 @@
 //! # The one-way rule
 //!
 //! State flows one way: keys mutate `App`, then `ui` reads `App` and draws.
-//! `ui` never handles input, and `app` never touches a ratatui widget. The one
-//! sanctioned exception is that `ui` writes back scroll offsets and the media
-//! cache, because those genuinely cannot be computed until the pane size is
-//! known — and the pane size is only known while drawing. If you find yourself
-//! wanting a second exception, that is usually a sign the state belongs on
-//! `App` instead.
+//! `ui` never handles input, and `app` never touches a ratatui widget. The
+//! sanctioned exceptions are all one thing: `ui` writes back scroll offsets,
+//! the media cache and the syntax-highlighting cache, because none of those
+//! can be computed until the pane size is known — and the pane size is only
+//! known while drawing. `ui`'s own module docs list them. If you find yourself
+//! wanting another, that is usually a sign the state belongs on `App`
+//! instead.
 //!
 //! # The event loop is blocking on purpose
 //!
@@ -52,6 +53,8 @@ mod search;
 mod tree;
 mod ui;
 
+use std::path::PathBuf;
+
 use anyhow::{Result, anyhow};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseEventKind,
@@ -62,7 +65,7 @@ use app::App;
 use config::{CONF_NAME, Config};
 
 /// `--help` output. Kept here as one literal rather than assembled from an
-/// argument parser: there are only four options, and a contributor changing
+/// argument parser: there are only six options, and a contributor changing
 /// the CLI should be able to see the whole surface in one place.
 const USAGE: &str = "\
 tiny — a terminal knowledge manager
@@ -77,6 +80,8 @@ OPTIONS:
     -h, --help          show this message
     -V, --version       show the version
         --config        print the path of the config file
+        --licenses      terms of the bundled syntax definitions
+        --uninstall     remove tiny; your notes are not touched
 
 tiny writes nothing into a folder of yours except a starting `README.md`, and
 only into one it just created or found empty. Turn even that off with
@@ -85,7 +90,7 @@ only into one it just created or found empty. Turn even that off with
 KEYS:
     ?                   every key and command, from inside the app
     /                   the bar: searches, or `*` first for a command
-    w                   the project map
+    m                   the project map
 ";
 
 /// Thin wrapper so the real work can use `?`.
@@ -135,6 +140,11 @@ fn real_main() -> Result<()> {
             }
             return Ok(());
         }
+        Some("--licenses") => {
+            print!("{}", highlight::acknowledgements());
+            return Ok(());
+        }
+        Some("--uninstall") => return uninstall(),
         Some(a) if a.starts_with('-') => {
             return Err(anyhow!("unknown option `{a}` — try `tiny --help`"));
         }
@@ -207,5 +217,263 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             },
             _ => {}
         }
+    }
+}
+
+// ---- uninstall -------------------------------------------------------------
+
+/// Everything an uninstall would delete.
+///
+/// Built in full before a single file is removed, so the prompt can show the
+/// whole list and the user agrees to it as one thing. An uninstaller that
+/// discovers what to delete as it goes is one you cannot say no to halfway.
+///
+/// Note what is *not* in here: anything under a project. tiny writes exactly
+/// one file into a folder of yours, a starter `README.md`, and by the time you
+/// are uninstalling it is a note like any other. Deleting notes is not what
+/// removing a program means.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Removal {
+    /// The running binary — whatever `tiny` you just typed.
+    bin: Option<PathBuf>,
+    /// `tiny.conf`, if one was ever written.
+    conf: Option<PathBuf>,
+    /// The config directory, only when `tiny.conf` is the last thing in it.
+    /// A directory someone put their own files in stays.
+    conf_dir: Option<PathBuf>,
+    /// The `--root` cargo installed into, when its bookkeeping names tiny.
+    /// `cargo uninstall` is then the right way to remove the binary, because
+    /// it also forgets the entry — unlinking alone leaves cargo believing
+    /// tiny is still installed.
+    cargo_root: Option<PathBuf>,
+}
+
+impl Removal {
+    /// Work out what to delete, given where the binary and the config live.
+    ///
+    /// Both are passed in rather than looked up so this is testable against a
+    /// temporary directory instead of against the machine it runs on.
+    fn plan(bin: Option<PathBuf>, conf: Option<PathBuf>) -> Self {
+        let conf = conf.filter(|p| p.is_file());
+        let conf_dir = conf
+            .as_ref()
+            .and_then(|p| p.parent())
+            // Exactly one entry, and it is the file we are about to remove.
+            .filter(|d| {
+                std::fs::read_dir(d)
+                    .map(|mut it| it.next().is_some() && it.next().is_none())
+                    .unwrap_or(false)
+            })
+            .map(PathBuf::from);
+        // `cargo install --root R` puts the binary in `R/bin` and its record
+        // in `R/.crates.toml`, so the root is two levels up from the binary.
+        let cargo_root = bin
+            .as_ref()
+            .filter(|p| p.is_file())
+            .and_then(|p| p.parent()?.parent())
+            .filter(|root| {
+                std::fs::read_to_string(root.join(".crates.toml"))
+                    .map(|s| s.contains("\"tiny "))
+                    .unwrap_or(false)
+            })
+            .map(PathBuf::from);
+        Self {
+            bin: bin.filter(|p| p.is_file()),
+            conf,
+            conf_dir,
+            cargo_root,
+        }
+    }
+
+    /// The list shown at the prompt, in the order things are removed.
+    fn lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(p) = &self.conf {
+            out.push(format!("  {}", p.display()));
+        }
+        if let Some(p) = &self.conf_dir {
+            out.push(format!("  {}/", p.display()));
+        }
+        if let Some(p) = &self.bin {
+            out.push(format!("  {}", p.display()));
+        }
+        out
+    }
+
+    /// Delete everything, collecting failures rather than stopping at the
+    /// first. A config file that will not budge should not leave the binary
+    /// behind as well — you would have to run the uninstaller again to finish,
+    /// and it would have less to work with the second time.
+    ///
+    /// Config goes before the binary so that a failure part-way leaves `tiny`
+    /// still runnable, and therefore still able to try again.
+    fn perform(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if let Some(p) = &self.conf
+            && let Err(e) = std::fs::remove_file(p)
+        {
+            errors.push(format!("{}: {e}", p.display()));
+        }
+        if let Some(p) = &self.conf_dir
+            && let Err(e) = std::fs::remove_dir(p)
+        {
+            errors.push(format!("{}: {e}", p.display()));
+        }
+        let Some(bin) = &self.bin else {
+            return errors;
+        };
+        // Hand it to cargo when cargo owns it, so its bookkeeping is updated
+        // too. Best effort: an old install whose cargo has since been removed
+        // still gets unlinked below.
+        if let Some(root) = &self.cargo_root {
+            let done = std::process::Command::new("cargo")
+                .args(["uninstall", "--quiet", "--root"])
+                .arg(root)
+                .arg("tiny")
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if done {
+                return errors;
+            }
+        }
+        // Unix unlinks a running executable happily; Windows will not, and
+        // says so, which is the most useful thing we can do about it.
+        if let Err(e) = std::fs::remove_file(bin) {
+            errors.push(format!("{}: {e}", bin.display()));
+        }
+        errors
+    }
+}
+
+/// `tiny --uninstall`: show what will go, ask, then remove it.
+///
+/// The prompt reads from stdin rather than from the terminal directly, so
+/// `echo y | tiny --uninstall` works for anyone scripting it and there is no
+/// `--yes` flag to document. End-of-file counts as "no": a program removing
+/// itself should need to be told, not merely left alone.
+fn uninstall() -> Result<()> {
+    let bin = std::env::current_exe().ok();
+    let removal = Removal::plan(bin, Config::user_path());
+    let lines = removal.lines();
+    if lines.is_empty() {
+        println!("nothing to remove — no tiny binary or config file found");
+        return Ok(());
+    }
+
+    println!("This will remove:");
+    for line in &lines {
+        println!("{line}");
+    }
+    println!("\nYour notes and projects are not touched.");
+    print!("\nRemove tiny? [y/N] ");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    let mut reply = String::new();
+    if std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut reply).is_err()
+        || !matches!(reply.trim(), "y" | "Y" | "yes" | "Yes")
+    {
+        println!("cancelled — nothing was removed");
+        return Ok(());
+    }
+
+    let errors = removal.perform();
+    if errors.is_empty() {
+        println!("tiny is gone. Thanks for trying it.");
+        return Ok(());
+    }
+    for e in &errors {
+        eprintln!("tiny: could not remove {e}");
+    }
+    Err(anyhow!("{} item(s) could not be removed", errors.len()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    /// A fake install: `<root>/bin/tiny` plus cargo's record of it, and a
+    /// config file in its own directory.
+    fn fake_install(td: &Path) -> (PathBuf, PathBuf) {
+        let bin_dir = td.join("root").join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let bin = bin_dir.join("tiny");
+        fs::write(&bin, "#!/bin/sh\n").unwrap();
+        let conf_dir = td.join("config").join("tiny");
+        fs::create_dir_all(&conf_dir).unwrap();
+        let conf = conf_dir.join(CONF_NAME);
+        fs::write(&conf, "borders = true\n").unwrap();
+        (bin, conf)
+    }
+
+    #[test]
+    fn uninstall_removes_the_binary_and_the_config_and_nothing_else() {
+        let td = tempfile::tempdir().unwrap();
+        let (bin, conf) = fake_install(td.path());
+        // A note living beside the install, to prove it survives.
+        let note = td.path().join("notes.md");
+        fs::write(&note, "mine").unwrap();
+
+        let removal = Removal::plan(Some(bin.clone()), Some(conf.clone()));
+        assert!(removal.perform().is_empty(), "clean removal");
+
+        assert!(!bin.exists(), "the binary is gone");
+        assert!(!conf.exists(), "the config is gone");
+        assert!(
+            !conf.parent().unwrap().exists(),
+            "its directory went with it"
+        );
+        assert!(note.exists(), "a note beside it is untouched");
+    }
+
+    #[test]
+    fn a_config_directory_holding_someone_elses_files_is_left_alone() {
+        let td = tempfile::tempdir().unwrap();
+        let (_, conf) = fake_install(td.path());
+        let theirs = conf.parent().unwrap().join("notes-to-self.txt");
+        fs::write(&theirs, "keep me").unwrap();
+
+        let removal = Removal::plan(None, Some(conf.clone()));
+        assert_eq!(
+            removal.conf_dir, None,
+            "the directory is not ours to delete"
+        );
+        removal.perform();
+        assert!(!conf.exists(), "our file still goes");
+        assert!(theirs.exists(), "theirs stays");
+    }
+
+    #[test]
+    fn a_cargo_install_is_recognised_by_its_bookkeeping() {
+        let td = tempfile::tempdir().unwrap();
+        let (bin, _) = fake_install(td.path());
+        let root = td.path().join("root");
+
+        assert_eq!(
+            Removal::plan(Some(bin.clone()), None).cargo_root,
+            None,
+            "no record means no cargo"
+        );
+
+        fs::write(
+            root.join(".crates.toml"),
+            "[v1]\n\"tiny 0.1.2 (path+file:///src)\" = [\"tiny\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Removal::plan(Some(bin), None).cargo_root,
+            Some(root),
+            "a record naming tiny means cargo should do the removing"
+        );
+    }
+
+    #[test]
+    fn planning_against_nothing_finds_nothing_to_remove() {
+        let td = tempfile::tempdir().unwrap();
+        let removal = Removal::plan(Some(td.path().join("nope")), Some(td.path().join("gone")));
+        assert_eq!(removal, Removal::default());
+        assert!(removal.lines().is_empty(), "the prompt would be empty");
     }
 }

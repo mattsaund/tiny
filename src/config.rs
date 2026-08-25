@@ -9,7 +9,7 @@
 //! Every field has a default, so a partial or malformed file never stops the
 //! program starting — it falls back and says so in the status bar.
 //!
-//! Colours are written as style specs rather than raw colours, so a line can
+//! Colors are written as style specs rather than raw colors, so a line can
 //! carry weight as well as hue: `"bold"`, `"underline"`, `"white on black"`,
 //! `"#7dcfff bold"`. The shipped defaults are deliberately monochrome and use
 //! the terminal's own palette, so tiny looks like the terminal it runs in.
@@ -125,7 +125,7 @@ pub struct Config {
     /// call edge for. Names like `new` and `main` are everywhere.
     pub graph_max_ambiguity: usize,
 
-    /// Preview images and video poster frames as coloured half-blocks.
+    /// Preview images and video poster frames as colored half-blocks.
     pub media_preview: bool,
     /// Rows of terminal cells a media preview may use.
     pub media_height: usize,
@@ -339,7 +339,7 @@ impl Config {
     ///
     /// Note that theme entries are stored as raw strings without validation —
     /// [`parse_style`] ignores words it does not recognise, so a misspelled
-    /// colour is accepted here and simply has no effect when drawn. Callers
+    /// color is accepted here and simply has no effect when drawn. Callers
     /// must follow a successful `set` with `App::apply_config` to rebuild the
     /// palette and highlighter; the config alone is just data.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -413,7 +413,7 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        // Monochrome by design. Nothing here names a colour, so tiny inherits
+        // Monochrome by design. Nothing here names a color, so tiny inherits
         // whatever palette the terminal is already using — weight, underline
         // and reverse video carry the meaning instead.
         Self {
@@ -475,7 +475,7 @@ impl Default for Palette {
     }
 }
 
-/// Parse a style spec: colour names, `#rrggbb`, palette indices, `on <colour>`
+/// Parse a style spec: color names, `#rrggbb`, palette indices, `on <color>`
 /// for a background, and the modifiers bold / dim / italic / underline /
 /// reverse / strike. Unknown words are ignored rather than failing — a typo in
 /// a config file should cost you an underline, not the program.
@@ -505,11 +505,11 @@ pub fn parse_style(spec: &str) -> Style {
     style
 }
 
-/// Parse one colour word: a name, `#rgb`, `#rrggbb`, or a 0-255 palette index.
+/// Parse one color word: a name, `#rgb`, `#rrggbb`, or a 0-255 palette index.
 ///
-/// Named colours and `default` map to ratatui's 16-colour constants, which the
+/// Named colors and `default` map to ratatui's 16-color constants, which the
 /// terminal renders with its own palette — that is what lets tiny match the
-/// theme a user already has. `#rrggbb` forces a true-colour value instead, and
+/// theme a user already has. `#rrggbb` forces a true-color value instead, and
 /// needs a 24-bit terminal.
 pub fn parse_color(s: &str) -> Option<Color> {
     let s = s.trim();
@@ -517,7 +517,7 @@ pub fn parse_color(s: &str) -> Option<Color> {
         return parse_hex(hex);
     }
     let named = match s.to_ascii_lowercase().as_str() {
-        // `default` keeps the terminal's own colour, which is how tiny stays
+        // `default` keeps the terminal's own color, which is how tiny stays
         // transparent against whatever theme the user already has.
         "default" | "none" | "reset" => Some(Color::Reset),
         "black" => Some(Color::Black),
@@ -543,8 +543,8 @@ pub fn parse_color(s: &str) -> Option<Color> {
         .or_else(|| parse_hex(s))
 }
 
-/// `#abc` or `#aabbcc` to an RGB colour. Three-digit form expands each nibble
-/// by multiplying by 17, so `#abc` and `#aabbcc` are the same colour.
+/// `#abc` or `#aabbcc` to an RGB color. Three-digit form expands each nibble
+/// by multiplying by 17, so `#abc` and `#aabbcc` are the same color.
 fn parse_hex(s: &str) -> Option<Color> {
     let s = s.trim().trim_start_matches('#');
     match s.len() {
@@ -665,7 +665,7 @@ mod tests {
     #[test]
     fn defaults_are_monochrome() {
         let p = Palette::default();
-        // Nothing in the chrome names a colour: the terminal's own palette
+        // Nothing in the chrome names a color: the terminal's own palette
         // shows through, and meaning is carried by weight and reverse video.
         assert_eq!(p.text.fg, Some(Color::Reset));
         assert_eq!(p.heading.fg, None);
@@ -675,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn style_specs_combine_colour_and_modifiers() {
+    fn style_specs_combine_color_and_modifiers() {
         let s = parse_style("white bold underline");
         assert_eq!(s.fg, Some(Color::White));
         assert!(s.add_modifier.contains(Modifier::BOLD));
@@ -696,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn colours_accept_names_hex_and_palette_indices() {
+    fn colors_accept_names_hex_and_palette_indices() {
         assert_eq!(parse_color("cyan"), Some(Color::Cyan));
         assert_eq!(parse_color("default"), Some(Color::Reset));
         assert_eq!(parse_color("#f0a"), Some(Color::Rgb(255, 0, 170)));

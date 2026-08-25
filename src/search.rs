@@ -31,6 +31,14 @@
 //! [`walk`] is `pub` because `graph::build` uses the same traversal, and the
 //! two must agree on what counts as part of the project — otherwise a file
 //! could be searchable but absent from the graph, or the reverse.
+//!
+//! # Shared with the screen
+//!
+//! [`Matcher`] is `pub` for the same kind of reason: `ui` marks the query in
+//! the result list and again in the preview pane, and if it decided for itself
+//! what a match was, the highlight could land somewhere the search did not
+//! think there was one. Prepared once and reused, because the alternative is
+//! an allocation per line of every file, on every keystroke.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -117,13 +125,9 @@ pub fn search(root: &Path, query: &str, opts: &Opts) -> Vec<Hit> {
     if query.is_empty() {
         return Vec::new();
     }
-    let fold = !query.chars().any(char::is_uppercase);
-    let needle = if fold {
-        query.to_lowercase()
-    } else {
-        query.to_string()
+    let Some(matcher) = Matcher::new(query) else {
+        return Vec::new();
     };
-
     let files = walk(root, opts);
     let mut names = Vec::new();
     let mut contents = Vec::new();
@@ -136,7 +140,7 @@ pub fn search(root: &Path, query: &str, opts: &Opts) -> Vec<Hit> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if let Some(col) = find_in(&name, &needle, fold) {
+        if let Some(col) = matcher.first(&name) {
             names.push(Hit {
                 path: path.clone(),
                 kind: HitKind::Name,
@@ -148,7 +152,7 @@ pub fn search(root: &Path, query: &str, opts: &Opts) -> Vec<Hit> {
 
         let Ok(text) = read_text(&path) else { continue };
         for (lineno, line) in text.lines().enumerate() {
-            let Some(col) = find_in(line, &needle, fold) else {
+            let Some(col) = matcher.first(line) else {
                 continue;
             };
             contents.push(Hit {
@@ -236,15 +240,93 @@ pub fn replace_all(root: &Path, needle: &str, replacement: &str, opts: &Opts) ->
 ///
 /// Returns a *character* index, not a byte offset, because it ends up as an
 /// `Editor` cursor column — see the note on character indexing in `editor`.
-fn find_in(haystack: &str, needle: &str, fold: bool) -> Option<usize> {
-    let hay = if fold {
-        haystack.to_lowercase()
-    } else {
-        haystack.to_string()
-    };
-    let byte = hay.find(needle)?;
-    // Report a character index so it can drive a cursor directly.
-    Some(hay[..byte].chars().count())
+/// A prepared literal query.
+///
+/// Built once per search and reused for every line. That is the whole reason
+/// it is a type rather than a function: `search` runs over every line of every
+/// file in the project on every keystroke, so anything allocated per call is
+/// allocated tens of thousands of times per keypress.
+///
+/// Smart case is decided once, at construction, from the query — see
+/// [`folds_case`].
+pub struct Matcher {
+    /// The query as characters, for the case-folding scan.
+    pat: Vec<char>,
+    /// The query as it was written, for the case-sensitive path, where
+    /// `str::find` beats anything character-by-character and allocates nothing.
+    needle: String,
+    fold: bool,
+}
+
+impl Matcher {
+    /// Prepare a query. `None` for an empty one, which matches nothing rather
+    /// than everything.
+    pub fn new(query: &str) -> Option<Self> {
+        let query = query.trim();
+        if query.is_empty() {
+            return None;
+        }
+        Some(Self {
+            pat: query.chars().collect(),
+            needle: query.to_string(),
+            fold: folds_case(query),
+        })
+    }
+
+    /// Character index of the first match, if there is one.
+    pub fn first(&self, haystack: &str) -> Option<usize> {
+        if !self.fold {
+            let byte = haystack.find(&self.needle)?;
+            // A character index, so it can drive a cursor directly.
+            return Some(haystack[..byte].chars().count());
+        }
+        haystack
+            .char_indices()
+            .position(|(byte, _)| self.at(haystack, byte))
+    }
+
+    /// Every non-overlapping match, as character ranges.
+    ///
+    /// Character ranges rather than byte ranges because the caller is `ui`,
+    /// which cuts drawn spans at character boundaries. Non-overlapping because
+    /// these become highlights on screen, and two overlapping highlights are
+    /// one highlight to look at.
+    pub fn all(&self, haystack: &str) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        let mut resume = 0;
+        for (i, (byte, _)) in haystack.char_indices().enumerate() {
+            if i < resume {
+                continue;
+            }
+            if self.at(haystack, byte) {
+                resume = i + self.pat.len();
+                out.push((i, resume));
+            }
+        }
+        out
+    }
+
+    /// Whether the query sits at this byte offset. Compares characters as they
+    /// come rather than folding the line first, so nothing is allocated and a
+    /// character whose lowercase form is a different length cannot shift the
+    /// answer.
+    fn at(&self, haystack: &str, byte: usize) -> bool {
+        let mut chars = haystack[byte..].chars();
+        self.pat.iter().all(|&want| match chars.next() {
+            Some(c) if self.fold => c.to_lowercase().eq(want.to_lowercase()),
+            Some(c) => c == want,
+            None => false,
+        })
+    }
+}
+
+/// Whether a query is matched case-insensitively.
+///
+/// Smart case, in one place: all-lowercase ignores case, any capital does not.
+/// Every match in the program goes through [`Matcher`], which asks here, so
+/// the preview pane cannot disagree with the result list about what counts.
+fn folds_case(query: &str) -> bool {
+    !query.chars().any(char::is_uppercase)
 }
 
 /// Cut a line down for display. Long lines are shortened, never skipped — the
@@ -406,6 +488,52 @@ mod tests {
         };
         let found = names(&search(td.path(), "widget", &opts));
         assert!(found.iter().any(|n| n == ".hidden.md"));
+    }
+
+    #[test]
+    fn a_matcher_finds_every_occurrence_not_just_the_first() {
+        let m = Matcher::new("wid").unwrap();
+        assert_eq!(m.all("wid a wid b wid"), [(0, 3), (6, 9), (12, 15)]);
+        assert_eq!(m.first("wid a wid"), Some(0));
+        assert_eq!(m.first("nothing here"), None);
+    }
+
+    #[test]
+    fn a_matcher_never_returns_overlapping_ranges() {
+        // "aa" in "aaaa" is two matches, not three: they become highlights,
+        // and overlapping highlights are one highlight to look at.
+        let m = Matcher::new("aa").unwrap();
+        assert_eq!(m.all("aaaa"), [(0, 2), (2, 4)]);
+    }
+
+    #[test]
+    fn a_matcher_is_smart_cased_the_same_way_the_search_is() {
+        let lower = Matcher::new("widget").unwrap();
+        assert_eq!(lower.all("Widget widget WIDGET").len(), 3, "all of them");
+
+        let mixed = Matcher::new("Widget").unwrap();
+        assert_eq!(mixed.all("Widget widget WIDGET"), [(0, 6)], "only the one");
+    }
+
+    #[test]
+    fn a_matcher_reports_character_positions_not_byte_positions() {
+        let m = Matcher::new("plan").unwrap();
+        // Four characters, ten bytes, before the match.
+        assert_eq!(m.all("日本語です the plan"), [(10, 14)]);
+        assert_eq!(m.first("日本語です the plan"), Some(10));
+    }
+
+    #[test]
+    fn a_matcher_folds_case_beyond_ascii() {
+        let m = Matcher::new("straße").unwrap();
+        assert_eq!(m.all("die STRASSE").len(), 0, "not the same characters");
+        assert_eq!(m.all("die Straße"), [(4, 10)]);
+    }
+
+    #[test]
+    fn an_empty_query_matches_nothing_rather_than_everything() {
+        assert!(Matcher::new("").is_none());
+        assert!(Matcher::new("   ").is_none());
     }
 
     #[test]
