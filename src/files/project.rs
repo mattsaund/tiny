@@ -8,11 +8,12 @@
 //!
 //! # Nothing is written into your project
 //!
-//! tiny creates exactly one file, ever: a starter `README.md`, and only in a
-//! directory it just made or found empty. No dotfiles, no caches, no
-//! per-project settings — how the program behaves comes from one config file
-//! per user (see [`crate::config`]), never from the folder being opened. An
-//! existing folder of someone's work is left exactly as it was found.
+//! tiny never writes a file into a folder of yours that you did not name. No
+//! starter page, no dotfiles, no caches, no per-project settings — how the
+//! program behaves comes from one config file per user (see
+//! [`crate::config`]), never from the folder being opened. A new project is an
+//! empty folder, and an existing folder of someone's work is left exactly as
+//! it was found.
 //!
 //! # Why there is no `tiny new`
 //!
@@ -43,8 +44,8 @@ pub struct Target {
     /// Set when the argument named a file — the tree opens on its directory
     /// and the cursor starts on the file itself.
     pub file: Option<PathBuf>,
-    /// True when this run made the directory, or found it empty and wrote a
-    /// starter README into it.
+    /// True when this run made the directory, which is what puts the "new
+    /// project" hint on the status line.
     pub created: bool,
 }
 
@@ -67,7 +68,7 @@ pub struct Target {
 /// without worrying about `./`, symlinks, or relative segments. `tree`,
 /// `search` and `graph` all rely on that being true.
 pub fn resolve(arg: Option<&str>, cfg: &Config) -> Result<Target> {
-    let (mut root, file, mut created) = match arg {
+    let (mut root, file, created) = match arg {
         None => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| cfg.default_root.clone());
             (cwd, None, false)
@@ -97,28 +98,7 @@ pub fn resolve(arg: Option<&str>, cfg: &Config) -> Result<Target> {
     root = root
         .canonicalize()
         .with_context(|| format!("cannot open {}", root.display()))?;
-    let mut file = file.map(|f| f.canonicalize().unwrap_or(f));
-
-    // The one file tiny ever writes, and only into a folder it just made or
-    // found empty. An existing folder of work is left exactly as it was — and
-    // a folder that just gained the file named on the command line is no
-    // longer empty, so `tiny new/todo.txt` gets the file it asked for and
-    // nothing besides.
-    if cfg.starter_readme {
-        created = created || is_effectively_empty(&root);
-        if created {
-            write_readme(&root)?;
-        }
-    }
-
-    // A brand-new folder opens on its README, so the first frame is the page
-    // explaining where you are rather than an empty pane.
-    if file.is_none() && created {
-        let readme = root.join(README);
-        if readme.is_file() {
-            file = Some(readme);
-        }
-    }
+    let file = file.map(|f| f.canonicalize().unwrap_or(f));
 
     Ok(Target {
         root,
@@ -169,42 +149,6 @@ fn touch(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The only file tiny ever writes into a folder of yours.
-pub const README: &str = "README.md";
-
-/// Write the starter `README.md`, headed by the folder's own name, so a
-/// brand-new project is not an empty screen.
-///
-/// Guarded by an `exists()` check, so it can never clobber an edited README —
-/// which matters because "the folder was empty" is decided separately, and
-/// getting that wrong should cost nothing.
-fn write_readme(root: &Path) -> Result<()> {
-    let readme = root.join(README);
-    if readme.exists() {
-        return Ok(());
-    }
-    let name = root
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "project".into());
-    fs::write(&readme, welcome(&name)).with_context(|| format!("cannot write {}", readme.display()))
-}
-
-/// Empty enough to scaffold into: no visible files, ignoring dotfiles.
-///
-/// Dotfiles are ignored so a directory holding only `.git/` or `.gitignore` —
-/// a freshly cloned or freshly `git init`-ed folder — still counts as empty
-/// and gets the starter README. An unreadable directory returns `false`:
-/// when in doubt, write nothing.
-fn is_effectively_empty(dir: &Path) -> bool {
-    match fs::read_dir(dir) {
-        Ok(entries) => !entries
-            .flatten()
-            .any(|e| !e.file_name().to_string_lossy().starts_with('.')),
-        Err(_) => false,
-    }
-}
-
 /// Expand a leading `~`, which the shell leaves alone inside quotes.
 ///
 /// Needed because `tiny "~/notes"` and `tiny '~/notes'` reach us with a
@@ -223,54 +167,6 @@ fn expand(s: &str) -> PathBuf {
         None => PathBuf::from(s),
     }
 }
-
-/// The starter `README.md`, headed by the project's own name.
-///
-/// It doubles as the first thing that exercises the markdown renderer, so if
-/// you change `markdown.rs`, this is a good page to look at.
-fn welcome(name: &str) -> String {
-    format!("# {name}\n{WELCOME}")
-}
-
-/// Everything below the heading in a scaffolded README.
-///
-/// Kept as one literal rather than assembled, so what a new user reads first
-/// can be proofread in one place.
-const WELCOME: &str = r#"
-A **tiny** project — a folder of plain files, nothing more. This page is one of
-them: edit it, or delete it, like anything else here.
-
-## Moving around
-
-| key         | does                                    |
-|-------------|-----------------------------------------|
-| `up` `down` | move the cursor in the tree             |
-| `enter`     | open or close a folder, or edit a file  |
-| `right`     | open a folder, or step inside an open one |
-| `left`      | close a folder, or go up to its parent  |
-| `/`         | search the whole project                |
-| `:`         | settings and find-replace               |
-| `?`         | the full keymap                         |
-
-## Editing
-
-Hovering a `.md` file renders it here. Press `e` to edit the raw source,
-and `Ctrl+S` to save — the same key micro uses.
-
-Code files skip the rendered view and open straight in the editor:
-
-```python
-def hello(name):
-    return f"hi {name}"
-```
-
-## Linking
-
-Write `[[wikilinks]]` to point one note at another. Press `m` for the project
-map that draws them, along with the calls between your code files.
-
-> Everything here is a plain file. Nothing is locked in a database.
-"#;
 
 #[cfg(test)]
 mod tests {
@@ -292,29 +188,18 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_path_becomes_a_new_folder_holding_only_a_readme() {
+    fn a_missing_path_becomes_a_new_folder_with_nothing_in_it() {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("project1");
         let t = resolve(Some(path.to_str().unwrap()), &cfg()).unwrap();
 
         assert!(t.created);
-        assert_eq!(listing(&t.root), ["README.md"], "one file, nothing hidden");
-        assert_eq!(
-            t.file,
-            Some(t.root.join(README)),
-            "a new project opens on its README"
+        assert!(t.root.is_dir(), "the folder is made");
+        assert!(
+            listing(&t.root).is_empty(),
+            "and left empty — tiny writes no starter page"
         );
-    }
-
-    #[test]
-    fn the_starter_readme_is_headed_by_the_folder_name() {
-        let td = tempfile::tempdir().unwrap();
-        let path = td.path().join("thesis");
-        let t = resolve(Some(path.to_str().unwrap()), &cfg()).unwrap();
-
-        let text = fs::read_to_string(t.root.join(README)).unwrap();
-        assert!(text.starts_with("# thesis\n"), "{text:?}");
-        assert!(text.contains("[[wikilinks]]"), "the welcome text is in it");
+        assert_eq!(t.file, None, "so there is nothing to open on");
     }
 
     #[test]
@@ -334,43 +219,30 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_holding_only_dotfiles_still_counts_as_empty() {
+    fn a_freshly_cloned_folder_is_opened_without_gaining_anything() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().join("fresh-clone");
         fs::create_dir_all(root.join(".git")).unwrap();
 
         let t = resolve(Some(root.to_str().unwrap()), &cfg()).unwrap();
-        assert!(t.created);
-        assert_eq!(listing(&t.root), [".git", "README.md"]);
+        assert!(!t.created, "the folder was already there");
+        assert_eq!(listing(&t.root), [".git"], "and is untouched");
     }
 
     #[test]
-    fn opening_the_same_new_folder_twice_writes_nothing_the_second_time() {
+    fn opening_the_same_new_folder_twice_writes_nothing_either_time() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().join("twice");
         resolve(Some(root.to_str().unwrap()), &cfg()).unwrap();
-        fs::write(root.join(README), "# mine\n").unwrap();
+        fs::write(root.join("mine.md"), "# mine\n").unwrap();
 
         let t = resolve(Some(root.to_str().unwrap()), &cfg()).unwrap();
-        assert!(!t.created, "it has a file in it now");
+        assert!(!t.created, "it is not new the second time");
         assert_eq!(
-            fs::read_to_string(t.root.join(README)).unwrap(),
-            "# mine\n",
-            "an edited README is never written over"
+            listing(&t.root),
+            ["mine.md"],
+            "and the note written into it is the only thing there"
         );
-    }
-
-    #[test]
-    fn starter_readme_off_writes_nothing_at_all() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("hands-off");
-
-        let mut c = cfg();
-        c.starter_readme = false;
-        let t = resolve(Some(root.to_str().unwrap()), &c).unwrap();
-        assert!(t.root.is_dir(), "the folder is still made");
-        assert!(listing(&t.root).is_empty(), "and left completely empty");
-        assert_eq!(t.file, None);
     }
 
     #[test]

@@ -238,8 +238,8 @@ fn a_rebinding_from_the_config_file_is_what_the_keys_do() {
 fn a_setting_can_be_changed_from_the_settings_area() {
     let (_td, mut app) = fixture();
     app.on_key(ch(','));
-    // Past the two buttons, then to tab_width, third in the index.
-    for _ in 0..4 {
+    // Past the two buttons, then to tab_width, second in the index.
+    for _ in 0..3 {
         app.on_key(k(KeyCode::Down));
     }
     app.on_key(k(KeyCode::Enter));
@@ -255,8 +255,10 @@ fn a_setting_can_be_changed_from_the_settings_area() {
 fn escape_while_editing_a_setting_leaves_it_alone() {
     let (_td, mut app) = fixture();
     app.on_key(ch(','));
-    app.on_key(k(KeyCode::Down));
-    app.on_key(k(KeyCode::Down));
+    // Onto tab_width, the same row the test above changes.
+    for _ in 0..3 {
+        app.on_key(k(KeyCode::Down));
+    }
     app.on_key(k(KeyCode::Enter));
     app.on_key(k(KeyCode::Backspace));
     type_str(&mut app, "9");

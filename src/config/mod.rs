@@ -94,10 +94,6 @@ pub struct Config {
     /// reaches everyone who has not overridden that action.
     pub keys: BTreeMap<String, String>,
 
-    /// Write a starter `README.md` into a folder tiny creates or finds empty.
-    /// The only file it ever writes into a project; turn it off and it writes
-    /// nothing at all.
-    pub starter_readme: bool,
     pub show_hidden: bool,
     pub tab_width: usize,
 
@@ -138,7 +134,6 @@ impl Default for Config {
         Self {
             default_root: home(),
             keys: BTreeMap::new(),
-            starter_readme: true,
             show_hidden: false,
             tab_width: 4,
             tree_side: Side::Left,
@@ -253,7 +248,6 @@ impl Config {
     /// in-program settings area lists, so the two can never drift apart.
     pub fn settings_index() -> &'static [(&'static str, &'static str)] {
         &[
-            ("starter_readme", "write README.md into an empty folder"),
             ("show_hidden", "list dotfiles in the tree"),
             ("tab_width", "spaces inserted by Tab"),
             ("tree_side", "tree side: left, right"),
@@ -295,7 +289,6 @@ impl Config {
     /// unknown setting.
     pub fn get(&self, key: &str) -> Option<String> {
         Some(match key {
-            "starter_readme" => self.starter_readme.to_string(),
             "show_hidden" => self.show_hidden.to_string(),
             "tab_width" => self.tab_width.to_string(),
             "tree_side" => side_name(self.tree_side).into(),
@@ -338,7 +331,6 @@ impl Config {
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let v = value.trim();
         match key {
-            "starter_readme" => self.starter_readme = parse_bool(v)?,
             "show_hidden" => self.show_hidden = parse_bool(v)?,
             "tab_width" => self.tab_width = parse_num(v)?,
             "tree_side" => {

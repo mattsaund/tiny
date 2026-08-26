@@ -64,13 +64,14 @@ fn naming_a_picture_keeps_the_tree_since_there_is_nothing_to_type() {
 }
 
 #[test]
-fn a_new_project_shows_its_readme_with_the_keyboard_still_on_the_tree() {
+fn a_new_project_opens_empty_and_says_so() {
     let td = tempfile::tempdir().unwrap();
-    build(td.path());
+    let root = td.path().join("fresh");
+    fs::create_dir(&root).unwrap();
     let mut app = App::new(
         project::Target {
-            root: td.path().to_path_buf(),
-            file: Some(td.path().join("README.md")),
+            root: root.clone(),
+            file: None,
             created: true,
         },
         Config::default(),
@@ -78,11 +79,10 @@ fn a_new_project_shows_its_readme_with_the_keyboard_still_on_the_tree() {
     )
     .unwrap();
 
-    assert_eq!(app.selected_row().unwrap().name, "README.md");
-    assert_eq!(app.focus, Focus::Tree, "there is nothing to type yet");
+    assert_eq!(app.rows.len(), 1, "just the root row");
+    assert_eq!(app.focus, Focus::Tree, "nothing has been made to type into");
     assert!(app.status.contains("new project"), "{}", app.status);
-    let out = joined(&mut app);
-    assert!(out.contains("hello widget"), "the README is drawn:\n{out}");
+    joined(&mut app);
 }
 
 #[test]

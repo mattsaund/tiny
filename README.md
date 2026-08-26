@@ -30,7 +30,7 @@ shows what it is about to delete — the binary, `tiny.conf`, and it asks before
 
 ```sh
 tiny                      # this folder, or the project it sits inside
-tiny ~/Desktop/project1   # that folder — created, with a project in it, if missing
+tiny ~/Desktop/project1   # that folder — created empty if missing
 tiny ~/code/main.py       # that one file, in the editor, with its project beside it
 tiny notes.txt            # same, and the file is written if it isn't there yet
 
@@ -39,9 +39,6 @@ tiny --licenses           # terms of the bundled syntax definitions
 tiny --uninstall          # remove tiny, leaving your notes alone
 ```
 
-To turn off the starting README.md in tiny projects change this in config
-
-`starter_readme = false`.
 ## Controls and Commands:
 
 Press `?` in the program: it lists every key and every command at once, side by side if the window is wide enough.
@@ -223,7 +220,6 @@ Theme entries are style specs, so a line can carry weight as well as color:
 `"bold"`, `"underline"`, `"white on black"`, `"#7dcfff bold"`, `"reverse"`.
 
 ```toml
-starter_readme     = true
 show_hidden        = false
 tab_width          = 4
 line_numbers       = true

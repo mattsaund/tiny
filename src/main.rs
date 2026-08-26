@@ -78,9 +78,8 @@ OPTIONS:
         --licenses      terms of the bundled syntax definitions
         --uninstall     remove tiny; your notes are not touched
 
-tiny writes nothing into a folder of yours except a starting `README.md`, and
-only into one it just created or found empty. Turn even that off with
-`starter_readme = false`.
+tiny writes nothing into a folder of yours that you did not name: no starter
+page, no dotfiles, no per-project settings.
 
 KEYS:
     ?                   every key and command, from inside the app
@@ -118,8 +117,7 @@ fn main() {
 /// 1. Handle the options that never touch the disk (`--help`, `--version`,
 ///    `--config`) and return early.
 /// 2. Load the config, which [`files::project::resolve`] needs for
-///    `starter_readme` and `default_root` before it can decide what to do
-///    with the argument.
+///    `default_root` before it can decide what to do with the argument.
 /// 3. Resolve the argument into a [`files::project::Target`], creating the
 ///    project if it does not exist.
 /// 4. Write out the defaults on first run.
@@ -235,10 +233,9 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
 /// whole list and the user agrees to it as one thing. An uninstaller that
 /// discovers what to delete as it goes is one you cannot say no to halfway.
 ///
-/// Note what is *not* in here: anything under a project. tiny writes exactly
-/// one file into a folder of yours, a starter `README.md`, and by the time you
-/// are uninstalling it is a note like any other. Deleting notes is not what
-/// removing a program means.
+/// Note what is *not* in here: anything under a project. tiny never wrote a
+/// file into a folder of yours that you did not name, so there is nothing of
+/// its own to take back. Deleting notes is not what removing a program means.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Removal {
     /// The running binary — whatever `tiny` you just typed.

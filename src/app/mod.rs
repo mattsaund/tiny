@@ -272,14 +272,9 @@ impl App {
         //
         // Only for a file there is something to type into. A picture cannot
         // take the keyboard, so it keeps the tree.
-        //
-        // A project tiny just scaffolded also arrives with a file — its
-        // README — but only shows it. There is nothing to type into a page you
-        // have not read yet, and leaving the keyboard on the tree keeps the
-        // "new project" hint on the status line.
         if let Some(file) = target.file {
             app.reveal(&file);
-            if !target.created && matches!(app.preview, Preview::Buffer { .. }) {
+            if matches!(app.preview, Preview::Buffer { .. }) {
                 app.focus_editor();
                 app.tree_hidden = true;
             }

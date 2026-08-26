@@ -203,7 +203,8 @@ fn control_chords_do_not_type_letters_into_a_prompt() {
 fn ctrl_s_while_editing_a_setting_does_not_type_an_s_into_it() {
     let (_td, mut app) = fixture();
     app.on_key(ch(','));
-    for _ in 0..4 {
+    // Past the two buttons, then to tab_width, second in the index.
+    for _ in 0..3 {
         app.on_key(k(KeyCode::Down));
     }
     app.on_key(k(KeyCode::Enter));
