@@ -1,6 +1,6 @@
 # tiny
 
-Tiny is a personal knowledge management system (PKMS) and IDE that works entirely in the terminal. This program exists to serve as a full, terminal based project manager that is as lightweight as programs like micro. Tiny has a built in text/code editor, picture/video details pane, file manager, and project map for projects.
+Tiny is a personal knowledge management system (PKMS), IDE, and text editor that works entirely in the terminal.
 
 Everything tiny manages and edits is non proprietary and not obfuscated.
 
