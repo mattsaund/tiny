@@ -14,7 +14,6 @@ categories = ["command-line-utilities", "text-editors"]
 [dependencies]
 anyhow = "1.0.104"
 crossterm = "0.29.0"
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
 pulldown-cmark = "0.13.4"
 ratatui = "0.30.2"
 serde = { version = "1.0.229", features = ["derive"] }

@@ -29,7 +29,17 @@
 //!
 //! No selection, no clipboard, no search-within-buffer, no syntax awareness.
 //! Highlighting is applied at draw time by `highlight`, and project-wide
-//! find-replace lives in `search` and works on files rather than buffers.
+//! find-replace lives in `search` and works on files rather than buffers.//!
+//! # Where things are
+//!
+//! - here — the buffer, the cursor, and reading and writing the file.
+//! - [`edit`] — everything that changes the text.
+//! - [`motion`] — everything that moves the cursor.
+//! - [`undo`] — the history, and the grouping that makes it usable.
+
+mod edit;
+mod motion;
+mod undo;
 
 use std::fs;
 use std::path::PathBuf;
@@ -55,7 +65,7 @@ impl LineEnding {
 /// same kind coalesce into one undo step, so Ctrl+Z undoes a typed word rather
 /// than one character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EditKind {
+pub(super) enum EditKind {
     Insert,
     Delete,
     Structural,
@@ -70,15 +80,11 @@ enum EditKind {
 /// for a text editor of this size. If you ever open a 50 MB file in here, that
 /// is the thing to revisit.
 #[derive(Debug, Clone)]
-struct Snapshot {
+pub(super) struct Snapshot {
     lines: Vec<String>,
     cursor_line: usize,
     cursor_col: usize,
 }
-
-/// Undo depth. Beyond this the oldest snapshot is dropped, so memory stays
-/// bounded on a long editing session.
-const MAX_UNDO: usize = 200;
 
 /// One open file. `App` keeps a map of these keyed by path, so a buffer with
 /// unsaved edits survives arrowing away from it and back.
@@ -238,7 +244,7 @@ impl Editor {
 
     /// Clamp the cursor into the buffer. Called after every mutation so no
     /// operation can leave the cursor pointing past the end of a line.
-    fn clamp_cursor(&mut self) {
+    pub(super) fn clamp_cursor(&mut self) {
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
@@ -247,365 +253,6 @@ impl Editor {
     }
 
     // ---- undo bookkeeping -------------------------------------------------
-
-    /// Record the pre-edit state, coalescing runs of the same edit kind.
-    ///
-    /// Called at the top of every mutating method, *before* the mutation, so
-    /// the snapshot captures the state to return to. The coalescing rule is:
-    ///
-    /// - Same kind as the last edit, and not `Structural` → no new snapshot,
-    ///   so a typed word reverts in one press.
-    /// - Different kind, or `Structural` → new snapshot. Structural edits
-    ///   (newline, line join, cut line) never merge, because each one is a
-    ///   change a user thinks of as a single deliberate act.
-    ///
-    /// Any edit clears the redo stack, whether or not it coalesced.
-    fn push_undo(&mut self, kind: EditKind) {
-        // Every mutation acts at the cursor and every mutation calls this, so
-        // this one line records what changed for the whole editor. One line of
-        // slack because a backspace at column 0 joins the cursor's line into
-        // the one above, changing that one instead.
-        self.touched = self.touched.min(self.cursor_line.saturating_sub(1));
-        let coalesce = kind != EditKind::Structural && self.last_edit == Some(kind);
-        self.last_edit = Some(kind);
-        self.redo.clear();
-        if coalesce {
-            return;
-        }
-        self.undo.push(Snapshot {
-            lines: self.lines.clone(),
-            cursor_line: self.cursor_line,
-            cursor_col: self.cursor_col,
-        });
-        if self.undo.len() > MAX_UNDO {
-            self.undo.remove(0);
-        }
-    }
-
-    /// Break the coalescing run — cursor movement ends a typing group.
-    ///
-    /// Called by every movement method. Without it, typing "foo", arrowing
-    /// away, and typing "bar" would revert both runs in one press.
-    fn break_undo_group(&mut self) {
-        self.last_edit = None;
-    }
-
-    /// Step back one group. Returns false when there is nothing left, which
-    /// the caller turns into a "nothing to undo" status message.
-    ///
-    /// Note that `dirty` is set unconditionally, even when undoing all the way
-    /// back to the file's opening state. Tracking whether the buffer matches
-    /// disk again would need a saved-generation counter; erring towards "there
-    /// might be something to save" is the safe direction.
-    pub fn undo(&mut self) -> bool {
-        let Some(prev) = self.undo.pop() else {
-            return false;
-        };
-        self.redo.push(Snapshot {
-            lines: std::mem::replace(&mut self.lines, prev.lines),
-            cursor_line: self.cursor_line,
-            cursor_col: self.cursor_col,
-        });
-        self.cursor_line = prev.cursor_line;
-        self.cursor_col = prev.cursor_col;
-        self.dirty = true;
-        self.last_edit = None;
-        // A snapshot replaces every line at once, so nothing above is safe.
-        self.touched = 0;
-        self.clamp_cursor();
-        true
-    }
-
-    /// Step forward one group, undoing an undo. Mirror image of
-    /// [`Editor::undo`], moving snapshots the other way.
-    pub fn redo(&mut self) -> bool {
-        let Some(next) = self.redo.pop() else {
-            return false;
-        };
-        self.undo.push(Snapshot {
-            lines: std::mem::replace(&mut self.lines, next.lines),
-            cursor_line: self.cursor_line,
-            cursor_col: self.cursor_col,
-        });
-        self.cursor_line = next.cursor_line;
-        self.cursor_col = next.cursor_col;
-        self.dirty = true;
-        self.last_edit = None;
-        self.touched = 0;
-        self.clamp_cursor();
-        true
-    }
-
-    // ---- editing ----------------------------------------------------------
-
-    pub fn insert_char(&mut self, c: char) {
-        self.push_undo(EditKind::Insert);
-        let byte = byte_of_char(&self.lines[self.cursor_line], self.cursor_col);
-        self.lines[self.cursor_line].insert(byte, c);
-        self.cursor_col += 1;
-        self.goal_col = self.cursor_col;
-        self.dirty = true;
-    }
-
-    pub fn insert_tab(&mut self, width: usize) {
-        self.push_undo(EditKind::Insert);
-        let byte = byte_of_char(&self.lines[self.cursor_line], self.cursor_col);
-        let spaces = " ".repeat(width.max(1));
-        self.lines[self.cursor_line].insert_str(byte, &spaces);
-        self.cursor_col += width.max(1);
-        self.goal_col = self.cursor_col;
-        self.dirty = true;
-    }
-
-    /// Split the line at the cursor, carrying the current indentation onto the
-    /// new line — the auto-indent every editor has. Structural, so it always
-    /// begins a fresh undo group.
-    pub fn insert_newline(&mut self) {
-        self.push_undo(EditKind::Structural);
-        let byte = byte_of_char(&self.lines[self.cursor_line], self.cursor_col);
-        let tail = self.lines[self.cursor_line].split_off(byte);
-        // Carry the current line's indentation onto the new line.
-        let indent: String = self.lines[self.cursor_line]
-            .chars()
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .collect();
-        let indent_len = indent.chars().count();
-        self.lines.insert(self.cursor_line + 1, indent + &tail);
-        self.cursor_line += 1;
-        self.cursor_col = indent_len;
-        self.goal_col = self.cursor_col;
-        self.dirty = true;
-    }
-
-    /// Delete backwards. Two quite different operations share the key: within
-    /// a line it removes a character (a `Delete` group, which coalesces), and
-    /// at column 0 it joins with the previous line (a `Structural` group,
-    /// which does not).
-    ///
-    /// At the very start of the buffer it returns early *before* touching
-    /// `dirty`, so a stray keypress on a clean file does not make it look
-    /// edited.
-    pub fn backspace(&mut self) {
-        if self.cursor_col > 0 {
-            self.push_undo(EditKind::Delete);
-            let line = &mut self.lines[self.cursor_line];
-            let start = byte_of_char(line, self.cursor_col - 1);
-            let end = byte_of_char(line, self.cursor_col);
-            line.replace_range(start..end, "");
-            self.cursor_col -= 1;
-        } else if self.cursor_line > 0 {
-            // Join with the previous line.
-            self.push_undo(EditKind::Structural);
-            let line = self.lines.remove(self.cursor_line);
-            self.cursor_line -= 1;
-            self.cursor_col = self.line_chars(self.cursor_line);
-            self.lines[self.cursor_line].push_str(&line);
-        } else {
-            return;
-        }
-        self.goal_col = self.cursor_col;
-        self.dirty = true;
-    }
-
-    /// Delete under the cursor. The mirror of [`Editor::backspace`]: within a
-    /// line it removes a character, at the end of one it pulls the next line
-    /// up, and at the end of the buffer it does nothing.
-    pub fn delete_forward(&mut self) {
-        let len = self.line_chars(self.cursor_line);
-        if self.cursor_col < len {
-            self.push_undo(EditKind::Delete);
-            let line = &mut self.lines[self.cursor_line];
-            let start = byte_of_char(line, self.cursor_col);
-            let end = byte_of_char(line, self.cursor_col + 1);
-            line.replace_range(start..end, "");
-        } else if self.cursor_line + 1 < self.lines.len() {
-            self.push_undo(EditKind::Structural);
-            let next = self.lines.remove(self.cursor_line + 1);
-            self.lines[self.cursor_line].push_str(&next);
-        } else {
-            return;
-        }
-        self.dirty = true;
-    }
-
-    /// Delete the whole current line, the way micro's Ctrl+K does.
-    pub fn delete_line(&mut self) {
-        self.push_undo(EditKind::Structural);
-        if self.lines.len() == 1 {
-            self.lines[0].clear();
-        } else {
-            self.lines.remove(self.cursor_line);
-        }
-        self.cursor_col = 0;
-        self.goal_col = 0;
-        self.dirty = true;
-        self.clamp_cursor();
-    }
-
-    // ---- movement ---------------------------------------------------------
-
-    pub fn move_left(&mut self) {
-        self.break_undo_group();
-        if self.cursor_col > 0 {
-            self.cursor_col -= 1;
-        } else if self.cursor_line > 0 {
-            self.cursor_line -= 1;
-            self.cursor_col = self.line_chars(self.cursor_line);
-        }
-        self.goal_col = self.cursor_col;
-    }
-
-    pub fn move_right(&mut self) {
-        self.break_undo_group();
-        if self.cursor_col < self.line_chars(self.cursor_line) {
-            self.cursor_col += 1;
-        } else if self.cursor_line + 1 < self.lines.len() {
-            self.cursor_line += 1;
-            self.cursor_col = 0;
-        }
-        self.goal_col = self.cursor_col;
-    }
-
-    pub fn move_up(&mut self) {
-        self.break_undo_group();
-        if self.cursor_line > 0 {
-            self.cursor_line -= 1;
-            self.cursor_col = self.goal_col.min(self.line_chars(self.cursor_line));
-        }
-    }
-
-    pub fn move_down(&mut self) {
-        self.break_undo_group();
-        if self.cursor_line + 1 < self.lines.len() {
-            self.cursor_line += 1;
-            self.cursor_col = self.goal_col.min(self.line_chars(self.cursor_line));
-        }
-    }
-
-    /// Home: first non-blank, then column 0 — press twice to reach the margin.
-    ///
-    /// "Smart home", as in most editors. Because it is smart, it is the wrong
-    /// tool for jumping to an exact column; [`Editor::goto`] exists for that.
-    pub fn move_home(&mut self) {
-        self.break_undo_group();
-        let indent = self.lines[self.cursor_line]
-            .chars()
-            .take_while(|c| c.is_whitespace())
-            .count();
-        self.cursor_col = if self.cursor_col == indent { 0 } else { indent };
-        self.goal_col = self.cursor_col;
-    }
-
-    pub fn move_end(&mut self) {
-        self.break_undo_group();
-        self.cursor_col = self.line_chars(self.cursor_line);
-        self.goal_col = self.cursor_col;
-    }
-
-    /// Move to the start of the previous word.
-    ///
-    /// A word is a run of alphanumerics and underscores, so `foo_bar` is one
-    /// word and `foo.bar` is two. Skips any separators first, then the word
-    /// itself. At column 0 it falls through to a plain left, which steps onto
-    /// the end of the previous line.
-    pub fn move_word_left(&mut self) {
-        self.break_undo_group();
-        if self.cursor_col == 0 {
-            self.move_left();
-            return;
-        }
-        let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
-        let mut i = self.cursor_col;
-        while i > 0 && !chars[i - 1].is_alphanumeric() && chars[i - 1] != '_' {
-            i -= 1;
-        }
-        while i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_') {
-            i -= 1;
-        }
-        self.cursor_col = i;
-        self.goal_col = i;
-    }
-
-    /// Move past the end of the current word and any separators after it, so
-    /// repeated presses land on successive word starts.
-    pub fn move_word_right(&mut self) {
-        self.break_undo_group();
-        let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
-        if self.cursor_col >= chars.len() {
-            self.move_right();
-            return;
-        }
-        let mut i = self.cursor_col;
-        while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-            i += 1;
-        }
-        while i < chars.len() && !chars[i].is_alphanumeric() && chars[i] != '_' {
-            i += 1;
-        }
-        self.cursor_col = i;
-        self.goal_col = i;
-    }
-
-    pub fn page_up(&mut self, page: usize) {
-        self.break_undo_group();
-        self.cursor_line = self.cursor_line.saturating_sub(page.max(1));
-        self.cursor_col = self.goal_col.min(self.line_chars(self.cursor_line));
-    }
-
-    pub fn page_down(&mut self, page: usize) {
-        self.break_undo_group();
-        self.cursor_line = (self.cursor_line + page.max(1)).min(self.lines.len() - 1);
-        self.cursor_col = self.goal_col.min(self.line_chars(self.cursor_line));
-    }
-
-    /// Put the cursor at an exact position, clamped into the buffer. Jumping
-    /// to a search hit needs this: simulating Home and arrow keys goes wrong,
-    /// because Home is smart-home and stops at the indent.
-    pub fn goto(&mut self, line: usize, col: usize) {
-        self.break_undo_group();
-        self.cursor_line = line.min(self.lines.len().saturating_sub(1));
-        self.cursor_col = col.min(self.line_chars(self.cursor_line));
-        self.goal_col = self.cursor_col;
-    }
-
-    pub fn move_doc_start(&mut self) {
-        self.break_undo_group();
-        self.cursor_line = 0;
-        self.cursor_col = 0;
-        self.goal_col = 0;
-    }
-
-    pub fn move_doc_end(&mut self) {
-        self.break_undo_group();
-        self.cursor_line = self.lines.len() - 1;
-        self.cursor_col = self.line_chars(self.cursor_line);
-        self.goal_col = self.cursor_col;
-    }
-
-    /// Scroll the viewport so the cursor is on screen. Called before drawing,
-    /// once the real pane size is known.
-    ///
-    /// This is the one place `ui` legitimately mutates editor state: the key
-    /// handler that moved the cursor has no idea how tall the pane is, and the
-    /// answer changes when the terminal is resized. Scrolls by the minimum
-    /// needed to bring the cursor into view, which keeps the text still when
-    /// moving inside the visible region.
-    pub fn sync_scroll(&mut self, view_w: usize, view_h: usize) {
-        if view_h > 0 {
-            if self.cursor_line < self.scroll_y {
-                self.scroll_y = self.cursor_line;
-            } else if self.cursor_line >= self.scroll_y + view_h {
-                self.scroll_y = self.cursor_line + 1 - view_h;
-            }
-        }
-        if view_w > 0 {
-            if self.cursor_col < self.scroll_x {
-                self.scroll_x = self.cursor_col;
-            } else if self.cursor_col >= self.scroll_x + view_w {
-                self.scroll_x = self.cursor_col + 1 - view_w;
-            }
-        }
-    }
 }
 
 /// Byte offset of character index `ci`, or the string length if past the end.
@@ -614,7 +261,7 @@ impl Editor {
 /// operations. Every `insert`, `replace_range` and `split_off` in this module
 /// goes through it; slicing with a raw `cursor_col` would panic on any file
 /// containing a non-ASCII character.
-fn byte_of_char(s: &str, ci: usize) -> usize {
+pub(super) fn byte_of_char(s: &str, ci: usize) -> usize {
     s.char_indices().nth(ci).map_or(s.len(), |(b, _)| b)
 }
 

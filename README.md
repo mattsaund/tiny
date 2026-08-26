@@ -1,9 +1,11 @@
 # tiny
 
-Tiny is a personal knowledge management system (PKMS) and IDE that works entirely in the terminal. This program exists to serve as a full, terminal based project manager that is as lightweight as programs like micro. Tiny has a built in text/code editor, picture/video previewer, file manager, and project map for projects.
+Tiny is a personal knowledge management system (PKMS) and IDE that works entirely in the terminal. This program exists to serve as a full, terminal based project manager that is as lightweight as programs like micro. Tiny has a built in text/code editor, picture/video details pane, file manager, and project map for projects.
 
 Everything tiny manages and edits is non proprietary and not obfuscated.
+
 ## Install:
+Full Installation Size: 7.11 MB
 
 **One Liner:**
 ```sh
@@ -228,8 +230,6 @@ line_numbers       = true
 syntax_theme       = "base16-ocean.dark"
 max_search_results = 500
 search_ignore      = [".git", "target", "node_modules", ".venv", "__pycache__"]
-media_preview      = true
-media_height       = 24
 prose_extensions   = ["md", "txt", "rst", "org", "log"]
 graph_max_ambiguity = 3    # definitions before a name stops linking
 
@@ -246,30 +246,69 @@ code         = "dim"
 marker       = "bold"
 ```
 
-## Pictures and video
-
-terminal needs to support 24-bit color to work with no graphics protocol.
-
-Video shows a poster frame, pulled with `ffmpeg` when it is installed. 
 
 ## Source layout
 
-| file           | holds                                               |
-|----------------|-----------------------------------------------------|
-| `main.rs`      | CLI, terminal setup, event loop                     |
-| `project.rs`   | what `tiny <thing>` meant, and project creation     |
-| `app.rs`       | state, keys, commands, file operations              |
-| `ui.rs`        | all drawing                                         |
-| `tree.rs`      | the lazily-loaded directory model                   |
-| `editor.rs`    | the text buffer, cursor, and undo                   |
-| `search.rs`    | project-wide search and find-replace                |
-| `markdown.rs`  | markdown → styled terminal lines, wikilink scanning |
-| `highlight.rs` | syntax highlighting, and the parser-state cache     |
-| `media.rs`     | pictures and video frames as half-blocks            |
-| `graph.rs`     | the link graph: wikilinks, md links, calls          |
-| `projectmap.rs`| the map you look at: its layout, boxes and keys     |
-| `keys.rs`      | what every key does, and how to rebind it           |
-| `config.rs`    | `tiny.conf`, style specs, the settings index        |
+`src/` is one file for startup and six folders, one per layer. Every folder's
+`mod.rs` opens with docs explaining what the folder is for and how its files
+divide the work between them — that is the place to start.
+
+| folder / file | holds |
+|---------------|-------|
+| `main.rs` | CLI, terminal setup, the event loop, the uninstaller |
+| **`app/`** | **state: one `App`, and every keypress** |
+| `app/mod.rs` | the `App` struct and the questions anyone can ask it |
+| `app/mode.rs` | the overlays: the bar, prompts, confirmations, settings |
+| `app/preview.rs` | what the cursor is on, and what the right pane becomes |
+| `app/input.rs` | every keypress, dispatched; and the mouse wheel |
+| `app/bar.rs` | the one field that is both a search and a command line |
+| `app/command.rs` | what each `*command` does |
+| `app/fileops.rs` | new, rename, delete, copy, paste, save |
+| `app/actions.rs` | the plain navigation keys and the view toggles |
+| `app/settings.rs` | the settings area and the keybinds window |
+| `app/prompt.rs` | answering a prompt or a confirmation |
+| `app/parts.rs` | small helpers more than one of those needs |
+| `app/tests/` | the fixtures, and most of the suite — one file per area |
+| **`ui/`** | **all drawing, one file per pane** |
+| `ui/mod.rs` | the layout, and which module fills each rectangle |
+| `ui/parts.rs` | the border, the selected row, the marking of a hit |
+| `ui/tree.rs` | the left pane: the tree, or the results that replace it |
+| `ui/preview.rs` | the right pane, and what it decides to be |
+| `ui/editor.rs` | the file, with the real cursor in it |
+| `ui/map.rs` | the project map pane |
+| `ui/ink.rs` | the box-drawing grid, and the routing that fills it |
+| `ui/bar.rs` | the bar and the status line |
+| `ui/help.rs` | every key and command, on one screen |
+| `ui/settings.rs` | the settings and keybinds overlays |
+| **`text/`** | **text, and what can be done to it** |
+| `text/editor/mod.rs` | the buffer, the cursor, and reading and writing the file |
+| `text/editor/edit.rs` | everything that changes the text |
+| `text/editor/motion.rs` | everything that moves the cursor |
+| `text/editor/undo.rs` | the history, and the grouping that makes it usable |
+| `text/markdown/mod.rs` | the entry points, and the block splitter |
+| `text/markdown/render.rs` | the event stream, turned into styled rows |
+| `text/markdown/wrap.rs` | fitting those rows into the pane, styles intact |
+| `text/highlight.rs` | syntax highlighting, and the parser-state cache |
+| `text/search.rs` | project-wide search and find-replace |
+| **`files/`** | **things on disk** |
+| `files/tree.rs` | the lazily-loaded directory model |
+| `files/project.rs` | what `tiny <thing>` meant, and project creation |
+| `files/media/mod.rs` | what a picture or video is, and how to open it |
+| `files/media/size.rs` | pixel dimensions, read straight out of a file header |
+| **`map/`** | **what links to what, and the screen that shows it** |
+| `map/graph.rs` | the link graph: wikilinks, md links, calls |
+| `map/scan.rs` | reading one file and saying what is in it |
+| `map/view.rs` | what is on the map, and what the keyboard does to it |
+| `map/layout.rs` | where every box goes |
+| **`config/`** | **settings and key bindings** |
+| `config/mod.rs` | `tiny.conf` and the settings index |
+| `config/theme.rs` | style specs, and the palette they parse into |
+| `config/keys.rs` | what every key does, and how to rebind it |
+| `config/keyspec.rs` | `"ctrl+space"`, and the event it matches |
+
+Tests live beside the code they cover, except `app`'s, which are large enough
+to have a folder of their own. `map/testing.rs` and `text/markdown/testing.rs`
+hold fixtures two files there share.
 
 ## Features:
 
@@ -277,7 +316,7 @@ Video shows a poster frame, pulled with `ffmpeg` when it is installed.
 - Markdown text editor, easy editing like obsidian, perfectly viewable
 - plaintext editor (.txt), no formatting
 - code editor with syntax highlighting for 213 languages
-- pictures and videos viewer
+- pictures and videos described in the pane, opened in your own viewer
 - project map showing the connections and links between files
 - full project searchbar and command caller, matches marked in the preview
 

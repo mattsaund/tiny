@@ -1,34 +1,36 @@
 //! tiny — a terminal knowledge manager.
 //!
 //! Left pane is the project tree, right pane is whatever the cursor is on:
-//! markdown renders, code opens in an editor, pictures draw. `Ctrl+S` saves.
+//! markdown renders, code opens in an editor, pictures are described and
+//! handed to the desktop's own viewer. `Ctrl+S` saves.
 //!
 //! # Where things live
 //!
 //! Reading top to bottom, the program is four layers:
 //!
 //! 1. **Startup** — this file. Parse the command line, work out what to open
-//!    ([`project`]), load configuration ([`config`]), then hand control to a
-//!    plain blocking event loop.
+//!    ([`files::project`]), load configuration ([`config`]), then hand control
+//!    to a plain blocking event loop.
 //! 2. **State** — [`app`]. One `App` struct owns everything mutable: the tree
 //!    cursor, the open buffers, the current mode, the status line. Every
 //!    keypress goes through `App::on_key`.
 //! 3. **Drawing** — [`ui`]. Reads `App` and paints a frame. It is deliberately
 //!    the only module that knows about ratatui widgets.
-//! 4. **Support** — [`tree`], [`editor`], [`search`], [`markdown`],
-//!    [`highlight`], [`media`], [`graph`], [`projectmap`]. Each is a
-//!    self-contained piece of machinery `app` and `ui` call into.
+//! 4. **Support** — three folders of self-contained machinery that `app` and
+//!    `ui` call into: [`text`] (the buffer, markdown, highlighting, search),
+//!    [`files`] (the tree, project resolution, media), and [`map`] (the link
+//!    graph and the view of it). [`config`] holds the settings and the key
+//!    bindings, and is read once before any of them.
 //!
 //! # The one-way rule
 //!
 //! State flows one way: keys mutate `App`, then `ui` reads `App` and draws.
 //! `ui` never handles input, and `app` never touches a ratatui widget. The
-//! sanctioned exceptions are all one thing: `ui` writes back scroll offsets,
-//! the media cache and the syntax-highlighting cache, because none of those
-//! can be computed until the pane size is known — and the pane size is only
-//! known while drawing. `ui`'s own module docs list them. If you find yourself
-//! wanting another, that is usually a sign the state belongs on `App`
-//! instead.
+//! sanctioned exceptions are all one thing: `ui` writes back scroll offsets
+//! and the syntax-highlighting cache, because neither can be computed until
+//! the pane size is known — and the pane size is only known while drawing.
+//! `ui`'s own module docs list them. If you find yourself wanting another,
+//! that is usually a sign the state belongs on `App` instead.
 //!
 //! # The event loop is blocking on purpose
 //!
@@ -37,20 +39,13 @@
 //! tiny uses no CPU at all, which is most of why it stays small. The cost is
 //! that every operation is synchronous: a slow search or a big graph build
 //! freezes the UI while it runs, so anything expensive needs its own budget
-//! (see the size caps in `search`, `graph`, and `highlight`).
+//! (see the size caps in `text::search`, `map::graph`, and `text::highlight`).
 
 mod app;
 mod config;
-mod editor;
-mod graph;
-mod highlight;
-mod keys;
-mod markdown;
-mod media;
-mod project;
-mod projectmap;
-mod search;
-mod tree;
+mod files;
+mod map;
+mod text;
 mod ui;
 
 use std::path::PathBuf;
@@ -93,6 +88,17 @@ KEYS:
     m                   the project map
 ";
 
+/// Print to stdout, and do not mind if nobody is listening.
+///
+/// `print!` panics when the pipe it is writing into closes, which is what
+/// happens the moment someone quits the pager they piped `--licenses` into.
+/// Every one of these outputs is a whole answer written in one go, so a reader
+/// who stops early has read as much as they wanted and there is nothing to
+/// report.
+fn emit(text: &str) {
+    let _ = std::io::Write::write_all(&mut std::io::stdout(), text.as_bytes());
+}
+
 /// Thin wrapper so the real work can use `?`.
 ///
 /// Errors are printed with `{e:#}`, which walks anyhow's whole context chain —
@@ -111,10 +117,11 @@ fn main() {
 ///
 /// 1. Handle the options that never touch the disk (`--help`, `--version`,
 ///    `--config`) and return early.
-/// 2. Load the config, which [`project::resolve`] needs for `starter_readme`
-///    and `default_root` before it can decide what to do with the argument.
-/// 3. Resolve the argument into a [`project::Target`], creating the project
-///    if it does not exist.
+/// 2. Load the config, which [`files::project::resolve`] needs for
+///    `starter_readme` and `default_root` before it can decide what to do
+///    with the argument.
+/// 3. Resolve the argument into a [`files::project::Target`], creating the
+///    project if it does not exist.
 /// 4. Write out the defaults on first run.
 /// 5. Build the `App`, take over the terminal, loop, and restore.
 ///
@@ -126,7 +133,7 @@ fn real_main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("-h") | Some("--help") => {
-            print!("{USAGE}");
+            emit(USAGE);
             return Ok(());
         }
         Some("-V") | Some("--version") => {
@@ -141,7 +148,7 @@ fn real_main() -> Result<()> {
             return Ok(());
         }
         Some("--licenses") => {
-            print!("{}", highlight::acknowledgements());
+            emit(&text::highlight::acknowledgements());
             return Ok(());
         }
         Some("--uninstall") => return uninstall(),
@@ -152,7 +159,7 @@ fn real_main() -> Result<()> {
     }
 
     let (cfg, warn_config) = Config::load();
-    let target = project::resolve(args.first().map(String::as_str), &cfg)?;
+    let target = files::project::resolve(args.first().map(String::as_str), &cfg)?;
 
     // First run: write the defaults out so there is a file to edit. Done here
     // rather than in `load` so `--help` never touches the disk.

@@ -36,12 +36,17 @@
 //! numbers are clamped by [`Config::sanitized`]. A typo in a config file
 //! should cost you an underline, never the program.
 
+pub mod keys;
+pub mod keyspec;
+pub mod theme;
+
+pub use self::theme::{Palette, Theme};
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
-use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};
 
 /// The config file, in [`config_dir`]. There is exactly one of these.
@@ -84,7 +89,7 @@ pub struct Config {
     /// Fallback when the working directory cannot be read.
     pub default_root: PathBuf,
     /// Key bindings that differ from the shipped ones, by action name — see
-    /// [`crate::keys`]. Only what has been changed is kept, so an untouched
+    /// [`crate::config::keys`]. Only what has been changed is kept, so an untouched
     /// config has no `[keys]` section and a binding added in a later version
     /// reaches everyone who has not overridden that action.
     pub keys: BTreeMap<String, String>,
@@ -125,11 +130,6 @@ pub struct Config {
     /// call edge for. Names like `new` and `main` are everywhere.
     pub graph_max_ambiguity: usize,
 
-    /// Preview images and video poster frames as colored half-blocks.
-    pub media_preview: bool,
-    /// Rows of terminal cells a media preview may use.
-    pub media_height: usize,
-
     pub theme: Theme,
 }
 
@@ -162,8 +162,6 @@ impl Default for Config {
             .map(|s| s.to_string())
             .collect(),
             graph_max_ambiguity: 3,
-            media_preview: true,
-            media_height: 24,
             theme: Theme::default(),
         }
     }
@@ -246,7 +244,6 @@ impl Config {
     fn sanitized(mut self) -> Self {
         self.tree_width = self.tree_width.clamp(0.10, 0.60);
         self.tab_width = self.tab_width.clamp(1, 16);
-        self.media_height = self.media_height.clamp(4, 200);
         self.graph_max_ambiguity = self.graph_max_ambiguity.clamp(1, 100);
         self.max_search_results = self.max_search_results.clamp(1, 100_000);
         self
@@ -274,8 +271,6 @@ impl Config {
                 "graph_max_ambiguity",
                 "max definitions before a name is ignored",
             ),
-            ("media_preview", "draw images and video frames"),
-            ("media_height", "rows a media preview may use"),
             ("theme.text", "body text style"),
             ("theme.dim", "secondary text style"),
             ("theme.border", "pane border style"),
@@ -318,8 +313,6 @@ impl Config {
             "prose_extensions" => self.prose_extensions.join(" "),
             "search_ignore" => self.search_ignore.join(" "),
             "graph_max_ambiguity" => self.graph_max_ambiguity.to_string(),
-            "media_preview" => self.media_preview.to_string(),
-            "media_height" => self.media_height.to_string(),
             "theme.text" => self.theme.text.clone(),
             "theme.dim" => self.theme.dim.clone(),
             "theme.border" => self.theme.border.clone(),
@@ -338,7 +331,7 @@ impl Config {
     /// values rather than silently doing nothing.
     ///
     /// Note that theme entries are stored as raw strings without validation —
-    /// [`parse_style`] ignores words it does not recognise, so a misspelled
+    /// [`theme::parse_style`] ignores words it does not recognise, so a misspelled
     /// color is accepted here and simply has no effect when drawn. Callers
     /// must follow a successful `set` with `App::apply_config` to rebuild the
     /// palette and highlighter; the config alone is just data.
@@ -376,8 +369,6 @@ impl Config {
             "prose_extensions" => self.prose_extensions = parse_list(v),
             "search_ignore" => self.search_ignore = parse_list(v),
             "graph_max_ambiguity" => self.graph_max_ambiguity = parse_num(v)?,
-            "media_preview" => self.media_preview = parse_bool(v)?,
-            "media_height" => self.media_height = parse_num(v)?,
             "theme.text" => self.theme.text = v.to_string(),
             "theme.dim" => self.theme.dim = v.to_string(),
             "theme.border" => self.theme.border = v.to_string(),
@@ -392,177 +383,6 @@ impl Config {
         }
         *self = std::mem::take(self).sanitized();
         Ok(())
-    }
-}
-
-/// Style specs, kept as strings so the file stays readable and hand-editable.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Theme {
-    pub text: String,
-    pub dim: String,
-    pub border: String,
-    pub border_focus: String,
-    pub selection: String,
-    pub directory: String,
-    pub heading: String,
-    pub link: String,
-    pub code: String,
-    pub marker: String,
-}
-
-impl Default for Theme {
-    fn default() -> Self {
-        // Monochrome by design. Nothing here names a color, so tiny inherits
-        // whatever palette the terminal is already using — weight, underline
-        // and reverse video carry the meaning instead.
-        Self {
-            text: "default".into(),
-            dim: "darkgray".into(),
-            border: "darkgray".into(),
-            border_focus: "white".into(),
-            selection: "reverse".into(),
-            directory: "bold".into(),
-            heading: "bold".into(),
-            link: "underline".into(),
-            code: "dim".into(),
-            marker: "bold".into(),
-        }
-    }
-}
-
-/// A resolved theme: specs parsed once at startup so drawing never re-parses.
-///
-/// `Copy`, and deliberately so — `ui` passes it around by value on every line
-/// it draws, and threading a reference through would add lifetimes to most of
-/// that module for no benefit. Rebuilt by `App::apply_config` whenever the
-/// theme changes, which is how `:set theme.heading cyan bold` repaints without
-/// a restart.
-#[derive(Debug, Clone, Copy)]
-pub struct Palette {
-    pub text: Style,
-    pub dim: Style,
-    pub border: Style,
-    pub border_focus: Style,
-    pub selection: Style,
-    pub directory: Style,
-    pub heading: Style,
-    pub link: Style,
-    pub code: Style,
-    pub marker: Style,
-}
-
-impl Palette {
-    pub fn from_theme(t: &Theme) -> Self {
-        Self {
-            text: parse_style(&t.text),
-            dim: parse_style(&t.dim),
-            border: parse_style(&t.border),
-            border_focus: parse_style(&t.border_focus),
-            selection: parse_style(&t.selection),
-            directory: parse_style(&t.directory),
-            heading: parse_style(&t.heading),
-            link: parse_style(&t.link),
-            code: parse_style(&t.code),
-            marker: parse_style(&t.marker),
-        }
-    }
-}
-
-impl Default for Palette {
-    fn default() -> Self {
-        Self::from_theme(&Theme::default())
-    }
-}
-
-/// Parse a style spec: color names, `#rrggbb`, palette indices, `on <color>`
-/// for a background, and the modifiers bold / dim / italic / underline /
-/// reverse / strike. Unknown words are ignored rather than failing — a typo in
-/// a config file should cost you an underline, not the program.
-pub fn parse_style(spec: &str) -> Style {
-    let mut style = Style::default();
-    let mut tokens = spec.split_whitespace();
-    while let Some(tok) = tokens.next() {
-        match tok.to_ascii_lowercase().as_str() {
-            "on" => {
-                if let Some(c) = tokens.next().and_then(parse_color) {
-                    style = style.bg(c);
-                }
-            }
-            "bold" => style = style.add_modifier(Modifier::BOLD),
-            "dim" | "faint" => style = style.add_modifier(Modifier::DIM),
-            "italic" => style = style.add_modifier(Modifier::ITALIC),
-            "underline" | "underlined" => style = style.add_modifier(Modifier::UNDERLINED),
-            "reverse" | "reversed" | "invert" => style = style.add_modifier(Modifier::REVERSED),
-            "strike" | "crossed" => style = style.add_modifier(Modifier::CROSSED_OUT),
-            other => {
-                if let Some(c) = parse_color(other) {
-                    style = style.fg(c);
-                }
-            }
-        }
-    }
-    style
-}
-
-/// Parse one color word: a name, `#rgb`, `#rrggbb`, or a 0-255 palette index.
-///
-/// Named colors and `default` map to ratatui's 16-color constants, which the
-/// terminal renders with its own palette — that is what lets tiny match the
-/// theme a user already has. `#rrggbb` forces a true-color value instead, and
-/// needs a 24-bit terminal.
-pub fn parse_color(s: &str) -> Option<Color> {
-    let s = s.trim();
-    if let Some(hex) = s.strip_prefix('#') {
-        return parse_hex(hex);
-    }
-    let named = match s.to_ascii_lowercase().as_str() {
-        // `default` keeps the terminal's own color, which is how tiny stays
-        // transparent against whatever theme the user already has.
-        "default" | "none" | "reset" => Some(Color::Reset),
-        "black" => Some(Color::Black),
-        "red" => Some(Color::Red),
-        "green" => Some(Color::Green),
-        "yellow" => Some(Color::Yellow),
-        "blue" => Some(Color::Blue),
-        "magenta" => Some(Color::Magenta),
-        "cyan" => Some(Color::Cyan),
-        "gray" | "grey" => Some(Color::Gray),
-        "darkgray" | "darkgrey" => Some(Color::DarkGray),
-        "lightred" | "brightred" => Some(Color::LightRed),
-        "lightgreen" | "brightgreen" => Some(Color::LightGreen),
-        "lightyellow" | "brightyellow" => Some(Color::LightYellow),
-        "lightblue" | "brightblue" => Some(Color::LightBlue),
-        "lightmagenta" | "brightmagenta" => Some(Color::LightMagenta),
-        "lightcyan" | "brightcyan" => Some(Color::LightCyan),
-        "white" => Some(Color::White),
-        _ => None,
-    };
-    named
-        .or_else(|| s.parse::<u8>().ok().map(Color::Indexed))
-        .or_else(|| parse_hex(s))
-}
-
-/// `#abc` or `#aabbcc` to an RGB color. Three-digit form expands each nibble
-/// by multiplying by 17, so `#abc` and `#aabbcc` are the same color.
-fn parse_hex(s: &str) -> Option<Color> {
-    let s = s.trim().trim_start_matches('#');
-    match s.len() {
-        3 => {
-            let v = u32::from_str_radix(s, 16).ok()?;
-            let (r, g, b) = ((v >> 8) & 0xF, (v >> 4) & 0xF, v & 0xF);
-            // 0xA -> 0xAA
-            Some(Color::Rgb((r * 17) as u8, (g * 17) as u8, (b * 17) as u8))
-        }
-        6 => {
-            let v = u32::from_str_radix(s, 16).ok()?;
-            Some(Color::Rgb(
-                ((v >> 16) & 0xFF) as u8,
-                ((v >> 8) & 0xFF) as u8,
-                (v & 0xFF) as u8,
-            ))
-        }
-        _ => None,
     }
 }
 
@@ -661,49 +481,6 @@ fn home() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn defaults_are_monochrome() {
-        let p = Palette::default();
-        // Nothing in the chrome names a color: the terminal's own palette
-        // shows through, and meaning is carried by weight and reverse video.
-        assert_eq!(p.text.fg, Some(Color::Reset));
-        assert_eq!(p.heading.fg, None);
-        assert!(p.heading.add_modifier.contains(Modifier::BOLD));
-        assert!(p.link.add_modifier.contains(Modifier::UNDERLINED));
-        assert!(p.selection.add_modifier.contains(Modifier::REVERSED));
-    }
-
-    #[test]
-    fn style_specs_combine_color_and_modifiers() {
-        let s = parse_style("white bold underline");
-        assert_eq!(s.fg, Some(Color::White));
-        assert!(s.add_modifier.contains(Modifier::BOLD));
-        assert!(s.add_modifier.contains(Modifier::UNDERLINED));
-
-        let s = parse_style("#7dcfff on black italic");
-        assert_eq!(s.fg, Some(Color::Rgb(0x7d, 0xcf, 0xff)));
-        assert_eq!(s.bg, Some(Color::Black));
-        assert!(s.add_modifier.contains(Modifier::ITALIC));
-    }
-
-    #[test]
-    fn a_typo_in_a_style_costs_an_underline_not_the_program() {
-        let s = parse_style("bold nonsense-word underline");
-        assert!(s.add_modifier.contains(Modifier::BOLD));
-        assert!(s.add_modifier.contains(Modifier::UNDERLINED));
-        assert_eq!(s.fg, None, "the unknown word is ignored");
-    }
-
-    #[test]
-    fn colors_accept_names_hex_and_palette_indices() {
-        assert_eq!(parse_color("cyan"), Some(Color::Cyan));
-        assert_eq!(parse_color("default"), Some(Color::Reset));
-        assert_eq!(parse_color("#f0a"), Some(Color::Rgb(255, 0, 170)));
-        assert_eq!(parse_color("ffffff"), Some(Color::Rgb(255, 255, 255)));
-        assert_eq!(parse_color("42"), Some(Color::Indexed(42)));
-        assert_eq!(parse_color("banana"), None);
-    }
 
     #[test]
     fn partial_config_keeps_defaults_for_everything_else() {
