@@ -114,20 +114,60 @@ impl App {
         }
     }
 
-    /// Keys for the tree pane. Single letters are free here — unlike the
-    /// editor, nothing is being typed — which is why `n`, `r`, `d` and friends
-    /// can be bare.
+    /// Every chord in [`KeyContext::Global`], in one place.
+    ///
+    /// These are the controls that have to work while you are typing into a
+    /// file, which is what makes them chords rather than letters: `n` is the
+    /// letter n in the editor and cannot be anything else, so "new" is
+    /// `Ctrl+N` everywhere instead of `n` in one pane and nothing in the
+    /// other.
+    ///
+    /// Handled here rather than twice, because a global that the tree and the
+    /// editor disagreed about would not be global. Returns whether the action
+    /// was one of them; [`Action::Save`] and the two "leave this pane" keys
+    /// are deliberately not, since what they mean does depend on where you
+    /// are.
+    fn on_global_action(&mut self, action: Action) -> bool {
+        match action {
+            Action::Quit => self.request_quit(),
+            Action::Bar => self.open_bar(false),
+            Action::CommandBar => self.open_bar(true),
+            Action::ToggleTreePane => self.toggle_tree_pane(),
+            Action::PaneNarrower => self.resize_tree_pane(-1),
+            Action::PaneWider => self.resize_tree_pane(1),
+            Action::New => self.begin_prompt(PromptKind::New),
+            Action::Rename => self.begin_prompt(PromptKind::Rename),
+            Action::Delete => self.begin_delete(),
+            Action::Copy => self.copy_selection(),
+            Action::Paste => self.paste_clipboard(),
+            Action::Hidden => self.toggle_hidden(),
+            Action::Refresh => self.refresh(),
+            Action::Help => self.mode = Mode::Help(0),
+            Action::Settings => self.open_settings(),
+            Action::Map => self.open_map(),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Keys for the tree pane.
+    ///
+    /// Single letters are free here — unlike the editor, nothing is being
+    /// typed — so `n`, `r`, `d` and friends stay bound as bare keys alongside
+    /// the chords that do the same thing from anywhere. Two ways to reach one
+    /// action, and the tree is the pane where the short one still works.
     fn on_tree_key(&mut self, key: KeyEvent) {
         let page = self.last_tree_height.saturating_sub(1).max(1) as isize;
         let Some(action) = self.keymap.resolve(KeyContext::Tree, &key) else {
             return;
         };
+        if self.on_global_action(action) {
+            return;
+        }
         match action {
             Action::Save => self.save_from_tree(),
-            Action::Quit | Action::TreeQuit => self.request_quit(),
-            Action::Bar | Action::TreeBar => self.open_bar(false),
-            Action::CommandBar => self.open_bar(true),
-            Action::ToggleTreePane => self.toggle_tree_pane(),
+            Action::TreeQuit => self.request_quit(),
+            Action::TreeBar => self.open_bar(false),
             Action::TreeUp => self.move_selection(-1),
             Action::TreeDown => self.move_selection(1),
             Action::TreeFirst => self.select_index(0),
@@ -143,10 +183,7 @@ impl App {
             Action::TreeNew => self.begin_prompt(PromptKind::New),
             Action::TreeRename => self.begin_prompt(PromptKind::Rename),
             Action::TreeDelete => self.begin_delete(),
-            Action::TreeCopy => self.copy_selection(),
-            Action::TreePaste => self.paste_clipboard(),
             Action::TreeHidden => self.toggle_hidden(),
-            Action::TreeRefresh => self.refresh(),
             Action::TreeHelp => self.mode = Mode::Help(0),
             Action::TreeSettings => self.open_settings(),
             Action::TreeMap => self.open_map(),
@@ -169,14 +206,11 @@ impl App {
         let page = self.last_edit_height.saturating_sub(1).max(1);
 
         // Keys that leave the pane or act on the file come first, so they can
-        // never be swallowed as text input. `Ctrl+P` is here because a bare
-        // `*` in the editor is a character being typed.
+        // never be swallowed as text input. Everything global reaches here,
+        // which is the point of the chords: `Ctrl+N` makes a file from inside
+        // the editor, where a bare `n` is the letter n and always will be.
         match self.keymap.resolve(KeyContext::Editor, &key) {
             Some(Action::Save) => return self.save_active(),
-            Some(Action::Quit) => return self.request_quit(),
-            Some(Action::Bar) => return self.open_bar(false),
-            Some(Action::CommandBar) => return self.open_bar(true),
-            Some(Action::ToggleTreePane) => return self.toggle_tree_pane(),
             // "Back to the tree" means the tree, even when it is folded away,
             // so it brings the pane back rather than handing the keyboard to
             // something that is not on screen.
@@ -185,6 +219,10 @@ impl App {
                 self.status = "back to tree".into();
                 return;
             }
+            // The guard does the work: `on_global_action` runs the action if
+            // it recognises it and says so, and an action it does not
+            // recognise falls through to the editing keyboard below.
+            Some(action) if self.on_global_action(action) => return,
             _ => {}
         }
 

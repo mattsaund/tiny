@@ -51,7 +51,7 @@
 //! Everywhere a pane is being navigated rather than typed into, `i j k l` do
 //! what the four arrows do — up, left, down, right, in the inverted-T anyone
 //! who has held a keyboard sideways already knows. `I` and `K` go all the way,
-//! the same as Shift with an arrow. They exist for keyboards with no cursor
+//! the same as Alt with an arrow. They exist for keyboards with no cursor
 //! cluster, and they are deliberately *not* the vim `h j k l`: `j` and `k`
 //! cannot mean both left-down and down-up at once, and a layout that matches
 //! the arrows is the one that needs no explaining.

@@ -204,7 +204,7 @@ fn esc_brings_the_tree_back_and_lands_on_it() {
 fn search_still_gets_a_pane_while_the_tree_is_folded_away() {
     let (_td, mut app) = fixture();
     app.on_key(ctrl(' '));
-    app.on_key(ctrl('f'));
+    app.on_key(ctrl('/'));
     type_str(&mut app, "widget");
 
     let out = joined(&mut app);
@@ -330,12 +330,23 @@ fn a_letter_reaches_a_note_the_moment_it_is_opened() {
 }
 
 #[test]
-fn shift_and_an_arrow_goes_to_the_first_or_last_entry() {
+fn alt_and_an_arrow_goes_to_the_first_or_last_entry() {
     let (_td, mut app) = fixture();
-    app.on_key(shift(KeyCode::Down));
+    app.on_key(alt(KeyCode::Down));
     assert_eq!(app.selected, app.rows.len() - 1, "all the way down");
-    app.on_key(shift(KeyCode::Up));
+    app.on_key(alt(KeyCode::Up));
     assert_eq!(app.selected, 0, "and all the way back");
+}
+
+#[test]
+fn a_capital_letter_still_goes_all_the_way_too() {
+    // `I` and `K` are characters, not a modifier, so they were never part of
+    // the move off Shift and a terminal cannot mistake them for a selection.
+    let (_td, mut app) = fixture();
+    app.on_key(ch('K'));
+    assert_eq!(app.selected, app.rows.len() - 1);
+    app.on_key(ch('I'));
+    assert_eq!(app.selected, 0);
 }
 
 #[test]
@@ -385,4 +396,196 @@ fn the_cursor_cannot_run_off_either_end() {
         app.on_key(k(KeyCode::Down));
     }
     assert_eq!(app.selected, app.rows.len() - 1);
+}
+
+// ---- the controls that reach out of the pane you are in --------------------
+
+/// Put the keyboard in a file, with a cursor in real text.
+fn editing(app: &mut App) {
+    select(app, "README.md");
+    app.on_key(k(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Editor, "the editor should have the keys");
+}
+
+#[test]
+fn the_file_chords_all_ask_their_question_from_inside_the_editor() {
+    // Every one of these is a bare letter in the browser and a letter being
+    // typed in the editor, which is the whole reason they are chords.
+    for (key, what) in [
+        (ctrl('n'), "ctrl+n"),
+        (ctrl('r'), "ctrl+r"),
+        (ctrl('d'), "ctrl+d"),
+    ] {
+        let (_td, mut app) = fixture();
+        editing(&mut app);
+        app.on_key(key);
+        assert!(
+            matches!(app.mode, Mode::Prompt(_) | Mode::Confirm(_)),
+            "{what} asked nothing from the editor — status: {}",
+            app.status
+        );
+    }
+}
+
+#[test]
+fn the_view_chords_work_from_inside_the_editor_too() {
+    let (_td, mut app) = fixture();
+    editing(&mut app);
+    app.on_key(ctrl('.'));
+    assert!(app.config.show_hidden, "dotfiles, from the editor");
+
+    app.on_key(ctrl('m'));
+    assert!(app.project_map.is_some(), "the map, from the editor");
+}
+
+#[test]
+fn a_chord_never_types_its_letter_into_the_file() {
+    for key in [ctrl('n'), ctrl('r'), ctrl('d'), ctrl('m'), ctrl('.')] {
+        let (_td, mut app) = fixture();
+        editing(&mut app);
+        let before = app.active_buffer().expect("a buffer").to_text();
+        app.on_key(key);
+        let after = app.active_buffer().expect("a buffer").to_text();
+        assert_eq!(after, before, "a chord put a letter in the file");
+    }
+}
+
+#[test]
+fn ctrl_slash_opens_the_search_and_a_star_turns_it_into_a_command() {
+    let (_td, mut app) = fixture();
+    editing(&mut app);
+    app.on_key(ctrl('/'));
+    let Mode::Bar(b) = &app.mode else {
+        panic!("the bar should have opened from the editor")
+    };
+    assert!(!b.is_command(), "it opens as a search");
+
+    app.on_key(ch('*'));
+    let Mode::Bar(b) = &app.mode else {
+        panic!("bar closed")
+    };
+    assert!(b.is_command(), "and a star is what turns it into a command");
+}
+
+#[test]
+fn no_arrow_of_any_kind_resizes_the_browser() {
+    // Every arrow belongs to movement, whatever is held with it. The resize
+    // is off the arrows entirely because there is no modifier left that one
+    // can carry — see the module docs in `config::keys`.
+    let (_td, mut app) = fixture();
+    let width = app.config.tree_width;
+    for key in [
+        k(KeyCode::Left),
+        ctrl_key(KeyCode::Left),
+        alt(KeyCode::Left),
+        ctrl_shift(KeyCode::Left),
+        ctrl_alt(KeyCode::Left),
+        k(KeyCode::Right),
+        ctrl_key(KeyCode::Right),
+        alt(KeyCode::Right),
+        ctrl_shift(KeyCode::Right),
+        ctrl_alt(KeyCode::Right),
+    ] {
+        app.on_key(key);
+        assert_eq!(
+            app.config.tree_width, width,
+            "an arrow moved the pane edge: {key:?}"
+        );
+    }
+    app.on_key(alt(KeyCode::Down));
+    assert_eq!(
+        app.selected,
+        app.rows.len() - 1,
+        "and alt with an arrow still goes all the way"
+    );
+}
+
+#[test]
+fn alt_minus_and_alt_equals_move_the_edge_between_the_browser_and_the_file() {
+    let (_td, mut app) = fixture();
+    let edge = |app: &mut App| {
+        screen(app, 90, 24)
+            .into_iter()
+            .find(|r| r.contains("BROWSER"))
+            .and_then(|r| r.find('┐'))
+            .expect("the browser is drawn")
+    };
+    let start = edge(&mut app);
+
+    app.on_key(alt(KeyCode::Char('=')));
+    let wider = edge(&mut app);
+    assert!(wider > start, "right widens it: {start} -> {wider}");
+
+    app.on_key(alt(KeyCode::Char('-')));
+    app.on_key(alt(KeyCode::Char('-')));
+    let narrower = edge(&mut app);
+    assert!(narrower < start, "left narrows it: {start} -> {narrower}");
+}
+
+#[test]
+fn narrowing_past_the_end_folds_the_browser_and_widening_brings_it_back() {
+    let (_td, mut app) = fixture();
+    for _ in 0..20 {
+        app.on_key(alt(KeyCode::Char('-')));
+    }
+    assert!(app.tree_hidden, "the last step is the fold: {}", app.status);
+    assert!(
+        !joined(&mut app).contains("BROWSER"),
+        "and it is really gone"
+    );
+
+    app.on_key(alt(KeyCode::Char('=')));
+    assert!(!app.tree_hidden, "and the other way brings it back");
+}
+
+#[test]
+fn the_browser_never_grows_past_what_the_config_would_accept() {
+    let (_td, mut app) = fixture();
+    for _ in 0..40 {
+        app.on_key(alt(KeyCode::Char('=')));
+    }
+    // The same ceiling `Config::sanitized` enforces. A width the keys could
+    // reach but the config would clamp is one that changes by itself on the
+    // next restart.
+    assert!(
+        app.config.tree_width <= 0.60,
+        "stopped at {}",
+        app.config.tree_width
+    );
+    assert!(app.config.tree_width > 0.5, "and it got most of the way");
+}
+
+#[test]
+fn the_function_keys_reach_their_windows_from_inside_the_editor() {
+    let (_td, mut app) = fixture();
+    editing(&mut app);
+    app.on_key(k(KeyCode::F(1)));
+    assert!(matches!(app.mode, Mode::Help(_)), "F1 is help");
+    app.on_key(k(KeyCode::Esc));
+
+    editing(&mut app);
+    app.on_key(k(KeyCode::F(5)));
+    assert_eq!(app.status, "refreshed", "F5 re-reads from disk");
+}
+
+#[test]
+fn ctrl_comma_opens_the_settings_from_inside_the_editor() {
+    let (_td, mut app) = fixture();
+    editing(&mut app);
+    app.on_key(ctrl(','));
+    assert!(
+        matches!(app.mode, Mode::Settings(_)),
+        "status was: {}",
+        app.status
+    );
+}
+
+#[test]
+fn ctrl_m_is_a_toggle_on_the_map() {
+    let (_td, mut app) = fixture();
+    editing(&mut app);
+    app.on_key(ctrl('m'));
+    assert!(app.project_map.is_some(), "the map, from the editor");
+    app.on_key(ctrl('m'));
+    assert!(app.project_map.is_none(), "and the same key closes it");
 }

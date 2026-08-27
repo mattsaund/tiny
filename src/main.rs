@@ -52,7 +52,8 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, KeyboardEnhancementFlags,
+    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 
@@ -190,6 +191,59 @@ fn real_main() -> Result<()> {
     result
 }
 
+/// The terminal reporting chords it would otherwise throw away, for as long as
+/// this is held.
+///
+/// A terminal's legacy keyboard encoding cannot express some of the keys tiny
+/// binds. `Ctrl+M` *is* Enter — both are the byte 0x0D — and `Ctrl+.` has no
+/// byte at all, so on a plain terminal those keypresses either arrive as
+/// something else or never arrive. The disambiguating half of the kitty
+/// keyboard protocol separates them, and asking for it is a request the
+/// terminal is free to decline.
+///
+/// Nothing depends on the answer. Every action on a chord the legacy encoding
+/// cannot carry is also bound to a function key, and the browser keeps its bare
+/// letters, so a terminal that says no is a terminal where the other binding is
+/// the one you use.
+///
+/// # Why this is a guard, and why it is asked for late
+///
+/// The flags have to come back off. Left pushed, they change how the *next*
+/// program to run in this terminal reads its keyboard — so the pop belongs in
+/// `Drop`, where it happens on the error path as well as the ordinary one.
+///
+/// And the asking is a round trip: a query written to the terminal and an
+/// answer read back, with a two-second ceiling inside crossterm. Every real
+/// terminal answers `ESC [ c` immediately, but a pty with no emulator behind it
+/// — a recording, a test harness — answers nothing at all and spends the whole
+/// two seconds. Doing it after the first frame is drawn means that terminal
+/// still paints instantly; anything typed meanwhile is queued by crossterm and
+/// arrives once the query is done, so nothing is lost either way.
+struct RealChords(bool);
+
+impl RealChords {
+    fn ask() -> Self {
+        Self(
+            crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
+                && execute!(
+                    std::io::stdout(),
+                    PushKeyboardEnhancementFlags(
+                        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    )
+                )
+                .is_ok(),
+        )
+    }
+}
+
+impl Drop for RealChords {
+    fn drop(&mut self) {
+        if self.0 {
+            let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+        }
+    }
+}
+
 /// The event loop: draw, block for a key, dispatch, repeat.
 ///
 /// Note the order — the frame is drawn *before* the quit check, so the last
@@ -200,10 +254,16 @@ fn real_main() -> Result<()> {
 /// `ratatui::restore` in the caller runs whether or not this returns an error,
 /// so a failure in here still gives the terminal back.
 fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
+    let mut chords = None;
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
         if app.should_quit {
             return Ok(());
+        }
+        // After the first frame, once, and held for the rest of the run — see
+        // [`RealChords`] for both halves of why.
+        if chords.is_none() {
+            chords = Some(RealChords::ask());
         }
         match event::read()? {
             // Windows terminals report releases too; only presses, and the

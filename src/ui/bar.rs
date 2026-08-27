@@ -123,10 +123,15 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 return;
             }
             let hints = match (&app.mode, app.focus) {
-                (Mode::Settings(_), _) => "up/down pick | Enter change | ^S write | Esc close",
+                (Mode::Settings(_), _) => "up/down pick | Enter change | Ctrl+S write | Esc close",
                 (Mode::Bar(_), _) => "Esc close",
-                (_, Focus::Tree) => "/ search | m map | n new | q quit",
-                (_, Focus::Editor) => "^S save | ^Z undo | ^K cut line | Esc back",
+                // The chords, not the bare letters: they are the ones that
+                // work from either pane, so a hint that names them is true
+                // wherever it is read. Written out in full rather than as
+                // `^S` — this line is the first place most people meet these
+                // keys, and a caret is a thing you have to already know.
+                (_, Focus::Tree) => "Ctrl+/ search | Ctrl+M map | Ctrl+N new | F1 help",
+                (_, Focus::Editor) => "Ctrl+S save | Ctrl+Z undo | Ctrl+K cut | Esc back",
             };
             let pos = position_readout(app);
             let room = area.width as usize;

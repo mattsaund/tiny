@@ -115,7 +115,7 @@ impl App {
         self.tree.set_show_hidden(self.config.show_hidden);
         self.rebuild_rows();
         self.mode = Mode::Settings(Settings::default());
-        self.status = "settings reset — ^S to write it".into();
+        self.status = "settings reset — Ctrl+S to write it".into();
     }
 
     /// Put every key back, keeping the settings.
@@ -123,7 +123,7 @@ impl App {
         self.config.keys.clear();
         self.apply_config();
         self.mode = Mode::Keybinds(Keybinds::default());
-        self.status = "keybinds reset — ^S to write it".into();
+        self.status = "keybinds reset — Ctrl+S to write it".into();
     }
 
     /// Carry out a confirmed project-wide replace.

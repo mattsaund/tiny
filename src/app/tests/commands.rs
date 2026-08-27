@@ -142,7 +142,7 @@ fn help_opens_and_any_key_closes_it() {
     let out = screen(&mut app, 90, 70).join("\n");
     assert!(out.contains("Keys and commands"), "{out}");
     assert!(out.contains("search"), "{out}");
-    assert!(out.contains("open the map"), "{out}");
+    assert!(out.contains("the project map"), "{out}");
     app.on_key(ch('x'));
     assert!(matches!(app.mode, Mode::Normal));
 }
@@ -188,10 +188,11 @@ fn the_help_window_shows_a_rebinding_not_the_shipped_key() {
 #[test]
 fn an_unbound_action_leaves_the_help_row_empty_rather_than_lying() {
     let (_td, mut app) = fixture();
-    // Binding n to something else takes it off tree.new entirely.
-    keybinds_on(&mut app, Action::TreeDown);
+    // Ctrl+N is taken off `new` by giving it to another action in the same
+    // context — `new` is what the help row for making a file reads.
+    keybinds_on(&mut app, Action::Rename);
     app.on_key(k(KeyCode::Enter));
-    app.on_key(ch('n'));
+    app.on_key(ctrl('n'));
     app.on_key(k(KeyCode::Esc));
     app.on_key(k(KeyCode::Esc));
 
@@ -202,7 +203,7 @@ fn an_unbound_action_leaves_the_help_row_empty_rather_than_lying() {
         .find(|l| l.contains("dot makes a file"))
         .unwrap_or_else(|| panic!("{out}"));
     assert!(
-        !row.contains(" n "),
+        !row.contains("ctrl+n"),
         "nothing reaches it, so nothing is offered:\n{row}"
     );
 }
@@ -246,7 +247,7 @@ fn help_scrolls_on_a_terminal_too_short_for_it() {
     let (_td, mut app) = fixture();
     app.on_key(ch('?'));
     let top = screen(&mut app, 80, 16).join("\n");
-    assert!(top.contains("TREE"), "starts at the top:\n{top}");
+    assert!(top.contains("MOVING"), "starts at the top:\n{top}");
 
     for _ in 0..12 {
         app.on_key(k(KeyCode::Down));
@@ -266,8 +267,8 @@ fn help_scrolls_on_a_terminal_too_short_for_it() {
         "the last entry is reachable:\n{bottom}"
     );
     assert!(
-        !bottom.contains("move the cursor"),
-        "and the top has scrolled off"
+        !bottom.contains("MOVING"),
+        "and the top has scrolled off:\n{bottom}"
     );
 
     // Anything that is not a scroll key still puts it away.
@@ -336,6 +337,10 @@ fn arrow(c: char) -> Option<KeyCode> {
 
 /// Not an assertion — a way to look at the panes.
 /// `TINY_SHOT=/path cargo test screenshot -- --ignored --nocapture`
+///
+/// `TINY_SHOT_KEYS` sentinels: `^x` Ctrl+X, `^→` Ctrl+Right, `^⇧→`
+/// Ctrl+Shift+Right, `⇧→` Shift+Right, `~x` Alt+X, `⏎` Enter, `⎋` Esc, `\t`
+/// Tab, and the four arrows themselves.
 #[test]
 #[ignore]
 fn screenshot() {
@@ -355,9 +360,24 @@ fn screenshot() {
             match c {
                 // `^b` sends Ctrl+B, so a shot can be taken of anything a
                 // key can reach.
-                '^' => {
-                    if let Some(n) = chars.next() {
-                        app.on_key(ctrl(n));
+                // `^x` is Ctrl+X, and `^` before an arrow — or before a
+                // `⇧` and an arrow — is that chord with the modifiers on it.
+                '^' => match chars.next() {
+                    Some('⇧') => {
+                        if let Some(code) = chars.next().and_then(arrow) {
+                            app.on_key(ctrl_shift(code));
+                        }
+                    }
+                    Some(c) if arrow(c).is_some() => {
+                        app.on_key(ctrl_key(arrow(c).expect("just checked")))
+                    }
+                    Some(c) => app.on_key(ctrl(c)),
+                    None => {}
+                },
+                // `~x` is Alt+X, so a shot can be taken of the pane widths.
+                '~' => {
+                    if let Some(c) = chars.next() {
+                        app.on_key(alt(KeyCode::Char(c)));
                     }
                 }
                 '\n' | '⏎' => app.on_key(k(KeyCode::Enter)),

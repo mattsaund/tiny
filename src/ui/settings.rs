@@ -57,7 +57,7 @@ pub(super) fn draw_keybinds(f: &mut Frame, app: &App, area: Rect, kb: &Keybinds)
             if kb.capturing {
                 " press the key you want it on "
             } else {
-                " Enter change · Delete restore · ^S write tiny.conf · Esc back "
+                " Enter change · Delete restore · Ctrl+S write tiny.conf · Esc back "
             },
             pal.dim,
         )));
@@ -159,7 +159,7 @@ pub(super) fn draw_settings(f: &mut Frame, app: &App, area: Rect, s: &Settings) 
             pal.text.add_modifier(Modifier::BOLD),
         )))
         .title_bottom(Line::from(Span::styled(
-            " Enter change · ^S write tiny.conf · Esc close ",
+            " Enter change · Ctrl+S write tiny.conf · Esc close ",
             pal.dim,
         )));
     let inner = block.inner(popup);

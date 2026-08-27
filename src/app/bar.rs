@@ -174,13 +174,23 @@ impl App {
     /// `as_command` only decides what is already typed into it: the sigil, or
     /// nothing. After that the bar decides for itself, keystroke by keystroke,
     /// which of the two things it is.
+    ///
+    /// The file being edited is remembered as the bar opens, so a search
+    /// started from inside a file can put that file's hits at the top. Only
+    /// when the editor actually has the keyboard: hovering a file in the tree
+    /// is looking around the project, and a search from there has no reason to
+    /// favour whichever row the cursor happened to be resting on.
     pub(super) fn open_bar(&mut self, as_command: bool) {
         let input = if as_command {
             COMMAND_SIGIL.to_string()
         } else {
             String::new()
         };
-        self.mode = Mode::Bar(Bar::new(input));
+        let home = match (&self.preview, self.focus) {
+            (Preview::Buffer { path, .. }, Focus::Editor) => Some(path.clone()),
+            _ => None,
+        };
+        self.mode = Mode::Bar(Bar::new(input, home));
         self.status = if as_command {
             "command — Tab completes | Enter runs | Esc closes".into()
         } else {
@@ -317,9 +327,23 @@ impl App {
 
     /// Re-run the query from scratch and reset the result cursor. Called on
     /// every keystroke — see `search`'s module docs for why that is fine.
+    ///
+    /// A search started from inside a file lists that file's hits first. When
+    /// you search while writing, the word you are looking for is usually one
+    /// you just wrote: the other occurrence of the name you are renaming, the
+    /// heading you are about to link to. Those hits were already in the list —
+    /// somewhere down it, in whatever order the directory walk happened to
+    /// reach them — and this is only about which end they come out of.
+    ///
+    /// A stable sort on one boolean, so everything else keeps the order
+    /// [`search::search`] gave it: names before contents, directory order
+    /// within each.
     fn run_search(&mut self, b: &mut Bar) {
         let opts = self.search_opts();
         b.results = search::search(self.tree.root_path(), &b.input, &opts);
+        if let Some(home) = &b.home {
+            b.results.sort_by_key(|hit| &hit.path != home);
+        }
         b.searched = !b.input.trim().is_empty();
         b.selected = 0;
     }

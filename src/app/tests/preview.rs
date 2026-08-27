@@ -166,7 +166,7 @@ fn ctrl_and_an_arrow_skips_five_entries_in_the_tree() {
 }
 
 #[test]
-fn shift_and_an_arrow_jumps_to_an_edge_of_the_text() {
+fn alt_and_an_arrow_jumps_to_an_edge_of_the_text() {
     let (td, mut app) = fixture();
     fs::write(
         td.path().join("notes/edges.md"),
@@ -178,16 +178,16 @@ fn shift_and_an_arrow_jumps_to_an_edge_of_the_text() {
     app.on_key(k(KeyCode::Enter));
     app.on_key(k(KeyCode::Down));
 
-    app.on_key(shift(KeyCode::Right));
+    app.on_key(alt(KeyCode::Right));
     let ed = app.active_buffer().unwrap();
     assert_eq!((ed.cursor_line, ed.cursor_col), (1, 6), "end of the line");
-    app.on_key(shift(KeyCode::Left));
+    app.on_key(alt(KeyCode::Left));
     let ed = app.active_buffer().unwrap();
     assert_eq!((ed.cursor_line, ed.cursor_col), (1, 0), "start of it");
 
-    app.on_key(shift(KeyCode::Down));
+    app.on_key(alt(KeyCode::Down));
     assert_eq!(app.active_buffer().unwrap().cursor_line, 3, "last line");
-    app.on_key(shift(KeyCode::Up));
+    app.on_key(alt(KeyCode::Up));
     assert_eq!(app.active_buffer().unwrap().cursor_line, 0, "first line");
     assert_eq!(app.focus, Focus::Editor, "none of that leaves the file");
 }

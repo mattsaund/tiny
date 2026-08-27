@@ -13,8 +13,9 @@
 //! draw                                        (here)
 //!  ├─ draw_bar / draw_status                   bar.rs
 //!  ├─ draw_map            the whole screen     map.rs   → ink.rs
+//!  ├─ draw_results       dropped down from the top     tree.rs
 //!  └─ two panes, side decided by config
-//!      ├─ draw_tree  or  draw_results          tree.rs
+//!      ├─ draw_tree                             tree.rs
 //!      └─ draw_preview                         preview.rs
 //!           ├─ draw_reading   rendered, no cursor in it
 //!           ├─ draw_editor    the file with the real cursor   editor.rs
@@ -75,7 +76,7 @@ use self::help::draw_help;
 use self::map::draw_map;
 use self::preview::draw_preview;
 use self::settings::{draw_keybinds, draw_settings};
-use self::tree::{draw_results, draw_tree};
+use self::tree::{draw_results, draw_tree, results_height};
 
 use crate::app::{App, Mode};
 use crate::config::{Position, Side};
@@ -138,16 +139,31 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         return;
     }
 
-    let searching = bar_open && matches!(&app.mode, Mode::Bar(b) if !b.is_command());
+    // Results drop down from the top of the panes, pushing them down rather
+    // than covering them. What you are searching *from* stays on screen — the
+    // browser beside you, the file behind the list with the match marked in
+    // it — so a search is laid over your place in the project rather than
+    // standing in for it.
+    let main = match &app.mode {
+        Mode::Bar(b) if !b.is_command() => {
+            let b = b.clone();
+            let h = results_height(main, b.results.len());
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(h), Constraint::Min(3)])
+                .split(main);
+            draw_results(f, app, rows[0], &b);
+            rows[1]
+        }
+        _ => main,
+    };
 
-    // The side pane is where search results are listed, so a search brings it
-    // back for as long as the bar is open — hiding the tree must not take the
-    // results with it.
-    let (side_area, preview_area) = if app.tree_hidden && !searching {
+    // The browser keeps whatever share of the width it was last given —
+    // `Ctrl+Shift+Left` and `Ctrl+Shift+Right` move it, and `Ctrl+Space` takes
+    // it away entirely.
+    let (side_area, preview_area) = if app.tree_hidden {
         (None, main)
     } else {
-        // Results take the tree's place at exactly the tree's width, so the
-        // screen does not lurch sideways the moment you start typing.
         let side_w = ((main.width as f32) * app.config.tree_width).round() as u16;
         let side_w = side_w.clamp(14, main.width.saturating_sub(12).max(14));
 
@@ -166,19 +182,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
 
     // Tell `app` where the tree ended up, so a mouse wheel can work out which
-    // pane it is over. `None` while it is folded away or replaced by results.
-    app.last_tree_cols = side_area
-        .filter(|_| !searching)
-        .map(|a| (a.x, a.x + a.width));
+    // pane it is over. `None` while it is folded away.
+    app.last_tree_cols = side_area.map(|a| (a.x, a.x + a.width));
 
     if let Some(side_area) = side_area {
-        match &app.mode {
-            Mode::Bar(b) if !b.is_command() => {
-                let b = b.clone();
-                draw_results(f, app, side_area, &b);
-            }
-            _ => draw_tree(f, app, side_area),
-        }
+        draw_tree(f, app, side_area);
     }
     draw_preview(f, app, preview_area);
 

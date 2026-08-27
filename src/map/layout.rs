@@ -94,14 +94,17 @@ pub struct Folder {
     pub files: usize,
 }
 
-/// One drawn connection between two files, in whichever directions it runs.
-/// `a` is always the lower node index, so a pair has exactly one entry.
+/// One drawn connection between two files. `a` is always the lower node index,
+/// so a pair has exactly one entry however many edges run between them and
+/// whichever way round they go.
+///
+/// The direction is deliberately not here. The picture draws a plain line
+/// either way — see `ui::ink`'s routing for why — and the detail strip reads
+/// direction off the edges themselves, where it is still exact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Link {
     pub a: usize,
     pub b: usize,
-    pub a_to_b: bool,
-    pub b_to_a: bool,
 }
 
 /// Everything `ui` needs to draw one frame of the map.
@@ -386,18 +389,8 @@ impl ProjectMap {
                 continue;
             }
             let (a, b) = (e.from.min(e.to), e.from.max(e.to));
-            let forward = e.from == a;
-            match out.iter_mut().find(|l| l.a == a && l.b == b) {
-                Some(l) => {
-                    l.a_to_b |= forward;
-                    l.b_to_a |= !forward;
-                }
-                None => out.push(Link {
-                    a,
-                    b,
-                    a_to_b: forward,
-                    b_to_a: !forward,
-                }),
+            if !out.iter().any(|l| l.a == a && l.b == b) {
+                out.push(Link { a, b });
             }
         }
         out

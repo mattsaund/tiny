@@ -34,7 +34,7 @@ fn linked_fixture() -> (tempfile::TempDir, App) {
 fn the_bottom_bar_says_only_what_is_not_already_on_screen() {
     let (_td, mut app) = fixture();
     let bar = screen(&mut app, 96, 14).pop().expect("a status line");
-    assert!(bar.contains("| m map |"), "dividers are pipes:\n{bar}");
+    assert!(bar.contains("| Ctrl+M map |"), "dividers are pipes:\n{bar}");
     assert!(!bar.contains('·'), "{bar}");
     assert!(
         !bar.contains("? help"),
@@ -69,9 +69,12 @@ fn the_map_joins_linked_files_with_a_line() {
     app.on_key(ch('m'));
     let out = screen(&mut app, 100, 34).join("\n");
     assert!(out.contains('─') || out.contains('│'), "lines:\n{out}");
+    // Only the arrow glyphs: the ascii set is `< > ^ v`, which are letters
+    // anywhere else on the screen. That the routing writes no glyph at all,
+    // in either set, is `ink`'s own test.
     assert!(
-        ['◂', '▸', '▴', '▾'].iter().any(|a| out.contains(*a)),
-        "an arrowhead says which way it runs:\n{out}"
+        !['◂', '▸', '▴', '▾'].iter().any(|a| out.contains(*a)),
+        "a connection is a plain line — which way it runs is in the strip below:\n{out}"
     );
 }
 
@@ -100,17 +103,16 @@ fn the_map_draws_the_cursors_connections_and_nobody_elses() {
     command(&mut app, "reload");
     app.on_key(ch('m'));
 
-    let arrows = |app: &mut App| -> usize {
+    // Every cell a line can occupy. The same boxes are drawn either way, so
+    // the difference between two frames is exactly the connections in them.
+    let ink = |app: &mut App| -> usize {
         screen(app, 100, 34)
             .join("")
             .chars()
-            .filter(|c| "◂▸▴▾".contains(*c))
+            .filter(|c| "─│┌┐└┘├┤┬┴┼".contains(*c))
             .count()
     };
-    assert!(
-        arrows(&mut app) > 0,
-        "the map opens on a connected file, so it opens with lines"
-    );
+    let connected = ink(&mut app);
 
     // Walk to the lonely file. It is under its own heading at the end.
     for _ in 0..12 {
@@ -134,10 +136,9 @@ fn the_map_draws_the_cursors_connections_and_nobody_elses() {
         out.contains("│lonely.md│"),
         "it is still drawn, under its own heading:\n{out}"
     );
-    assert_eq!(
-        arrows(&mut app),
-        0,
-        "and nothing is joined to it, so nothing is drawn:\n{out}"
+    assert!(
+        ink(&mut app) < connected,
+        "and nothing is joined to it, so its lines are gone:\n{out}"
     );
 }
 

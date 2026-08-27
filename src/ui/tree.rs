@@ -1,10 +1,10 @@
-//! The left pane: the project tree, or the results that replace it.
+//! The browser pane, and the result list that drops down in front of it.
 //!
-//! Two drawings of the same rectangle. Normally it is the tree, a window of
-//! rows around the cursor; while the bar holds a search it is the hit list
-//! instead, and the tree is not drawn at all. They share a shape — a scrolling
-//! list with one highlighted row — so they share [`super::parts::keep_visible`]
-//! and [`super::parts::highlight_row`] and differ only in what a row says.
+//! Two scrolling lists with one highlighted row each, which is why they share
+//! [`super::parts::keep_visible`] and [`super::parts::highlight_row`] and
+//! differ only in what a row says. They no longer share a rectangle: the tree
+//! keeps its pane and the results drop down above both panes, pushing them
+//! down, so a search never costs you sight of where you are.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -100,11 +100,40 @@ pub(super) fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-/// Search results, drawn in the tree's place while the search bar is open.
+/// The most of the panes a dropped-down result list is allowed to take.
 ///
-/// Replacing the tree rather than opening a third pane is why `draw` widens
-/// the side pane during a search: result lines carry a path, a line number and
-/// a snippet, and need considerably more room than a filename.
+/// A third, so what you are searching *from* stays on screen. The list is a
+/// way of aiming at a place in the project; one that fills the window is one
+/// you are reading instead.
+const RESULTS_SHARE: u16 = 3;
+
+/// How tall the result list wants to be inside `area`.
+///
+/// As tall as the list itself, up to that share of the window, and never so
+/// short there is no room for a row between the borders. Lives here rather
+/// than inside [`draw_results`] because the answer decides the layout, and the
+/// layout has to be settled before anything is drawn into it.
+pub(super) fn results_height(area: Rect, hits: usize) -> u16 {
+    let wanted = hits.max(1).saturating_add(2).min(u16::MAX as usize) as u16;
+    wanted
+        .min((area.height / RESULTS_SHARE).max(3))
+        .min(area.height)
+}
+
+/// Search results, dropped down from the top of the panes.
+///
+/// A window of its own rather than a pane in place of the browser: the tree
+/// stays beside you and the file keeps showing the highlighted hit with the
+/// match marked in it, so stepping through results moves you around the
+/// project without taking the project off screen.
+///
+/// It pushes the panes down instead of covering them, which costs a few rows
+/// and buys their titles and their top lines — a list that hides the thing it
+/// is pointing at is answering the wrong half of the question.
+///
+/// Full width for the same reason it used to want the tree's place: a result
+/// line carries a path, a line number and a snippet, and there is no
+/// filename-width version of that worth reading.
 ///
 /// Note that scrolling is computed into a local, not written back to `b` — the
 /// bar is borrowed immutably here, and the offset is cheap to recompute each

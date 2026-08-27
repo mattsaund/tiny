@@ -37,82 +37,137 @@ enum KeyRow {
     /// a rebinding shows here as well as in the keybinds window. Several
     /// actions on one row read as one idea — "move the cursor" is up and down.
     Bound(&'static [Action], &'static str),
+    /// Like [`KeyRow::Bound`], but the keys are folded together rather than
+    /// listed one action at a time — see [`merge`]. For the rows where four
+    /// actions are one gesture, and writing `ctrl+` four times says nothing
+    /// the first one did not.
+    Merged(&'static [Action], &'static str),
     /// A row whose keys cannot be rebound, and so cannot change.
     Fixed(&'static str, &'static str),
 }
 
-use KeyRow::{Blank, Bound, Fixed, Heading};
+use KeyRow::{Blank, Bound, Fixed, Heading, Merged};
 
+/// The keys half of `?`, in the order someone learning tiny needs them.
+///
+/// Moving first, because that is what you do before anything else; then the
+/// things you do to a file; then the windows that open over the top; then how
+/// to leave. Every command in the second half is a chord, which is the point
+/// of them — see [`crate::config::keys::Context::Global`].
 const KEYS: &[KeyRow] = &[
-    Heading("TREE"),
-    Bound(&[Action::TreeUp, Action::TreeDown], "move"),
-    Bound(
-        &[Action::TreeJumpUp, Action::TreeJumpDown],
-        "five at a time",
+    Heading("MOVING"),
+    Merged(
+        &[
+            Action::TreeUp,
+            Action::TreeDown,
+            Action::TreeOut,
+            Action::TreeInto,
+        ],
+        "move",
     ),
-    Bound(&[Action::TreeOpen], "open or close"),
-    Bound(&[Action::TreeInto, Action::TreeOut], "in | out"),
-    // Kept apart from `TreeLast`: together their key lists are wide enough to
-    // stretch the whole column, and width is what the window is short of.
-    Bound(&[Action::TreeFirst], "top"),
-    Bound(&[Action::TreeLast], "bottom"),
-    Bound(&[Action::TreeNew], "new — dot makes a file"),
-    Bound(&[Action::TreeRename], "rename"),
-    Bound(&[Action::TreeCopy, Action::TreePaste], "copy | paste"),
-    Bound(&[Action::Save], "save — a folder saves all"),
-    Bound(&[Action::TreeDelete], "delete"),
-    Bound(
-        &[Action::TreeHidden, Action::TreeRefresh],
-        "dotfiles | re-read",
+    Merged(
+        &[
+            Action::TreeJumpUp,
+            Action::TreeJumpDown,
+            Action::EditorWordLeft,
+            Action::EditorWordRight,
+        ],
+        "five at a time, or a word",
     ),
-    Bound(&[Action::ToggleTreePane], "fold the tree away"),
+    Merged(
+        &[
+            Action::TreeFirst,
+            Action::TreeLast,
+            Action::EditorLineStart,
+            Action::EditorLineEnd,
+        ],
+        "to the ends",
+    ),
+    Bound(&[Action::TreeOpen], "open or close, or edit"),
+    Bound(&[Action::TreePreview], "hand the keyboard over"),
+    Bound(&[Action::EditorBack], "back — or quit, from the browser"),
     Blank,
-    Heading("PROJECT MAP"),
-    Bound(&[Action::TreeMap], "open the map"),
-    Bound(&[Action::MapUp, Action::MapDown], "nearest, up | down"),
-    Bound(
-        &[Action::MapLeft, Action::MapRight],
-        "nearest, left | right",
-    ),
-    Bound(&[Action::MapOpen], "open it"),
-    Bound(
-        &[Action::MapWikilinks, Action::MapLinks, Action::MapCalls],
-        "wikilinks | links | calls",
-    ),
-    Bound(&[Action::MapReload], "rebuild"),
+    Heading("FILES"),
+    Bound(&[Action::New], "new — a dot makes a file"),
+    Bound(&[Action::Rename], "rename"),
+    Bound(&[Action::Delete], "delete"),
+    Bound(&[Action::Save], "save — on a folder, all of it"),
+    Bound(&[Action::Copy, Action::Paste], "copy | paste"),
+    Bound(&[Action::Hidden], "show dotfiles"),
+    Bound(&[Action::Refresh], "re-read from disk"),
     Blank,
-    Heading("THE BAR"),
-    Bound(&[Action::TreeBar], "search"),
-    Fixed("*", "star first = a command"),
-    Bound(&[Action::Bar, Action::CommandBar], "same, from the editor"),
-    Bound(&[Action::TreeSettings], "settings and keybinds"),
+    Heading("WINDOWS"),
+    Bound(&[Action::Bar], "search — star first, a command"),
+    Bound(&[Action::Map], "the project map"),
+    Bound(&[Action::Settings], "settings and keybinds"),
+    Bound(&[Action::Help], "this window"),
     Blank,
-    Heading("PREVIEW"),
-    Bound(&[Action::ViewUp, Action::ViewDown], "scroll a picture"),
+    Heading("THE BROWSER"),
+    // Listed rather than merged: two single-character keys folded under one
+    // modifier come out as `alt+- =`, which reads as one key and a stray.
+    Bound(
+        &[Action::PaneNarrower, Action::PaneWider],
+        "narrower | wider",
+    ),
+    Bound(&[Action::ToggleTreePane], "fold it away, and back"),
     Fixed("wheel", "one line a notch"),
     Blank,
-    Heading("EDITOR"),
-    Bound(&[Action::EditorBack], "back to the tree"),
-    Bound(&[Action::Save], "save"),
+    Heading("EDITING"),
     Bound(&[Action::EditorUndo, Action::EditorRedo], "undo | redo"),
     Bound(&[Action::EditorDeleteLine], "delete the line"),
     Bound(
-        &[Action::EditorWordLeft, Action::EditorWordRight],
-        "by word",
+        &[Action::EditorDocStart, Action::EditorDocEnd],
+        "first | last line",
     ),
-    // One action per row: paired, their key lists are wide enough to set the
-    // field for the whole table, and width is what this window is short of.
-    Bound(
-        &[Action::EditorJumpUp, Action::EditorJumpDown],
-        "five lines",
-    ),
-    Bound(&[Action::EditorLineStart], "start of the line"),
-    Bound(&[Action::EditorLineEnd], "end of the line"),
-    Bound(&[Action::EditorDocStart], "first line"),
-    Bound(&[Action::EditorDocEnd], "last line"),
     Blank,
-    Bound(&[Action::TreeQuit, Action::Quit], "quit"),
+    Bound(&[Action::Quit], "quit"),
 ];
+
+/// The keys of several actions, folded into one field.
+///
+/// Two rules, and both are about the same thing: four keys that are one
+/// gesture should read as one gesture. A modifier every key shares is written
+/// once at the front, so the row for "five at a time" says `ctrl+up down left
+/// right` rather than repeating `ctrl+` four times. And named keys come before
+/// letters, so the arrows arrive as a group and the `i k j l` that stand in for
+/// them arrive as another.
+///
+/// Everything is read out of the live keymap, so a rebinding shows here. A
+/// rebinding that breaks the shared modifier simply falls back to a plain list,
+/// which is longer but never wrong.
+fn merge(keymap: &Keymap, actions: &[Action]) -> String {
+    // Group by the modifier prefix — everything up to and including the last
+    // `+` — keeping the order the groups first appeared in.
+    let mut groups: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+    for spec in actions.iter().flat_map(|a| keymap.keys(*a)) {
+        let written = spec.to_string();
+        let cut = written.rfind('+').map_or(0, |i| i + 1);
+        let (mods, base) = written.split_at(cut);
+        let slot = match groups.iter().position(|(m, ..)| m == mods) {
+            Some(i) => &mut groups[i],
+            None => {
+                groups.push((mods.to_string(), Vec::new(), Vec::new()));
+                groups.last_mut().expect("just pushed")
+            }
+        };
+        // A single character is a letter standing in for an arrow; anything
+        // longer is a named key. They read better apart than interleaved.
+        if base.chars().count() == 1 {
+            slot.2.push(base.to_string());
+        } else {
+            slot.1.push(base.to_string());
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    for (mods, named, letters) in groups {
+        for half in [named, letters] {
+            if !half.is_empty() {
+                out.push(format!("{mods}{}", half.join(" ")));
+            }
+        }
+    }
+    out.join("  ")
+}
 
 /// The keys half of `?`, resolved against what the keys actually do now.
 fn key_rows(keymap: &Keymap) -> Vec<(String, String)> {
@@ -121,6 +176,7 @@ fn key_rows(keymap: &Keymap) -> Vec<(String, String)> {
             Heading(title) => (String::new(), (*title).to_string()),
             Blank => (String::new(), String::new()),
             Fixed(keys, desc) => ((*keys).to_string(), (*desc).to_string()),
+            Merged(actions, desc) => (merge(keymap, actions), (*desc).to_string()),
             Bound(actions, desc) => {
                 // An action bound to nothing contributes nothing, rather than
                 // an empty gap in the middle of the row.

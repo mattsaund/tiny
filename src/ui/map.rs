@@ -17,6 +17,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use super::ink::{Glyphs, Ink, InkStyle, route};
 
@@ -43,8 +44,15 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     let pal = app.palette;
     let markers = app.config.markers;
 
-    // The picture, then a strip describing whatever the cursor is on.
-    let detail_h = if area.height > 14 { 6 } else { 0 };
+    // The picture, then a strip describing whatever the cursor is on. It is
+    // the only thing on the map that says which way a connection runs, so it
+    // is the last thing to go: on a short window it loses the defines line and
+    // the toggles rather than the `in:` and `out:` lists.
+    let detail_h = match area.height {
+        0..=8 => 0,
+        9..=14 => 4,
+        _ => 6,
+    };
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(detail_h)])
@@ -126,10 +134,10 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     // the summary still counts them all.
     for l in view.links() {
         // Orient every line out of the selected file, so they can share one
-        // trunk. `to_them` and `to_us` then say which ends get an arrowhead.
-        let (them, to_them, to_us) = match (l.a == selected, l.b == selected) {
-            (true, _) => (l.b, l.a_to_b, l.b_to_a),
-            (_, true) => (l.a, l.b_to_a, l.a_to_b),
+        // trunk.
+        let them = match (l.a == selected, l.b == selected) {
+            (true, _) => l.b,
+            (_, true) => l.a,
             _ => continue,
         };
         let (Some(&us), Some(&them)) = (slot_of.get(&selected), slot_of.get(&them)) else {
@@ -139,10 +147,7 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
             &mut ink,
             &placement.boxes[us],
             &placement.boxes[them],
-            &glyphs,
             placement.channels,
-            to_them,
-            to_us,
         );
     }
 
@@ -199,8 +204,18 @@ fn kind_word(kind: EdgeKind) -> &'static str {
     }
 }
 
+/// The width of the `  out: 12  ` label the connection lists hang off, and of
+/// the `+n more` that ends one that ran out of room. Both are counted against
+/// the row's budget before a single name goes into it.
+const LABEL_WIDTH: usize = 10;
+const MORE_WIDTH: usize = 10;
+
 /// The strip under the map: what the cursor is on, what it connects to, and
 /// which edge kinds are switched on.
+///
+/// This is where direction lives. The picture draws a plain line between two
+/// files and says nothing about which way it runs — see [`super::ink::route`]
+/// — so `out:` and `in:` are the answer, in words, with the files named.
 fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
     let pal = app.palette;
     let Some(node) = view.selected_node() else {
@@ -228,28 +243,49 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
         })
         .collect();
 
+    // Every file on one side of the cursor, named, filling the row and then
+    // stopping. A count on its own says how connected a file is; the names are
+    // what say *what to*, which is the question you opened the map with.
+    //
+    // A budget rather than a fixed few, because the strip is as wide as the
+    // window and how many names fit is a property of the window, not a number
+    // worth writing down. Anything that does not fit is counted instead.
     let summarise = |edges: &[&crate::map::graph::Edge], outgoing: bool| {
         if edges.is_empty() {
             return vec![Span::styled("none", pal.dim)];
         }
-        let mut spans = Vec::new();
-        for e in edges.iter().take(4) {
+        let mut spans: Vec<Span> = Vec::new();
+        let mut used = LABEL_WIDTH;
+        let mut shown = 0;
+        for e in edges {
             let other = if outgoing { e.to } else { e.from };
-            spans.push(Span::styled(view.graph.nodes[other].name.clone(), pal.text));
+            let name = view.graph.nodes[other].name.clone();
             // The symbol is the point of a call edge. For an import or a link
             // the label just repeats the file name, so it is left out.
-            if e.kind == EdgeKind::Call {
-                let times = if e.count > 1 {
-                    format!(":{} x{}", e.label, e.count)
-                } else {
-                    format!(":{}", e.label)
-                };
-                spans.push(Span::styled(times, pal.dim));
+            let detail = match (e.kind, e.count) {
+                (EdgeKind::Call, 1) => format!(":{}", e.label),
+                (EdgeKind::Call, n) => format!(":{} x{n}", e.label),
+                _ => String::new(),
+            };
+            // Room for this name, and for the `+n more` that would replace it
+            // if it were the last thing to fit.
+            let want = name.width() + detail.width() + 1;
+            if shown > 0 && used + want + MORE_WIDTH > area.width as usize {
+                break;
+            }
+            used += want;
+            shown += 1;
+            spans.push(Span::styled(name, pal.text));
+            if !detail.is_empty() {
+                spans.push(Span::styled(detail, pal.dim));
             }
             spans.push(Span::raw(" "));
         }
-        if edges.len() > 4 {
-            spans.push(Span::styled(format!("+{} more", edges.len() - 4), pal.dim));
+        if shown < edges.len() {
+            spans.push(Span::styled(
+                format!("+{} more", edges.len() - shown),
+                pal.dim,
+            ));
         }
         spans
     };
@@ -261,20 +297,22 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
             Span::styled(format!("  {}", node_word(node.kind)), pal.dim),
         ]),
         Line::from(
-            std::iter::once(Span::styled(format!("  out {:<3} ", out.len()), pal.dim))
+            std::iter::once(Span::styled(format!("  out: {:<3} ", out.len()), pal.dim))
                 .chain(summarise(&out, true))
                 .collect::<Vec<_>>(),
         ),
         Line::from(
             std::iter::once(Span::styled(
-                format!("  in  {:<3} ", incoming.len()),
+                format!("  in:  {:<3} ", incoming.len()),
                 pal.dim,
             ))
             .chain(summarise(&incoming, false))
             .collect::<Vec<_>>(),
         ),
     ];
-    if !node.defines.is_empty() {
+    // What is left is filled in order of how much it earns its row, because a
+    // short window keeps only the first few lines of this.
+    if area.height as usize > lines.len() + 1 && !node.defines.is_empty() {
         // A file can define dozens of things; the first few say enough.
         let shown = node.defines.len().min(6);
         let mut text = node.defines[..shown].join(", ");

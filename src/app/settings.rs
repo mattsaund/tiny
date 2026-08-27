@@ -53,7 +53,7 @@ impl App {
 
     pub(super) fn open_settings(&mut self) {
         self.mode = Mode::Settings(Settings::default());
-        self.status = "settings — Enter to change, ^S to write tiny.conf, Esc to close".into();
+        self.status = "settings — Enter to change, Ctrl+S to write tiny.conf, Esc to close".into();
     }
 
     /// Keys for the settings overlay.
@@ -222,7 +222,7 @@ impl App {
                 // Back to where this was opened from, not out to the tree.
                 self.mode = Mode::Settings(Settings::default());
                 self.status =
-                    "settings — Enter to change, ^S to write tiny.conf, Esc to close".into();
+                    "settings — Enter to change, Ctrl+S to write tiny.conf, Esc to close".into();
                 return;
             }
             KeyCode::Char('s') if ctrl => self.write_config(),

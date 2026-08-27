@@ -66,16 +66,25 @@ pub struct Bar {
     pub selected: usize,
     /// Set when a search found nothing, so the bar can say so.
     pub searched: bool,
+    /// The file that had the keyboard when the bar was opened, if any. Hits
+    /// in it are listed first — see `App::run_search`.
+    ///
+    /// Remembered here rather than read back off the app, because stepping
+    /// through results changes which file is open: read live, "the file you
+    /// are in" would become the last result you looked at, and the ordering
+    /// would rearrange itself under your cursor as you typed.
+    pub home: Option<PathBuf>,
 }
 
 impl Bar {
-    pub(super) fn new(input: String) -> Self {
+    pub(super) fn new(input: String, home: Option<PathBuf>) -> Self {
         Self {
             cursor: input.chars().count(),
             input,
             results: Vec::new(),
             selected: 0,
             searched: false,
+            home,
         }
     }
 

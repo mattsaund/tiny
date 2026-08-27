@@ -91,20 +91,24 @@ pub(super) fn joined(app: &mut App) -> String {
     screen(app, 90, 24).join("\n")
 }
 
-/// Text drawn reversed, split by pane: the result list on the left, the
-/// preview on the right. Kept apart because both mark their matches, and
-/// counting them together would let either one pass for both.
+/// Text drawn reversed, split by where it is on screen: the dropped-down
+/// result list, and the preview pane below it.
+///
+/// Kept apart because both mark their matches, and counting them together
+/// would let either one pass for both. The list spans the full width and sits
+/// above the panes, so the split is by row, not by column: its bottom border
+/// is the first `└` down the left edge, and everything under that belongs to
+/// the panes. With no search open there is no list, and the whole screen below
+/// the browser's columns is the preview.
 pub(super) fn marked_by_pane(app: &mut App, w: u16, h: u16) -> (String, String) {
+    let searching = matches!(&app.mode, Mode::Bar(b) if !b.is_command());
     let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
     t.draw(|f| crate::ui::draw(f, app)).unwrap();
     let buf = t.backend().buffer().clone();
-    // The side pane is `tree_width` of the window; a couple of columns of
-    // slack covers its border either way.
-    let split = (w as f32 * Config::default().tree_width) as u16 + 2;
-    let read = |from: u16, to: u16| -> String {
+    let read = |rows: std::ops::Range<u16>, cols: std::ops::Range<u16>| -> String {
         let mut out = String::new();
-        for y in 0..buf.area.height {
-            for x in from..to {
+        for y in rows {
+            for x in cols.clone() {
                 match buf.cell((x, y)) {
                     Some(c) if c.modifier.contains(Modifier::REVERSED) => out.push_str(c.symbol()),
                     _ => {}
@@ -113,7 +117,20 @@ pub(super) fn marked_by_pane(app: &mut App, w: u16, h: u16) -> (String, String) 
         }
         out
     };
-    (read(0, split), read(split, buf.area.width))
+    let split = if searching {
+        (0..buf.area.height)
+            .find(|y| buf.cell((0, *y)).is_some_and(|c| c.symbol() == "└"))
+            .map_or(0, |y| y + 1)
+    } else {
+        0
+    };
+    // The side pane is `tree_width` of the window; a couple of columns of
+    // slack covers its border either way.
+    let panes_split = (w as f32 * Config::default().tree_width) as u16 + 2;
+    (
+        read(0..split, 0..buf.area.width),
+        read(split..buf.area.height, panes_split..buf.area.width),
+    )
 }
 
 /// Just the preview pane's marks.
@@ -150,6 +167,27 @@ pub(super) fn shift(code: KeyCode) -> KeyEvent {
 
 pub(super) fn ctrl(c: char) -> KeyEvent {
     ctrl_key(KeyCode::Char(c))
+}
+
+pub(super) fn ctrl_shift(code: KeyCode) -> KeyEvent {
+    KeyEvent {
+        modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ..k(code)
+    }
+}
+
+pub(super) fn ctrl_alt(code: KeyCode) -> KeyEvent {
+    KeyEvent {
+        modifiers: KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ..k(code)
+    }
+}
+
+pub(super) fn alt(code: KeyCode) -> KeyEvent {
+    KeyEvent {
+        modifiers: KeyModifiers::ALT,
+        ..k(code)
+    }
 }
 
 pub(super) fn ctrl_key(code: KeyCode) -> KeyEvent {

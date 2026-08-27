@@ -17,6 +17,18 @@ use super::mode::{Confirm, ConfirmKind, Focus, Mode};
 use super::parts::display_name;
 use super::preview::Preview;
 
+/// How much of the window one press of the resize keys moves.
+///
+/// A twentieth: ten presses cross the whole range, which is few enough to be
+/// worth holding the key down for and many enough to land where you meant.
+const TREE_WIDTH_STEP: f32 = 0.05;
+
+/// The narrowest and widest the browser goes, matching what `Config::sanitized`
+/// will accept — a pane the keys could reach but the config would clamp back
+/// would be a width that changed by itself on the next restart.
+const TREE_WIDTH_MIN: f32 = 0.10;
+const TREE_WIDTH_MAX: f32 = 0.60;
+
 impl App {
     // ---- actions ----------------------------------------------------------
 
@@ -78,7 +90,7 @@ impl App {
         match &self.preview {
             Preview::Buffer { .. } => {
                 self.focus = Focus::Editor;
-                self.status = "editing — ^S save, Esc back".into();
+                self.status = "editing — Ctrl+S save, Esc back".into();
             }
             Preview::Media { path, .. } => {
                 let path = path.clone();
@@ -136,6 +148,42 @@ impl App {
             self.focus = Focus::Editor;
             self.status = format!("tree hidden — {key} to bring it back");
         }
+    }
+
+    /// One step of `Ctrl+Shift+Left` / `Ctrl+Shift+Right`: a narrower or a
+    /// wider browser, and the file pane takes whatever it gives up.
+    ///
+    /// The two ends of the range meet the fold key rather than stopping dead.
+    /// Narrowing past the minimum folds the browser away, and widening from
+    /// there brings it back — so one pair of keys covers everything from "gone"
+    /// to "most of the window", and you never have to remember a second chord
+    /// to get out of the corner you just walked into.
+    ///
+    /// Live only. The width is a view state like the fold, and writing it to
+    /// `tiny.conf` on every keypress would make a gesture you use while
+    /// reading into a change to your configuration. `*set tree_width 0.4` is
+    /// still there for a width you want to keep.
+    pub(super) fn resize_tree_pane(&mut self, step: i32) {
+        if self.tree_hidden {
+            // Nothing to resize while it is folded away; widening is the
+            // gesture that asks for it back, and narrowing has nowhere to go.
+            if step > 0 {
+                self.toggle_tree_pane();
+            }
+            return;
+        }
+        let want = self.config.tree_width + step as f32 * TREE_WIDTH_STEP;
+        if want < TREE_WIDTH_MIN {
+            // Already as narrow as it goes: the next press is asking for it
+            // gone, which is what the fold key does.
+            self.toggle_tree_pane();
+            return;
+        }
+        self.config.tree_width = want.min(TREE_WIDTH_MAX);
+        self.status = format!(
+            "browser {}% of the window",
+            (self.config.tree_width * 100.0).round()
+        );
     }
 
     /// Put the tree on screen and give it the keyboard. What Esc means from

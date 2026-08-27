@@ -27,6 +27,41 @@
 //! chords in [`Context::Global`] are checked first everywhere, which is why
 //! `Ctrl+S` saves from wherever you are.
 //!
+//! Everything that acts on the project is in `Global`, and every one of those
+//! is a chord. That is not a style choice: in the editor a letter is a letter
+//! being typed, so a control that has to work while you are writing has no
+//! other shape available. The tree keeps a bare-letter binding for the common
+//! ones beside the chord — `n` as well as `Ctrl+N` — because there, nothing is
+//! being typed and the short one costs nothing.
+//!
+//! # Keys a terminal cannot send
+//!
+//! Four of the shipped chords do not exist in a terminal's legacy encoding.
+//! `Ctrl+M` is the byte 0x0D, which is also Enter; `Ctrl+.` and `Ctrl+,` have
+//! no byte at all; `Ctrl+/` arrives as 0x1F, which is indistinguishable from
+//! `Ctrl+7`. `main` asks the terminal for the disambiguating keyboard protocol,
+//! which separates all four, and on a terminal that declines those chords do
+//! not arrive — the tree's bare `m`, `.`, `,` and `/` are what reach those
+//! actions there.
+//!
+//! A key can also fail to arrive because something above the terminal answered
+//! it first. `Ctrl+Shift` with an arrow starts a selection in a good many
+//! emulators, and GNOME and KDE both ship with `Ctrl+Alt` and an arrow bound to
+//! switching workspaces — a desktop shortcut is taken before the terminal sees
+//! the key at all. Between those two and the three arrow sets tiny already
+//! uses, there is no modifier left that an arrow can safely carry, which is why
+//! [`Action::PaneNarrower`] and [`Action::PaneWider`] are not arrows.
+//!
+//! # Alt, not Shift
+//!
+//! `Alt` with an arrow is "all the way": the first entry, the last entry, the
+//! start of the line, the end of the file. It is on `Alt` rather than `Shift`
+//! because `Shift` with an arrow is how terminals have always started a
+//! selection, and a key the terminal may act on itself is a key that works on
+//! some machines and not others. The capital letters `I` and `K` stay as they
+//! are — they are characters, not a modifier, and a terminal cannot mistake
+//! them for anything.
+//!
 //! # Defaults and overrides
 //!
 //! [`Action::defaults`] is the shipped keyboard, written out in one table. The
@@ -75,12 +110,25 @@ impl Context {
 /// [`Action::name`]. The `every_action_is_complete` test checks both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    // Global
+    // Global — every one of these is a chord, so it works while you are
+    // typing into a file as well as from the tree.
     Save,
     Quit,
     Bar,
     CommandBar,
     ToggleTreePane,
+    PaneNarrower,
+    PaneWider,
+    New,
+    Rename,
+    Delete,
+    Copy,
+    Paste,
+    Hidden,
+    Map,
+    Refresh,
+    Help,
+    Settings,
     // Tree
     TreeUp,
     TreeDown,
@@ -97,10 +145,7 @@ pub enum Action {
     TreeNew,
     TreeRename,
     TreeDelete,
-    TreeCopy,
-    TreePaste,
     TreeHidden,
-    TreeRefresh,
     TreeHelp,
     TreeSettings,
     TreeMap,
@@ -169,22 +214,106 @@ const TABLE: &[Row] = &[
         Action::Bar,
         Context::Global,
         "bar",
-        "the search bar",
-        "ctrl+f",
+        "search — type a star first for a command",
+        "ctrl+/",
     ),
     (
         Action::CommandBar,
         Context::Global,
         "command",
-        "the bar, as a command",
+        "the bar, already starred",
         "ctrl+p",
     ),
     (
         Action::ToggleTreePane,
         Context::Global,
         "fold_tree",
-        "fold the tree away, and back",
+        "fold the browser away, and back",
         "ctrl+space",
+    ),
+    (
+        Action::PaneNarrower,
+        Context::Global,
+        "pane_narrower",
+        "a narrower browser",
+        // Not an arrow. Every arrow is spoken for: bare, Ctrl and Alt are all
+        // movement, Ctrl+Shift is how a terminal starts a selection, and
+        // Ctrl+Alt is how GNOME and KDE switch workspaces — a desktop
+        // shortcut is taken before the terminal sees the key at all. Minus
+        // and equals are the shrink-and-grow pair every zoom control uses,
+        // and nothing claims them.
+        "alt+-",
+    ),
+    (
+        Action::PaneWider,
+        Context::Global,
+        "pane_wider",
+        "a wider browser",
+        "alt+=",
+    ),
+    (
+        Action::New,
+        Context::Global,
+        "new",
+        "new file or folder",
+        "ctrl+n",
+    ),
+    (
+        Action::Rename,
+        Context::Global,
+        "rename",
+        "rename",
+        "ctrl+r",
+    ),
+    (
+        Action::Delete,
+        Context::Global,
+        "delete",
+        "delete, after asking",
+        "ctrl+d",
+    ),
+    (Action::Copy, Context::Global, "copy", "copy", "ctrl+c"),
+    (
+        Action::Paste,
+        Context::Global,
+        "paste",
+        "paste into this folder",
+        "ctrl+v",
+    ),
+    (
+        Action::Hidden,
+        Context::Global,
+        "hidden",
+        "show or hide dotfiles",
+        "ctrl+.",
+    ),
+    (
+        Action::Map,
+        Context::Global,
+        "map",
+        "the project map",
+        "ctrl+m",
+    ),
+    (
+        Action::Refresh,
+        Context::Global,
+        "reload",
+        "re-read from disk — also *reload",
+        "f5",
+    ),
+    (
+        Action::Help,
+        Context::Global,
+        "help",
+        "keys and commands",
+        "f1",
+    ),
+    (
+        Action::Settings,
+        Context::Global,
+        "settings",
+        "the settings area",
+        "ctrl+,",
     ),
     (Action::TreeUp, Context::Tree, "tree.up", "move up", "up i"),
     (
@@ -199,14 +328,14 @@ const TABLE: &[Row] = &[
         Context::Tree,
         "tree.first",
         "first entry",
-        "shift+up I",
+        "alt+up I",
     ),
     (
         Action::TreeLast,
         Context::Tree,
         "tree.last",
         "last entry",
-        "shift+down K",
+        "alt+down K",
     ),
     (
         Action::TreeJumpUp,
@@ -286,32 +415,11 @@ const TABLE: &[Row] = &[
         "d",
     ),
     (
-        Action::TreeCopy,
-        Context::Tree,
-        "tree.copy",
-        "copy",
-        "ctrl+c",
-    ),
-    (
-        Action::TreePaste,
-        Context::Tree,
-        "tree.paste",
-        "paste into this folder",
-        "ctrl+v",
-    ),
-    (
         Action::TreeHidden,
         Context::Tree,
         "tree.hidden",
         "show or hide dotfiles",
         ".",
-    ),
-    (
-        Action::TreeRefresh,
-        Context::Tree,
-        "tree.refresh",
-        "re-read from disk — also *reload",
-        "f5",
     ),
     (
         Action::TreeHelp,
@@ -367,14 +475,14 @@ const TABLE: &[Row] = &[
         Context::View,
         "view.top",
         "to the top",
-        "shift+up I",
+        "alt+up I",
     ),
     (
         Action::ViewBottom,
         Context::View,
         "view.bottom",
         "to the bottom",
-        "shift+down K",
+        "alt+down K",
     ),
     (
         Action::ViewPageUp,
@@ -458,35 +566,35 @@ const TABLE: &[Row] = &[
         Context::Editor,
         "editor.line_start",
         "to the start of the line",
-        "shift+left",
+        "alt+left",
     ),
     (
         Action::EditorLineEnd,
         Context::Editor,
         "editor.line_end",
         "to the end of the line",
-        "shift+right",
+        "alt+right",
     ),
     (
         Action::EditorDocStart,
         Context::Editor,
         "editor.start",
         "to the first line",
-        "shift+up",
+        "alt+up",
     ),
     (
         Action::EditorDocEnd,
         Context::Editor,
         "editor.end",
         "to the last line",
-        "shift+down",
+        "alt+down",
     ),
     (
         Action::MapClose,
         Context::Map,
         "map.close",
         "back to the tree",
-        "esc q m",
+        "esc q m ctrl+m",
     ),
     (
         Action::MapOpen,
@@ -769,7 +877,7 @@ mod tests {
     fn a_key_survives_being_written_down_and_read_back() {
         for spec in [
             "ctrl+s",
-            "shift+up",
+            "alt+up",
             "f5",
             "enter",
             "esc",

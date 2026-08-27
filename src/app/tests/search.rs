@@ -8,24 +8,56 @@
 use super::*;
 
 #[test]
-fn the_results_pane_is_the_width_of_the_tree_it_replaces() {
+fn the_results_drop_down_over_both_panes_without_taking_either_away() {
     let (_td, mut app) = fixture();
-    let tree_row = screen(&mut app, 90, 24)
-        .into_iter()
-        .find(|r| r.contains("BROWSER"))
-        .expect("the tree is drawn");
-    let tree_edge = tree_row.find("┐").expect("the pane ends somewhere");
-
     app.on_key(ch('/'));
     type_str(&mut app, "widget");
-    let hits_row = screen(&mut app, 90, 24)
-        .into_iter()
-        .find(|r| r.contains("MATCH"))
+    let rows = screen(&mut app, 90, 24);
+    let out = rows.join("\n");
+
+    let hits = rows
+        .iter()
+        .position(|r| r.contains("MATCH"))
         .expect("the results are drawn");
-    assert_eq!(
-        hits_row.find("┐"),
-        Some(tree_edge),
-        "the screen must not lurch sideways when you start typing"
+    assert!(
+        rows[hits].trim_end().ends_with('┐'),
+        "the list is the width of the window, not of one pane:\n{}",
+        rows[hits]
+    );
+    let browser = rows
+        .iter()
+        .position(|r| r.contains("BROWSER"))
+        .expect("the browser is still there to search from");
+    assert!(
+        browser > hits,
+        "the list comes down from the top, above the panes:\n{out}"
+    );
+    assert!(
+        out.contains("hello widget"),
+        "and the file behind still shows the hit:\n{out}"
+    );
+}
+
+#[test]
+fn a_long_result_list_still_leaves_most_of_the_window_to_the_project() {
+    let (_td, mut app) = fixture();
+    app.on_key(ch('/'));
+    // One letter, so the list is far longer than the window is tall.
+    type_str(&mut app, "e");
+    let rows = screen(&mut app, 90, 24);
+    let Mode::Bar(b) = &app.mode else {
+        panic!("bar closed")
+    };
+    assert!(b.results.len() > 8, "a short list proves nothing");
+
+    let bottom = rows
+        .iter()
+        .position(|r| r.starts_with('└'))
+        .expect("the list is a closed box");
+    assert!(
+        bottom < 9,
+        "it stops at a third of the window:\n{}",
+        rows.join("\n")
     );
 }
 
@@ -316,4 +348,76 @@ fn a_typed_path_cannot_escape_the_project() {
     app.on_key(k(KeyCode::Enter));
     assert!(app.status.contains("escapes"), "{}", app.status);
     assert!(!td.path().parent().unwrap().join("escaped.md").exists());
+}
+
+#[test]
+fn a_search_from_inside_a_file_lists_that_files_hits_first() {
+    let (td, mut app) = fixture();
+    // Three files hold the word. `zzz.md` sorts last in the walk, so if its
+    // hits come out on top it is because the search was started from it and
+    // not because of where it sits on disk.
+    fs::write(td.path().join("aaa.md"), "the marker is here\n").unwrap();
+    fs::write(td.path().join("mmm.md"), "the marker again\n").unwrap();
+    fs::write(td.path().join("zzz.md"), "one marker\nand another marker\n").unwrap();
+    app.on_key(k(KeyCode::F(5)));
+
+    // From the browser, nothing is favoured: the walk's order stands.
+    type_search(&mut app, "marker");
+    let Mode::Bar(b) = &app.mode else {
+        panic!("bar closed")
+    };
+    assert!(
+        !b.results[0].path.ends_with("zzz.md"),
+        "nothing should be favoured from the browser"
+    );
+    let from_tree = b.results.len();
+    app.on_key(k(KeyCode::Esc));
+
+    // From inside zzz.md, its own hits come out on top — and every other hit
+    // is still in the list, further down.
+    select(&mut app, "zzz.md");
+    app.on_key(k(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Editor);
+    // The chord, not the bare slash: in a file a slash is a slash.
+    app.on_key(ctrl('/'));
+    type_str(&mut app, "marker");
+    let Mode::Bar(b) = &app.mode else {
+        panic!("bar closed")
+    };
+    assert_eq!(b.results.len(), from_tree, "nothing was filtered out");
+    assert!(
+        b.results[0].path.ends_with("zzz.md") && b.results[1].path.ends_with("zzz.md"),
+        "both of its hits come first, got {:?}",
+        b.results.iter().map(|h| &h.text).collect::<Vec<_>>()
+    );
+    assert!(
+        b.results[2..].iter().all(|h| !h.path.ends_with("zzz.md")),
+        "and only its hits"
+    );
+}
+
+#[test]
+fn stepping_through_results_does_not_re_order_them_underneath_you() {
+    let (td, mut app) = fixture();
+    fs::write(td.path().join("aaa.md"), "the marker is here\n").unwrap();
+    fs::write(td.path().join("zzz.md"), "one marker\n").unwrap();
+    app.on_key(k(KeyCode::F(5)));
+
+    select(&mut app, "zzz.md");
+    app.on_key(k(KeyCode::Tab));
+    app.on_key(ctrl('/'));
+    type_str(&mut app, "marke");
+    // Down moves onto a hit in another file, which opens that file in the
+    // preview. The next keystroke must still favour the file the search was
+    // started from, not whichever one the cursor has landed on.
+    app.on_key(k(KeyCode::Down));
+    app.on_key(ch('r'));
+    let Mode::Bar(b) = &app.mode else {
+        panic!("bar closed")
+    };
+    assert!(
+        b.results[0].path.ends_with("zzz.md"),
+        "the order should not follow the cursor, got {:?}",
+        b.results.iter().map(|h| &h.text).collect::<Vec<_>>()
+    );
 }

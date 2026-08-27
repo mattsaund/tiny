@@ -49,8 +49,6 @@ pub(super) struct Glyphs {
     /// Indexed by the direction bits a line leaves a cell by.
     lines: [char; 16],
     corners: [char; 4],
-    /// Left, right, up, down — drawn where a line enters the box it points at.
-    arrows: [char; 4],
     horizontal: char,
     vertical: char,
 }
@@ -63,7 +61,6 @@ impl Glyphs {
                     ' ', '│', '│', '│', '─', '┘', '┐', '┤', '─', '└', '┌', '├', '─', '┴', '┬', '┼',
                 ],
                 corners: ['╭', '╮', '╰', '╯'],
-                arrows: ['◂', '▸', '▴', '▾'],
                 horizontal: '─',
                 vertical: '│',
             },
@@ -72,7 +69,6 @@ impl Glyphs {
                     ' ', '|', '|', '|', '-', '+', '+', '+', '-', '+', '+', '+', '-', '+', '+', '+',
                 ],
                 corners: ['+', '+', '+', '+'],
-                arrows: ['<', '>', '^', 'v'],
                 horizontal: '-',
                 vertical: '|',
             },
@@ -129,12 +125,6 @@ impl Ink {
         if let Some(i) = self.at(x, y) {
             self.text[i] = Some((ch, style));
         }
-    }
-
-    /// The arrowhead where a line meets the box it points at, which is the
-    /// whole difference between "calls" and "is called by".
-    pub(super) fn head(&mut self, x: i32, y: i32, arrow: char) {
-        self.put(x, y, arrow, InkStyle::Near);
     }
 
     /// A run of horizontal line. Endpoints only get the bit pointing along the
@@ -239,10 +229,21 @@ impl Ink {
 /// Draw the connection between the file under the cursor and one of its
 /// neighbours.
 ///
-/// `a` is always the selected file, whichever way the connection runs. `to_b`
-/// and `to_a` say which directions exist, and each puts an arrowhead on that
-/// end — a mutual link is one line with a head at both ends rather than two
-/// lines lying on top of each other.
+/// `a` is always the selected file, whichever way the connection runs. A plain
+/// line, with nothing on either end: a mutual connection is the same line as a
+/// one-way one, and which way it runs is a question the strip underneath
+/// answers in words.
+///
+/// # Why no arrowheads
+///
+/// A head is one cell, at the far end of a route that has already turned two
+/// corners, and at that size the difference between `▸` and `◂` is a smudge —
+/// it reads as debris on the end of the line rather than as a direction.
+/// Worse, it is debris in a place where two lines from the same trunk arrive a
+/// row apart, so the eye reads a column of them as texture. What the direction
+/// is actually *for* — which file calls which — is a thing you look up rather
+/// than glance at, and the `in:` and `out:` lists below say it in words that
+/// cannot be mistaken for a corner glyph.
 ///
 /// Orthogonal on purpose. A character grid has no diagonals worth the name —
 /// a diagonal has to be faked out of dots and reads as a smear rather than as
@@ -271,15 +272,7 @@ impl Ink {
 /// The one shape that skips all of this is two neighbours side by side in the
 /// same row, which connect straight across the gap between them. Nothing is in
 /// the way, and it is the plainest line on the map.
-pub(super) fn route(
-    ink: &mut Ink,
-    a: &Placed,
-    b: &Placed,
-    g: &Glyphs,
-    ch: Channels,
-    to_b: bool,
-    to_a: bool,
-) {
+pub(super) fn route(ink: &mut Ink, a: &Placed, b: &Placed, ch: Channels) {
     if a.col == b.col && a.row == b.row {
         return; // the same slot: nothing to draw between them
     }
@@ -293,18 +286,7 @@ pub(super) fn route(
         } else {
             (a.col as i32 - 1, b.right() as i32)
         };
-        let (into_b, into_a) = if right {
-            (g.arrows[1], g.arrows[0])
-        } else {
-            (g.arrows[0], g.arrows[1])
-        };
         ink.hline(y, near, far);
-        if to_b {
-            ink.head(far, y, into_b);
-        }
-        if to_a {
-            ink.head(near, y, into_a);
-        }
         return;
     }
 
@@ -313,34 +295,21 @@ pub(super) fn route(
     let ay = a.middle() as i32;
     let cx = ch.column_by(a.col) as i32;
     let below = b.row > a.row;
-    let (by, into_b) = if below {
-        (b.row as i32 - 1, g.arrows[3])
+    // Above, or level with other boxes in between: either way the line arrives
+    // underneath.
+    let by = if below {
+        b.row as i32 - 1
     } else {
-        // Above, or level with other boxes in between: either way the line
-        // arrives underneath and points up.
-        (b.bottom() as i32, g.arrows[2])
+        b.bottom() as i32
     };
     let bx = b.col as i32 + 1;
 
     ink.hline(ay, a.right() as i32, cx);
     ink.vline(cx, ay, by);
     ink.hline(by, cx, bx);
-    if to_b {
-        ink.head(bx, by, into_b);
-    } else {
-        // Nothing runs this way, but the line still has to reach the box: a
-        // run that stops one cell short of a border, with no arrowhead to
-        // explain why, reads as an unfinished line rather than as a connection
-        // that only goes the other way. One more bit turns the end into a
-        // junction that visibly touches the box.
-        ink.mark(bx, by, if below { DOWN } else { UP });
-    }
-    // Everything arriving at the selected file lands on the same cell, which
-    // is the point: one arrowhead on its edge says "things come in here", and
-    // the strip below names them.
-    if to_a {
-        ink.head(a.right() as i32, ay, g.arrows[0]);
-    }
+    // One more bit at the far end, turning it from a run that stops a cell
+    // short of the border into a junction that visibly touches the box.
+    ink.mark(bx, by, if below { DOWN } else { UP });
 }
 
 #[cfg(test)]
@@ -444,18 +413,15 @@ mod tests {
 
     #[test]
     fn a_route_never_leaves_a_loose_end() {
-        let g = Glyphs::for_markers(Markers::Arrows);
         let ch = channels(14);
         for (a, b, what) in arrangements() {
-            for (to_b, to_a) in [(true, false), (false, true), (true, true)] {
-                let mut ink = Ink::new(90, 40);
-                route(&mut ink, &a, &b, &g, ch, to_b, to_a);
-                assert_no_loose_ends(&ink, &[&a, &b]);
-                assert!(
-                    ink.bits.iter().any(|b| *b != 0),
-                    "{what} should have drawn something"
-                );
-            }
+            let mut ink = Ink::new(90, 40);
+            route(&mut ink, &a, &b, ch);
+            assert_no_loose_ends(&ink, &[&a, &b]);
+            assert!(
+                ink.bits.iter().any(|b| *b != 0),
+                "{what} should have drawn something"
+            );
         }
     }
 
@@ -465,8 +431,7 @@ mod tests {
     /// sitting immediately right of a border runs *into* it and reads as
     /// attached; the same `─` on the row above a box runs *past* it, parallel,
     /// and reads as a line that stopped nearby for no reason. So a horizontal
-    /// end counts on the left and right, a vertical end counts above and
-    /// below, and an arrowhead counts anywhere.
+    /// end counts on the left and right, and a vertical end above and below.
     fn touches(ink: &Ink, p: &Placed) -> bool {
         let (x0, y0) = (p.col as i32, p.row as i32);
         let (x1, y1) = (x0 + p.width as i32 - 1, y0 + Placed::HEIGHT as i32 - 1);
@@ -484,37 +449,33 @@ mod tests {
         // The complement of `a_route_never_leaves_a_loose_end`: that one says
         // the line does not point at nothing, this one says it actually
         // arrives. A run that stops one cell short of a border satisfies the
-        // first and fails the second, and that is exactly what a connection
-        // running only the other way used to look like.
-        let g = Glyphs::for_markers(Markers::Arrows);
+        // first and fails the second, and with nothing drawn on the end of a
+        // line any more, that gap would be all there was to see.
         let ch = channels(14);
         for (a, b, what) in arrangements() {
-            for (to_b, to_a) in [(true, false), (false, true), (true, true)] {
-                let mut ink = Ink::new(90, 40);
-                route(&mut ink, &a, &b, &g, ch, to_b, to_a);
-                assert!(
-                    touches(&ink, &a),
-                    "{what} ({to_b}, {to_a}): the line never reaches the first box:\n{}",
-                    sketch(&ink)
-                );
-                assert!(
-                    touches(&ink, &b),
-                    "{what} ({to_b}, {to_a}): the line never reaches the second box:\n{}",
-                    sketch(&ink)
-                );
-            }
+            let mut ink = Ink::new(90, 40);
+            route(&mut ink, &a, &b, ch);
+            assert!(
+                touches(&ink, &a),
+                "{what}: the line never reaches the first box:\n{}",
+                sketch(&ink)
+            );
+            assert!(
+                touches(&ink, &b),
+                "{what}: the line never reaches the second box:\n{}",
+                sketch(&ink)
+            );
         }
     }
 
     #[test]
     fn a_route_never_passes_through_a_box() {
-        let g = Glyphs::for_markers(Markers::Arrows);
         let ch = channels(14);
         // A third box in the middle of the grid, of the widest kind, standing
         // in for whatever the layout put between the two being joined.
         for (a, b, what) in arrangements() {
             let mut ink = Ink::new(90, 40);
-            route(&mut ink, &a, &b, &g, ch, true, true);
+            route(&mut ink, &a, &b, ch);
             for slot_c in 0..5u16 {
                 for slot_r in 0..3u16 {
                     let other =
@@ -543,21 +504,19 @@ mod tests {
     }
 
     #[test]
-    fn an_arrowhead_lands_on_the_end_that_the_connection_runs_to() {
-        let g = Glyphs::for_markers(Markers::Arrows);
+    fn a_connection_is_a_plain_line_with_nothing_on_either_end() {
         let ch = channels(14);
-        let heads = |ink: &Ink| {
-            ink.text
-                .iter()
-                .filter(|t| t.is_some_and(|(c, _)| "◂▸▴▾".contains(c)))
-                .count()
-        };
         for (a, b, what) in arrangements() {
-            for (to_b, to_a, want) in [(true, false, 1), (false, true, 1), (true, true, 2)] {
-                let mut ink = Ink::new(90, 40);
-                route(&mut ink, &a, &b, &g, ch, to_b, to_a);
-                assert_eq!(heads(&ink), want, "{what} with ({to_b}, {to_a})");
-            }
+            let mut ink = Ink::new(90, 40);
+            route(&mut ink, &a, &b, ch);
+            // `route` puts nothing in the text layer at all — every cell it
+            // touches is a line bit, and line bits can only ever render as one
+            // of the box-drawing runs or junctions.
+            assert!(
+                ink.text.iter().all(|t| t.is_none()),
+                "{what}: a connection should be line and nothing else:\n{}",
+                sketch(&ink)
+            );
         }
     }
 }

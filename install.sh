@@ -21,6 +21,24 @@ say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Everything to clean up on the way out, however we leave. One trap, because a
+# second `trap ... EXIT` would silently replace the first.
+SRC=""
+SRC_IS_TEMP=""
+LOG=""
+cleanup() {
+    [ -n "$SRC_IS_TEMP" ] && [ -n "$SRC" ] && rm -rf "$SRC"
+    [ -n "$LOG" ] && rm -f "$LOG"
+    return 0
+}
+trap cleanup EXIT INT TERM
+
+# Whether it is worth drawing anything that moves. A log file, a CI job or a
+# pipe gets plain lines instead — a progress bar redrawn with carriage returns
+# into a file is a single unreadable line thousands of characters long.
+tty_out() { [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; }
+
+
 # --- rust -------------------------------------------------------------------
 
 if ! have cargo; then
@@ -53,20 +71,98 @@ if [ -f "./Cargo.toml" ] && grep -q 'name = "tiny"' ./Cargo.toml 2>/dev/null; th
 else
     have git || die "git is required to fetch the source"
     SRC="$(mktemp -d)"
-    # Clean up the checkout however this exits.
-    trap 'rm -rf "$SRC"' EXIT INT TERM
-    say "fetching $REPO ($REF)"
+    SRC_IS_TEMP=1
+    printf 'fetching %s (%s) ... ' "$REPO" "$REF"
     git clone --depth 1 --branch "$REF" "$REPO" "$SRC" >/dev/null 2>&1 \
-        || die "could not clone $REPO"
+        || { printf '\n'; die "could not clone $REPO"; }
+    say "done"
 fi
 
 # --- build ------------------------------------------------------------------
 
-say "building — this takes a minute the first time"
 mkdir -p "$PREFIX"
-# --root puts the binary in $PREFIX/bin, so hand it the parent.
-cargo install --path "$SRC" --bin tiny --root "$PREFIX/.." --force --quiet \
-    || die "build failed"
+
+# How many crates the bar is counting against.
+#
+# `cargo tree` lists the packages actually reachable at build time — normal and
+# build dependencies, no dev-dependencies — and cargo prints one `Compiling`
+# line for each. Asking cargo rather than writing a number down means the bar
+# stays right when the dependency list changes, and an old cargo that does not
+# know the command just leaves this empty, which turns the bar into a count.
+TOTAL=$(cargo tree --manifest-path "$SRC/Cargo.toml" \
+            -e normal,build --prefix none --no-dedupe 2>/dev/null \
+        | awk 'NF' | sort -u | wc -l | tr -d ' ')
+case "$TOTAL" in ''|*[!0-9]*|0) TOTAL=0 ;; esac
+
+say "building — this takes a minute the first time"
+LOG="$(mktemp)"
+
+# Cargo says what it is doing on stderr, a line per crate. Reading those is
+# what turns "wait for a minute with nothing on screen" into something you can
+# watch, and the log keeps the whole of it for the failure case, where what
+# went wrong matters more than how far it got.
+#
+# The sentinel is how a POSIX shell gets the exit status of the first command
+# in a pipeline: `$?` is the last one's, and there is no `PIPESTATUS` here.
+build() {
+    # --root puts the binary in $PREFIX/bin, so hand it the parent.
+    { cargo install --path "$SRC" --bin tiny --root "$PREFIX/.." --force 2>&1 \
+        || echo "tiny-install-failed"; } | tee "$LOG" | watch_build
+}
+
+# Turn cargo's running commentary into one line that moves.
+#
+# The bar is drawn with `\r` and no newline, so the whole build occupies a
+# single line however many crates go past. Two details are not optional:
+# the field holding the crate name is padded, because a shorter name has to
+# wipe the longer one it replaced and no clear-to-end-of-line escape is worth
+# assuming; and every frame is flushed, because awk buffers and a bar that
+# arrives in one burst at the end is not a bar.
+#
+# With no total — an old cargo, or a `cargo tree` that failed — it counts
+# instead of filling. A bar that cannot say how far along it is should say so
+# rather than invent a denominator.
+watch_build() {
+    if tty_out; then
+        awk -v total="$TOTAL" '
+            function bar(n, what,   p, f, s, i) {
+                if (total <= 0) {
+                    printf "\r  %d crates  %-30.30s", n, what
+                    fflush()
+                    return
+                }
+                p = int(n * 100 / total); if (p > 100) p = 100
+                f = int(p * 28 / 100); s = ""
+                for (i = 0; i < 28; i++) s = s (i < f ? "#" : ".")
+                printf "\r  [%s] %3d%%  %-30.30s", s, p, what
+                fflush()
+            }
+            /^ *Updating /   { printf "\r  %-52.52s", "updating the crate index"; fflush(); next }
+            /^ *Downloaded / { d++; printf "\r  %-52.52s", "fetched " d " crate" (d == 1 ? "" : "s"); fflush(); next }
+            /^ *Compiling /  { n++; bar(n, "compiling " $2); next }
+            /^ *Installing / { bar(total, "installing"); next }
+            # The sentinel is bookkeeping, not something to show anyone.
+            /tiny-install-failed/ { next }
+            END { if (n > 0 || d > 0) printf "\n" }
+        '
+    else
+        # Not a terminal: a bar redrawn with carriage returns into a log file
+        # is one unreadable line thousands of characters long. Drain it and
+        # let the log speak.
+        cat >/dev/null
+    fi
+    # The log is what actually says whether it worked — awk's exit status is
+    # awk's, and the shell has no way to reach back for cargo's through a pipe.
+    ! grep -q 'tiny-install-failed' "$LOG"
+}
+
+if ! build; then
+    # The sentinel is ours; showing it to someone whose build just failed would
+    # only be one more confusing line among the ones that matter.
+    say ""
+    grep -v 'tiny-install-failed' "$LOG" | tail -n 30 >&2
+    die "build failed — the output above says why"
+fi
 
 BIN="$PREFIX/tiny"
 [ -x "$BIN" ] || die "expected a binary at $BIN"
