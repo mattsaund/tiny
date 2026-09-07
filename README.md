@@ -5,7 +5,7 @@ Tiny is a personal knowledge management system (PKMS), IDE, and text editor that
 Everything tiny manages and edits is non proprietary and not obfuscated.
 
 ## Install:
-Full Installation Size: 7.54 MB
+Full Installation and binary size: 7.54 MB
 
 **One Liner:**
 ```sh
