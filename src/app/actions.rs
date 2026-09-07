@@ -9,6 +9,8 @@
 //! to the parent. That is what makes them read as "inwards" and "outwards"
 //! rather than as four separate keys you have to choose between.
 
+use std::path::PathBuf;
+
 use crate::config::keys::Action;
 use crate::files::media;
 
@@ -221,17 +223,57 @@ impl App {
     }
 
     /// Quit, or ask first if anything is unsaved. The prompt names every dirty
-    /// file, since "discard changes?" is unanswerable without knowing which.
+    /// file, since "save changes?" is unanswerable without knowing which.
+    ///
+    /// The question is asked the way round that makes the safe answer the
+    /// obvious one: `y` saves and goes, `n` goes without saving, and Esc stays
+    /// here. It used to ask whether to *discard*, where the natural yes threw
+    /// work away.
     pub(super) fn request_quit(&mut self) {
-        let dirty = self.dirty_buffers();
+        let mut dirty: Vec<String> = self
+            .dirty_buffers()
+            .iter()
+            .map(|p| display_name(p))
+            .collect();
         if dirty.is_empty() {
             self.should_quit = true;
             return;
         }
-        let names: Vec<String> = dirty.iter().map(|p| display_name(p)).collect();
+        // The map is unordered, so without this the same two files could be
+        // named in either order on successive runs.
+        dirty.sort();
         self.mode = Mode::Confirm(Confirm {
             kind: ConfirmKind::QuitUnsaved,
-            message: format!("Discard unsaved changes to {}?  (y/n)", names.join(", ")),
+            message: format!(
+                "Save changes to {} before quitting?  (y/n, Esc cancels)",
+                dirty.join(", ")
+            ),
         });
+    }
+
+    /// Answering yes to that question: write everything, then leave.
+    ///
+    /// A failed write cancels the quit. Someone who asked to save on the way
+    /// out and is told the save failed has not been given the chance to do
+    /// anything about it if the program exits anyway — so tiny stays open with
+    /// the failure on the status line, and Ctrl+Q asks again.
+    pub(super) fn save_all_and_quit(&mut self) {
+        let mut dirty: Vec<PathBuf> = self
+            .buffers
+            .values()
+            .filter(|e| e.dirty)
+            .map(|e| e.path.clone())
+            .collect();
+        dirty.sort();
+        let (saved, failed) = self.save_each(&dirty);
+        match failed.first() {
+            Some(first) => {
+                self.status = format!(
+                    "saved {saved}, {} failed — {first}; still open",
+                    failed.len()
+                )
+            }
+            None => self.should_quit = true,
+        }
     }
 }

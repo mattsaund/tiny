@@ -32,14 +32,19 @@
 //! `ui`'s own module docs list them. If you find yourself wanting another,
 //! that is usually a sign the state belongs on `App` instead.
 //!
-//! # The event loop is blocking on purpose
+//! # The event loop waits, and looks at the disk while it waits
 //!
-//! There is no tick, no timer, and no background thread. `run` blocks in
-//! `event::read()` until the user does something, then redraws once. An idle
-//! tiny uses no CPU at all, which is most of why it stays small. The cost is
-//! that every operation is synchronous: a slow search or a big graph build
-//! freezes the UI while it runs, so anything expensive needs its own budget
-//! (see the size caps in `text::search`, `map::graph`, and `text::highlight`).
+//! There is no background thread. `run` waits for the keyboard and redraws
+//! once when something arrives, so nothing happens between keypresses that the
+//! user did not cause — with one exception. The wait has a timeout, and each
+//! time it expires the loop asks [`app`'s disk watcher](app) whether anything
+//! on screen has been changed by another program; a frame is drawn only if
+//! something has. That is a few `stat` calls twice a second while idle. See
+//! `app::watch` for why polling beat inotify here.
+//!
+//! Everything is still synchronous: a slow search or a big graph build freezes
+//! the UI while it runs, so anything expensive needs its own budget (see the
+//! size caps in `text::search`, `map::graph`, and `text::highlight`).
 
 mod app;
 mod config;
@@ -49,6 +54,7 @@ mod text;
 mod ui;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use crossterm::event::{
@@ -178,6 +184,7 @@ fn real_main() -> Result<()> {
     let mut terminal = ratatui::try_init().map_err(|e| {
         anyhow!("no interactive terminal available ({e}); tiny needs a real terminal")
     })?;
+    hand_back_the_terminal_on_panic();
     // Wheel events only reach a program that asks for them. Without this the
     // terminal translates a notch into three arrow keys of its own, which is
     // why scrolling used to jump. Best-effort: a terminal that will not report
@@ -189,6 +196,34 @@ fn real_main() -> Result<()> {
     }
     ratatui::restore();
     result
+}
+
+/// Turn off the two things tiny asked the terminal for, if it panics.
+///
+/// `ratatui::try_init` already leaves a hook that gives back raw mode and the
+/// alternate screen. It cannot know about the two requests tiny makes on its
+/// own account — the mouse, and the disambiguating keyboard protocol — so
+/// without this a panic drops you back at a shell whose terminal is still
+/// reporting wheel events and still encoding `Ctrl+M` as something other than
+/// Enter, with nothing on screen to say why.
+///
+/// Both are safe to send when they were never turned on: the terminal is being
+/// told to stop doing something it is not doing. That matters, because a hook
+/// runs at a moment when what did and did not get set up is not knowable.
+///
+/// Ours runs first and ratatui's second, so the escape sequences go out while
+/// the alternate screen is still up and the panic message is the last thing
+/// written.
+fn hand_back_the_terminal_on_panic() {
+    let next = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(
+            std::io::stdout(),
+            DisableMouseCapture,
+            PopKeyboardEnhancementFlags
+        );
+        next(info);
+    }));
 }
 
 /// The terminal reporting chords it would otherwise throw away, for as long as
@@ -244,12 +279,23 @@ impl Drop for RealChords {
     }
 }
 
-/// The event loop: draw, block for a key, dispatch, repeat.
+/// How long the loop will wait for a key before going to look at the disk.
+///
+/// Half a second reads as "instantly" for a file changed by another program
+/// while you are looking at it, and costs a stat of each open file and each
+/// open directory twice a second — microseconds. Shorter would not be
+/// noticeably quicker; much longer starts to feel like the screen is lying.
+const IDLE: Duration = Duration::from_millis(500);
+
+/// The event loop: draw, wait for something to happen, dispatch, repeat.
 ///
 /// Note the order — the frame is drawn *before* the quit check, so the last
-/// action a user takes is visible on screen before the program exits. It also
-/// means `App` never has to ask for a redraw: every keypress produces exactly
-/// one frame, and nothing else produces any.
+/// action a user takes is visible on screen before the program exits.
+///
+/// The inner loop is what keeps "one frame per thing that happened" true now
+/// that waiting can end without an event. A timeout that finds nothing changed
+/// on disk goes back to waiting rather than falling out and redrawing an
+/// identical screen, so an idle tiny still draws nothing at all.
 ///
 /// `ratatui::restore` in the caller runs whether or not this returns an error,
 /// so a failure in here still gives the terminal back.
@@ -265,22 +311,34 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
         if chords.is_none() {
             chords = Some(RealChords::ask());
         }
-        match event::read()? {
-            // Windows terminals report releases too; only presses, and the
-            // repeats from holding a key down, should reach the app.
-            Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
-                app.on_key(k)
+        loop {
+            if !event::poll(IDLE)? {
+                // Nobody typed anything. Has anyone else been writing?
+                if app.rescan_disk() {
+                    break;
+                }
+                continue;
             }
-            // One notch, one line. Everything else the mouse reports — moves,
-            // clicks, drags — is deliberately ignored: tiny is a keyboard
-            // program, and the wheel is only here because three-line jumps
-            // make a page hard to read.
-            Event::Mouse(m) => match m.kind {
-                MouseEventKind::ScrollDown => app.on_scroll(true, m.column),
-                MouseEventKind::ScrollUp => app.on_scroll(false, m.column),
+            match event::read()? {
+                // Windows terminals report releases too; only presses, and the
+                // repeats from holding a key down, should reach the app.
+                Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+                    app.on_key(k)
+                }
+                // One notch, one line. Everything else the mouse reports —
+                // moves, clicks, drags — is deliberately ignored: tiny is a
+                // keyboard program, and the wheel is only here because
+                // three-line jumps make a page hard to read.
+                Event::Mouse(m) => match m.kind {
+                    MouseEventKind::ScrollDown => app.on_scroll(true, m.column),
+                    MouseEventKind::ScrollUp => app.on_scroll(false, m.column),
+                    _ => {}
+                },
+                // A resize, a paste, a key release: nothing to handle, but the
+                // screen is redrawn for it exactly as it always was.
                 _ => {}
-            },
-            _ => {}
+            }
+            break;
         }
     }
 }

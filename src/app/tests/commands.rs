@@ -115,22 +115,85 @@ fn replace_takes_quoted_strings_with_spaces_in_them() {
         "quoted arguments keep their spaces"
     );
 }
-#[test]
-fn quitting_with_unsaved_work_asks_first() {
-    let (_td, mut app) = fixture();
-    select(&mut app, "main.py");
+/// Leave one unsaved character in `main.py` and put the keyboard back where a
+/// quit would be typed from.
+fn with_unsaved_work(app: &mut App) {
+    select(app, "main.py");
     app.on_key(k(KeyCode::Enter));
-    type_str(&mut app, "x");
+    type_str(app, "x");
     app.on_key(k(KeyCode::Esc));
+}
+
+#[test]
+fn quitting_with_unsaved_work_offers_to_save_it() {
+    let (td, mut app) = fixture();
+    with_unsaved_work(&mut app);
 
     app.on_key(ch('q'));
     assert!(!app.should_quit);
-    assert!(joined(&mut app).contains("Discard unsaved changes"));
-    app.on_key(ch('n'));
-    assert!(!app.should_quit);
+    let asked = joined(&mut app);
+    assert!(asked.contains("Save changes to main.py"), "in {asked}");
+    assert!(asked.contains("(y/n, Esc cancels)"), "all three answers");
+
+    app.on_key(k(KeyCode::Esc));
+    assert!(!app.should_quit, "Esc takes the whole quit back");
+
     app.on_key(ch('q'));
     app.on_key(ch('y'));
-    assert!(app.should_quit);
+    assert!(app.should_quit, "y saves and goes");
+    assert!(
+        fs::read_to_string(td.path().join("src/main.py"))
+            .unwrap()
+            .starts_with('x'),
+        "and what it saved is what was typed"
+    );
+}
+
+#[test]
+fn answering_no_to_saving_quits_without_writing() {
+    let (td, mut app) = fixture();
+    with_unsaved_work(&mut app);
+
+    app.on_key(ch('q'));
+    app.on_key(ch('n'));
+    assert!(
+        app.should_quit,
+        "n is an answer to the question, not a cancel"
+    );
+    assert!(
+        !fs::read_to_string(td.path().join("src/main.py"))
+            .unwrap()
+            .starts_with('x'),
+        "the file on disk is untouched"
+    );
+}
+
+#[test]
+fn a_save_that_fails_on_the_way_out_keeps_tiny_open() {
+    let (td, mut app) = fixture();
+    with_unsaved_work(&mut app);
+    // A file nobody can write to, which is the case where quitting anyway
+    // would throw the work away without ever having saved it.
+    let file = td.path().join("src/main.py");
+    let mut perms = fs::metadata(&file).unwrap().permissions();
+    perms.set_readonly(true);
+    fs::set_permissions(&file, perms).unwrap();
+
+    app.on_key(ch('q'));
+    app.on_key(ch('y'));
+
+    let after = joined(&mut app);
+    // Restore before asserting, so a failure still leaves a removable temp dir.
+    let mut perms = fs::metadata(&file).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    fs::set_permissions(&file, perms).unwrap();
+
+    assert!(!app.should_quit, "still open, in {after}");
+    assert!(
+        after.contains("failed"),
+        "and it says the save did not work"
+    );
 }
 
 #[test]

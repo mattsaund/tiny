@@ -33,6 +33,11 @@ pub struct Theme {
     pub link: String,
     pub code: String,
     pub marker: String,
+    /// The project map's two directions: files that reach the selected one,
+    /// and files it reaches. The only colors tiny ships with — see [`Theme`]'s
+    /// default for why they are the exception.
+    pub map_in: String,
+    pub map_out: String,
 }
 
 impl Default for Theme {
@@ -51,6 +56,14 @@ impl Default for Theme {
             link: "underline".into(),
             code: "dim".into(),
             marker: "bold".into(),
+            // The two exceptions, and deliberate ones. Everywhere else a style
+            // means "this is more or less important than that", which weight
+            // and reverse can say. These two mean *opposite directions*, which
+            // is a difference in kind rather than in degree — there is no
+            // bolder-than-bold that reads as "the other way round". Any spec
+            // works here, so `#7dcfff` or `cyan bold` replaces them.
+            map_in: "green".into(),
+            map_out: "red".into(),
         }
     }
 }
@@ -74,6 +87,8 @@ pub struct Palette {
     pub link: Style,
     pub code: Style,
     pub marker: Style,
+    pub map_in: Style,
+    pub map_out: Style,
 }
 
 impl Palette {
@@ -89,6 +104,8 @@ impl Palette {
             link: parse_style(&t.link),
             code: parse_style(&t.code),
             marker: parse_style(&t.marker),
+            map_in: parse_style(&t.map_in),
+            map_out: parse_style(&t.map_out),
         }
     }
 }

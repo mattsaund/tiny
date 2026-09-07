@@ -178,6 +178,9 @@ impl App {
                 self.selected = self.selected.min(self.rows.len().saturating_sub(1));
             }
         }
+        // Whatever just changed about the tree, these rows are what is drawn
+        // now, so this is what the disk should be compared against next.
+        self.note_dirs();
         self.sync_preview();
     }
 
@@ -200,6 +203,9 @@ impl App {
             self.tree.expand(&cur);
         }
         self.rows = self.tree.flatten();
+        // Opening folders on the way here read them; that reading is what the
+        // disk watcher compares against from now on.
+        self.note_dirs();
         match self.rows.iter().position(|r| r.path == path) {
             Some(i) => {
                 self.selected = i;
@@ -292,6 +298,9 @@ impl App {
                         path.to_path_buf(),
                         Editor::from_str(path.to_path_buf(), &text),
                     );
+                    // Stamped as it is read, so a write landing a moment later
+                    // is a change and not the new normal — see `watch`.
+                    self.note_file(path);
                     Preview::Buffer {
                         path: path.to_path_buf(),
                         kind: text_kind(path, &self.config.prose_extensions),

@@ -314,7 +314,19 @@ impl ProjectMap {
         }
     }
 
-    /// How far down to shift the picture so the selected box is on screen.
+    /// How far down to shift the picture so the selected box sits in the
+    /// middle of the pane.
+    ///
+    /// Centred rather than merely on screen, because the map draws the
+    /// selected file's connections and nothing else: a cursor sitting one row
+    /// from the bottom has half its lines running off the edge, and the
+    /// picture is then answering the question with the answer cropped. Putting
+    /// it in the middle gives what it reaches room on both sides.
+    ///
+    /// Both clamps are still here and still matter. A layout shorter than the
+    /// pane never scrolls, so the top of the map does not float away from the
+    /// top of the window; and the heading above the cursor stays visible,
+    /// because a box with no folder over it is a box you cannot place.
     fn scroll_to(&self, boxes: &[Placed], height: u16, total: u16) -> u16 {
         if total <= height {
             return 0;
@@ -322,10 +334,8 @@ impl ProjectMap {
         let Some(p) = boxes.iter().find(|p| p.node == self.selected) else {
             return 0;
         };
-        // Keep the folder heading above the cursor's row visible where it can
-        // be: a box with no folder over it is a box you cannot place.
-        p.bottom()
-            .saturating_sub(height)
+        p.middle()
+            .saturating_sub(height / 2)
             .min(total.saturating_sub(height))
             .min(p.row.saturating_sub(2))
     }
@@ -652,6 +662,62 @@ mod tests {
             place.boxes.iter().any(|p| p.node == last),
             "the selected file is scrolled into view"
         );
+    }
+
+    /// A project with enough folders to make a layout several panes tall, so
+    /// there is real scrolling to test rather than one row of slack.
+    ///
+    /// Each note links to the next, which is what puts them all in folder
+    /// groups rather than in the unconnected pile.
+    fn tall_fixture() -> (tempfile::TempDir, ProjectMap) {
+        let td = tempfile::tempdir().unwrap();
+        for i in 0..12 {
+            write(
+                td.path(),
+                &format!("d{i:02}/note.md", i = i),
+                &format!("see [[note{next}]]\n", next = i + 1),
+            );
+            write(td.path(), &format!("d{i:02}/note{i}.md", i = i), "a note\n");
+        }
+        let view = ProjectMap::build(td.path(), &graph::Options::default());
+        (td, view)
+    }
+
+    #[test]
+    fn the_cursor_sits_in_the_middle_of_a_map_too_tall_to_fit() {
+        let (_td, mut view) = tall_fixture();
+        let all = view.visible_indices();
+        // Not near either end: there the layout runs out before the pane does,
+        // and a view that cannot scroll further cannot centre anything.
+        view.selected = all[all.len() / 2];
+        let height = 20;
+        let place = view.place(90, height);
+        let p = place
+            .boxes
+            .iter()
+            .find(|p| p.node == view.selected)
+            .expect("the cursor is always drawn");
+        let from_middle = p.middle() as i32 - (height / 2) as i32;
+        assert!(
+            from_middle.abs() <= 2,
+            "name row {} against a pane middle of {}",
+            p.middle(),
+            height / 2
+        );
+    }
+
+    #[test]
+    fn a_map_that_fits_is_not_scrolled_at_all() {
+        let (_td, mut view) = fixture();
+        let all = view.visible_indices();
+        view.selected = all[all.len() / 2];
+        let place = view.place(90, 40);
+        assert_eq!(
+            place.offscreen, 0,
+            "the whole fixture fits, so centring has nothing to do"
+        );
+        let heading = place.folders.iter().map(|g| g.row).min().unwrap();
+        assert_eq!(heading, 0, "the map still starts at the top of the pane");
     }
 
     #[test]

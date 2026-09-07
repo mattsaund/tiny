@@ -96,6 +96,9 @@ pub struct Config {
 
     pub show_hidden: bool,
     pub tab_width: usize,
+    /// Re-read files and folders that another program changed, without being
+    /// asked. Off makes `F5` the only way the disk is looked at again.
+    pub auto_reload: bool,
 
     /// Which side the project tree sits on.
     pub tree_side: Side,
@@ -136,6 +139,7 @@ impl Default for Config {
             keys: BTreeMap::new(),
             show_hidden: false,
             tab_width: 4,
+            auto_reload: true,
             tree_side: Side::Left,
             tree_width: 0.30,
             search_position: Position::Top,
@@ -250,6 +254,7 @@ impl Config {
         &[
             ("show_hidden", "list dotfiles in the tree"),
             ("tab_width", "spaces inserted by Tab"),
+            ("auto_reload", "pick up changes made by other programs"),
             ("tree_side", "tree side: left, right"),
             ("tree_width", "share of width for the tree"),
             ("search_position", "search bar: top, bottom"),
@@ -275,6 +280,8 @@ impl Config {
             ("theme.link", "link and wikilink style"),
             ("theme.code", "inline code style"),
             ("theme.marker", "unsaved marker and warnings"),
+            ("theme.map_in", "map: files that reach this one"),
+            ("theme.map_out", "map: files this one reaches"),
         ]
     }
 
@@ -291,6 +298,7 @@ impl Config {
         Some(match key {
             "show_hidden" => self.show_hidden.to_string(),
             "tab_width" => self.tab_width.to_string(),
+            "auto_reload" => self.auto_reload.to_string(),
             "tree_side" => side_name(self.tree_side).into(),
             "tree_width" => format!("{:.2}", self.tree_width),
             "search_position" => pos_name(self.search_position).into(),
@@ -316,6 +324,8 @@ impl Config {
             "theme.link" => self.theme.link.clone(),
             "theme.code" => self.theme.code.clone(),
             "theme.marker" => self.theme.marker.clone(),
+            "theme.map_in" => self.theme.map_in.clone(),
+            "theme.map_out" => self.theme.map_out.clone(),
             _ => return None,
         })
     }
@@ -333,6 +343,7 @@ impl Config {
         match key {
             "show_hidden" => self.show_hidden = parse_bool(v)?,
             "tab_width" => self.tab_width = parse_num(v)?,
+            "auto_reload" => self.auto_reload = parse_bool(v)?,
             "tree_side" => {
                 self.tree_side = match v.to_ascii_lowercase().as_str() {
                     "left" => Side::Left,
@@ -371,6 +382,8 @@ impl Config {
             "theme.link" => self.theme.link = v.to_string(),
             "theme.code" => self.theme.code = v.to_string(),
             "theme.marker" => self.theme.marker = v.to_string(),
+            "theme.map_in" => self.theme.map_in = v.to_string(),
+            "theme.map_out" => self.theme.map_out = v.to_string(),
             _ => return Err(anyhow!("unknown setting `{key}`")),
         }
         *self = std::mem::take(self).sanitized();

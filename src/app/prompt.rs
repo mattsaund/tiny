@@ -75,17 +75,29 @@ impl App {
         }
     }
 
-    /// Keys for a yes/no question. Only `y` acts; `n` and Esc cancel, and
-    /// anything else leaves the question standing rather than guessing.
+    /// Keys for a yes/no question. Anything else leaves it standing rather
+    /// than guessing.
+    ///
+    /// `n` is not always the same key as Esc. For most of these there are two
+    /// answers and no is the same as never mind, but the question on the way
+    /// out has three: save and go, go without saving, or stay here. `n` is the
+    /// middle one — it answers "no, do not save" to what was asked — and Esc
+    /// is the one that takes the whole quit back.
     pub(super) fn on_confirm_key(&mut self, c: Confirm, key: KeyEvent) {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => match c.kind {
                 ConfirmKind::Delete(path) => self.do_delete(&path),
-                ConfirmKind::QuitUnsaved => self.should_quit = true,
+                ConfirmKind::QuitUnsaved => self.save_all_and_quit(),
                 ConfirmKind::Replace { find, replace } => self.do_replace(&find, &replace),
                 ConfirmKind::ResetSettings => self.do_reset_settings(),
                 ConfirmKind::ResetKeybinds => self.do_reset_keybinds(),
             },
+            KeyCode::Char('n') | KeyCode::Char('N')
+                if matches!(c.kind, ConfirmKind::QuitUnsaved) =>
+            {
+                self.should_quit = true;
+                self.status = "quit without saving".into();
+            }
             KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
                 // A reset was asked for from a window; go back to it rather
                 // than dropping the user out to the tree.

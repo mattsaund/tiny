@@ -235,19 +235,35 @@ impl App {
         // the same one on every run.
         let mut under = under;
         under.sort();
+        let (saved, failed) = self.save_each(&under);
+        self.status = match failed.first() {
+            Some(first) => format!("saved {saved}, {} failed — {first}", failed.len()),
+            None if saved == 1 => format!("saved {}", display_name(&under[0])),
+            None => format!("saved {saved} files in {}", row.name),
+        };
+    }
+
+    /// Write each of `paths` that is open, returning how many were written
+    /// and one message per failure.
+    ///
+    /// Every save in tiny that touches more than one file goes through here:
+    /// saving a folder from the tree, and answering yes to the question on the
+    /// way out. Both need the same thing — keep going after a failure, and be
+    /// able to say afterwards which ones did not make it. A loop that stopped
+    /// at the first error would leave the rest unsaved without saying so.
+    ///
+    /// Paths with no buffer open are skipped rather than reported: nothing was
+    /// asked of them.
+    pub(super) fn save_each(&mut self, paths: &[PathBuf]) -> (usize, Vec<String>) {
         let (mut saved, mut failed) = (0usize, Vec::new());
-        for path in &under {
+        for path in paths {
             match self.buffers.get_mut(path).map(Editor::save) {
                 Some(Ok(())) => saved += 1,
                 Some(Err(e)) => failed.push(format!("{}: {e}", display_name(path))),
                 None => {}
             }
         }
-        self.status = match failed.first() {
-            Some(first) => format!("saved {saved}, {} failed — {first}", failed.len()),
-            None if saved == 1 => format!("saved {}", display_name(&under[0])),
-            None => format!("saved {saved} files in {}", row.name),
-        };
+        (saved, failed)
     }
 
     /// Where a new file or folder should go: the selected directory, or the

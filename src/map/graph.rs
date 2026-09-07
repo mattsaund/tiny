@@ -61,9 +61,8 @@
 //!
 //! Three steps: add the `tree-sitter-*` crate, add a `LazyLock<Option<...>>`
 //! beside `scan::PYTHON`, and add a `scan::Lang` variant with its extensions in
-//! `scan::lang_of` and a `scan::tags_for` arm. Then add the name to
-//! [`supported_languages`], which is what the map tells the user it can
-//! trace.
+//! `scan::lang_of` and a `scan::tags_for` arm. Nothing on screen lists the
+//! languages, so there is no fourth place to remember.
 //!
 //! A language with no tags query still appears in the graph as a node — it
 //! just has no call edges. That is what `scan::is_sourcelike` is for.
@@ -73,7 +72,7 @@ use std::path::{Path, PathBuf};
 
 use super::scan::{
     Facts, Lang, collect_links, collect_path_calls, collect_symbols, is_test_file, lang_of,
-    node_kind, read_text, resolve_link, strip_tests, supported_languages,
+    node_kind, read_text, resolve_link, strip_tests,
 };
 use tree_sitter_tags::TagsContext;
 
@@ -141,9 +140,6 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     /// Merged and counted connections.
     pub edges: Vec<Edge>,
-    /// Languages whose calls tiny can follow, so the view can say so rather
-    /// than leaving you wondering why your Go files have no edges.
-    pub languages: Vec<String>,
 }
 
 /// Build settings, derived from the live config by `App::graph_options` so a
@@ -302,14 +298,7 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
         })
         .collect();
 
-    Graph {
-        nodes,
-        edges,
-        languages: supported_languages()
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-    }
+    Graph { nodes, edges }
 }
 
 #[cfg(test)]

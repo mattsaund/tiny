@@ -26,6 +26,7 @@
 //! | [`settings`] | the settings area and the keybinds window |
 //! | [`prompt`] | answering a prompt or a confirmation |
 //! | [`parts`] | small helpers more than one of the above needs |
+//! | [`watch`] | noticing files another program changed |
 //!
 //! They are all `impl App` blocks on the same struct. Splitting an impl across
 //! files means anything used by a sibling has to say so with `pub(super)`,
@@ -86,10 +87,12 @@
 //!
 //! `buffers` is keyed by path and is never cleared wholesale. Arrowing past a
 //! file opens it; arrowing away leaves it open, with any unsaved edits intact.
-//! Only three things remove entries: a delete (drops the file and anything
+//! Only four things remove entries: a delete (drops the file and anything
 //! under it), a rename (moves the entry to the new key so edits follow the
-//! file), and a refresh or replace (drops *clean* buffers so they re-read from
-//! disk, keeps dirty ones).
+//! file), a refresh or replace (drops *clean* buffers so they re-read from
+//! disk, keeps dirty ones), and [`watch`] finding that a file has stopped
+//! being readable text. Every one of them keeps dirty buffers — there is
+//! nowhere else for unsaved work to live.
 //!
 //! # Where drawing state lives
 //!
@@ -112,10 +115,12 @@ mod parts;
 mod preview;
 mod prompt;
 mod settings;
+mod watch;
 
 pub use self::bar::completion_for;
 pub use self::mode::{BUTTONS, Bar, Focus, KEYBIND_BUTTONS, Keybinds, Mode, Settings};
 pub use self::preview::{Preview, TextKind};
+use self::watch::Watch;
 
 use self::parts::display_name;
 
@@ -205,6 +210,9 @@ pub struct App {
     /// a mouse wheel can tell which pane it is over. `None` when the tree was
     /// not drawn at all. Written by `ui` for the same reason the heights are.
     pub last_tree_cols: Option<(u16, u16)>,
+    /// What the files and folders on screen looked like at the last scan —
+    /// see [`watch`]. Nothing outside that module reads it.
+    watch: Watch,
 }
 
 impl App {
@@ -261,7 +269,9 @@ impl App {
             last_edit_height: 20,
             last_tree_height: 20,
             last_tree_cols: None,
+            watch: Watch::default(),
         };
+        app.note_dirs();
         app.sync_preview();
 
         // `tiny <file>` opens as an editor and nothing else: the tree folded
@@ -315,7 +325,7 @@ impl App {
     }
 
     /// Every buffer with unsaved changes. Drives the confirm-on-quit prompt,
-    /// which names them so you know what you are about to discard.
+    /// which names them so you know what you are being asked about.
     pub fn dirty_buffers(&self) -> Vec<&Path> {
         self.buffers
             .values()

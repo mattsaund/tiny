@@ -163,6 +163,114 @@ fn nothing_is_drawn_on_top_of_a_box() {
     }
 }
 
+/// Everything on screen drawn in one colour, row by row.
+///
+/// The map is the only place tiny uses colour at all, so a colour is a
+/// reliable way to ask "which files did it call outgoing" without knowing
+/// where on the grid they landed.
+fn drawn_in(app: &mut App, color: Color) -> String {
+    let mut t = Terminal::new(TestBackend::new(100, 34)).unwrap();
+    t.draw(|f| crate::ui::draw(f, app)).unwrap();
+    let buf = t.backend().buffer().clone();
+    let mut out = String::new();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            match buf.cell((x, y)) {
+                Some(c) if c.fg == color => out.push_str(c.symbol()),
+                _ => {}
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Put the map's cursor on a named file without walking there.
+fn cursor_on(app: &mut App, name: &str) {
+    let map = app.project_map.as_mut().expect("the map is open");
+    map.selected = map
+        .graph
+        .nodes
+        .iter()
+        .position(|n| n.rel.ends_with(name))
+        .unwrap_or_else(|| panic!("no node for {name}"));
+}
+
+#[test]
+fn a_file_this_one_reaches_is_drawn_in_the_outgoing_colour() {
+    let (_td, mut app) = linked_fixture();
+    app.on_key(ch('m'));
+    // `main.py` calls `utils.load`, and nothing calls `main.py`.
+    cursor_on(&mut app, "main.py");
+
+    let red = drawn_in(&mut app, Color::Red);
+    assert!(red.contains("utils.py"), "the file it reaches:\n{red}");
+    assert!(red.contains("out:"), "and the row that names them:\n{red}");
+
+    let green = drawn_in(&mut app, Color::Green);
+    assert!(
+        !green.contains("utils.py"),
+        "the connection runs one way, so it is not both:\n{green}"
+    );
+}
+
+#[test]
+fn a_file_that_reaches_this_one_is_drawn_in_the_incoming_colour() {
+    let (_td, mut app) = linked_fixture();
+    app.on_key(ch('m'));
+    cursor_on(&mut app, "utils.py");
+
+    let green = drawn_in(&mut app, Color::Green);
+    assert!(
+        green.contains("main.py"),
+        "the file that reaches it:\n{green}"
+    );
+    assert!(
+        green.contains("in:"),
+        "and the row that names them:\n{green}"
+    );
+
+    let red = drawn_in(&mut app, Color::Red);
+    assert!(!red.contains("main.py"), "not the other way:\n{red}");
+}
+
+#[test]
+fn a_file_on_neither_side_of_the_cursor_is_left_uncoloured() {
+    let (_td, mut app) = linked_fixture();
+    app.on_key(ch('m'));
+    cursor_on(&mut app, "main.py");
+    for colour in [Color::Red, Color::Green] {
+        let painted = drawn_in(&mut app, colour);
+        assert!(
+            !painted.contains("design.md"),
+            "design.md has nothing to do with main.py:\n{painted}"
+        );
+    }
+}
+
+#[test]
+fn the_two_directions_can_be_recoloured_from_the_config() {
+    let (_td, mut app) = linked_fixture();
+    command(&mut app, "set theme.map_out #ff00aa");
+    command(&mut app, "set theme.map_in #00ccff");
+    app.on_key(ch('m'));
+    cursor_on(&mut app, "utils.py");
+
+    let hex = drawn_in(&mut app, Color::Rgb(0x00, 0xcc, 0xff));
+    assert!(hex.contains("main.py"), "the incoming colour took:\n{hex}");
+    assert!(
+        drawn_in(&mut app, Color::Green).trim().is_empty(),
+        "and the shipped green is gone"
+    );
+
+    cursor_on(&mut app, "main.py");
+    let hex = drawn_in(&mut app, Color::Rgb(0xff, 0x00, 0xaa));
+    assert!(
+        hex.contains("utils.py"),
+        "and so did the outgoing one:\n{hex}"
+    );
+}
+
 #[test]
 fn the_map_can_be_drawn_without_box_characters() {
     let cfg = Config {

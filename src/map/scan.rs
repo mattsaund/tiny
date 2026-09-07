@@ -99,11 +99,6 @@ pub(super) fn tags_for(lang: Lang) -> Option<&'static TagsConfiguration> {
     }
 }
 
-/// Languages tiny can trace calls through, for the "what is supported" line.
-pub(super) fn supported_languages() -> &'static [&'static str] {
-    &["Python", "Rust", "JavaScript"]
-}
-
 // ---- one file's contribution ----------------------------------------------
 
 /// What one file contributes to the graph, before anything is resolved.

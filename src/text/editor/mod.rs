@@ -205,6 +205,32 @@ impl Editor {
         s
     }
 
+    /// Take on the file's current contents, keeping the reader where they
+    /// were on screen.
+    ///
+    /// For a file another program has rewritten while it is open here. Cursor
+    /// and viewport survive — clamped, since the file may have got shorter —
+    /// because the whole point of noticing an external change is that you are
+    /// looking at the file while it happens, and a jump back to line 1 would
+    /// lose your place every time a formatter ran.
+    ///
+    /// Everything derived from the bytes is resampled, including the line
+    /// ending and the trailing newline: they are a different file's bytes now.
+    /// The undo stack goes too. Its snapshots describe text that no longer
+    /// exists, and an undo that pasted them back would silently revert
+    /// somebody else's write.
+    pub fn reload_from(&mut self, content: &str) {
+        let (line, col) = (self.cursor_line, self.cursor_col);
+        let (y, x) = (self.scroll_y, self.scroll_x);
+        let path = std::mem::take(&mut self.path);
+        *self = Self::from_str(path, content);
+        self.cursor_line = line;
+        self.cursor_col = col;
+        self.scroll_y = y.min(self.lines.len().saturating_sub(1));
+        self.scroll_x = x;
+        self.clamp_cursor();
+    }
+
     /// Write the buffer to `path` and clear `dirty`.
     ///
     /// A plain truncating write, not write-to-temp-then-rename: tiny is

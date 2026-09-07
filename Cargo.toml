@@ -1,6 +1,6 @@
 [package]
 name = "tiny"
-version = "0.1.5"
+version = "0.2.0"
 edition = "2024"
 # Let-chains, which this uses throughout, landed in 1.88.
 rust-version = "1.88"
@@ -14,10 +14,10 @@ categories = ["command-line-utilities", "text-editors"]
 [dependencies]
 anyhow = "1.0.104"
 crossterm = "0.29.0"
-pulldown-cmark = "0.13.4"
+pulldown-cmark = { version = "0.13.4", default-features = false }
 ratatui = "0.30.2"
 serde = { version = "1.0.229", features = ["derive"] }
-syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-themes", "dump-load", "regex-fancy"] }
 toml = "1.1.4"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-python = "0.25.0"
@@ -29,14 +29,28 @@ unicode-width = "0.2.2"
 [dev-dependencies]
 tempfile = "3.27.0"
 
-# Release is what people install, and it is built once on their machine and
-# then run for months — so it is worth the extra build minute.
+# Release is what people install, and they wait for it: `install.sh` builds
+# from source on their machine, so this profile is the install time.
 #
-# `lto` and one codegen unit let the optimiser see across crate boundaries,
-# which matters here because the hot loop (syntect's regex matching, called
-# from `highlight`) sits behind two of them. `strip` drops symbols that only a
-# debugger would want, and takes about 2 MB off the binary.
+# Thin LTO still lets the optimiser see across crate boundaries — which matters
+# here because the hot loop (syntect's regex matching, called from `highlight`)
+# sits behind two of them — but it does the work per-module and in parallel
+# instead of merging the whole program into one unit. With sixteen codegen
+# units to go at, that is the difference between a 42-second install and a
+# 19-second one, measured on a clean build of the full dependency graph. It
+# costs about 0.7 MB of binary, which is the trade this project has chosen:
+# nobody notices the megabyte, everybody notices the wait.
+#
+# `strip` drops symbols that only a debugger would want, and takes about 2 MB
+# off the binary.
 [profile.release]
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 strip = true
+# No unwinding. A panic in tiny is a bug with nothing to recover to — nothing
+# catches one, and the terminal is given back by a hook rather than by a
+# destructor (see `hand_back_the_terminal_on_panic`), so unwinding was only
+# ever paying for tables nobody read. Dropping them is 0.42 MB of the binary.
+# Tests are built with the dev profile and still unwind, so `#[should_panic]`
+# would go on working if anything here ever wanted it.
+panic = "abort"

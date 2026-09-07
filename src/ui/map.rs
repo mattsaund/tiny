@@ -10,7 +10,7 @@
 //! not a picture, it is a smear — and the question the map answers is "what
 //! does *this* file touch", which is exactly one file's worth of lines.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -78,7 +78,13 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
         .place(inner.width, inner.height);
     let view = app.project_map.as_ref().expect("checked above");
     let selected = view.selected;
-    let near = view.neighbours(selected);
+    // Which side of the cursor every connected file is on. The picture cannot
+    // say which way a line runs — the lines share a trunk, so a coloured line
+    // would be lying at every junction — but the boxes at the ends of them
+    // can, and this is what colours them.
+    let (reaches, reached_by) = view.connections(selected);
+    let out_nodes: HashSet<usize> = reaches.iter().map(|e| e.to).collect();
+    let in_nodes: HashSet<usize> = reached_by.iter().map(|e| e.from).collect();
 
     let mut block = bordered()
         .border_style(pal.border_focus)
@@ -152,10 +158,17 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     for p in &placement.boxes {
+        // Two files that reach each other can only be drawn one colour, and it
+        // is the outgoing one: the map's question is what this file reaches,
+        // and a box the cursor points at is an answer to it whatever else is
+        // also true. The strip below lists such a file on both rows, which is
+        // where the whole truth lives anyway.
         let style = if p.node == selected {
             InkStyle::Selected
-        } else if near.contains(&p.node) {
-            InkStyle::Near
+        } else if out_nodes.contains(&p.node) {
+            InkStyle::Out
+        } else if in_nodes.contains(&p.node) {
+            InkStyle::In
         } else {
             InkStyle::Far
         };
@@ -254,6 +267,9 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
         if edges.is_empty() {
             return vec![Span::styled("none", pal.dim)];
         }
+        // The same colour the file's box wears up in the picture, so a name
+        // here and a box there are visibly the same fact.
+        let tint = if outgoing { pal.map_out } else { pal.map_in };
         let mut spans: Vec<Span> = Vec::new();
         let mut used = LABEL_WIDTH;
         let mut shown = 0;
@@ -275,7 +291,7 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
             }
             used += want;
             shown += 1;
-            spans.push(Span::styled(name, pal.text));
+            spans.push(Span::styled(name, tint));
             if !detail.is_empty() {
                 spans.push(Span::styled(detail, pal.dim));
             }
@@ -296,15 +312,21 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
             Span::styled(node.rel.clone(), pal.text.add_modifier(Modifier::BOLD)),
             Span::styled(format!("  {}", node_word(node.kind)), pal.dim),
         ]),
+        // The labels carry the colour too, which is what makes the picture
+        // above legible without a key: whatever `out:` is written in, the
+        // boxes this file reaches are drawn in.
         Line::from(
-            std::iter::once(Span::styled(format!("  out: {:<3} ", out.len()), pal.dim))
-                .chain(summarise(&out, true))
-                .collect::<Vec<_>>(),
+            std::iter::once(Span::styled(
+                format!("  out: {:<3} ", out.len()),
+                pal.map_out,
+            ))
+            .chain(summarise(&out, true))
+            .collect::<Vec<_>>(),
         ),
         Line::from(
             std::iter::once(Span::styled(
                 format!("  in:  {:<3} ", incoming.len()),
-                pal.dim,
+                pal.map_in,
             ))
             .chain(summarise(&incoming, false))
             .collect::<Vec<_>>(),
@@ -324,14 +346,14 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
             Span::styled(text, pal.dim),
         ]));
     }
-    // The toggles, with a note on which languages calls can be followed in —
-    // right beside the switch it explains.
-    let mut footer: Vec<Span> = std::iter::once(Span::raw("  ")).chain(toggles).collect();
-    footer.push(Span::styled(
-        format!("  calls traced in {}", view.languages().join(", ")),
-        pal.dim,
+    // The toggles, and nothing beside them. The list of languages calls can be
+    // traced in used to sit here; it was a fact about tiny rather than about
+    // the project on screen, and it said it on every frame.
+    lines.push(Line::from(
+        std::iter::once(Span::raw("  "))
+            .chain(toggles)
+            .collect::<Vec<_>>(),
     ));
-    lines.push(Line::from(footer));
 
     f.render_widget(Paragraph::new(lines), area);
 }

@@ -36,6 +36,7 @@ mod scrolling;
 mod search;
 mod settings;
 mod single_file;
+mod watch;
 
 /// A small project with one of each thing the panes have to handle.
 pub(super) fn build(dir: &Path) {
@@ -244,6 +245,9 @@ pub(super) fn select(app: &mut App, name: &str) {
         }
         app.rows = app.tree.flatten();
     }
+    // Expanding read those folders; stamp them the way the real navigation
+    // keys would, so the disk watcher has something to compare against.
+    app.note_dirs();
     let i = app
         .rows
         .iter()

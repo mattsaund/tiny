@@ -33,8 +33,10 @@ pub(super) enum InkStyle {
     Folder,
     /// Everything not connected to the cursor.
     Far,
-    /// The file under the cursor, and the lines reaching it.
-    Near,
+    /// A file the one under the cursor reaches: it links to or calls this.
+    Out,
+    /// A file that reaches the one under the cursor.
+    In,
     /// The file under the cursor itself.
     Selected,
 }
@@ -188,7 +190,11 @@ impl Ink {
     pub(super) fn render(&self, g: &Glyphs, pal: &Palette) -> Vec<Line<'static>> {
         let style_of = |s: InkStyle| match s {
             InkStyle::Selected => pal.text.add_modifier(Modifier::REVERSED),
-            InkStyle::Near => pal.text.add_modifier(Modifier::BOLD),
+            // Bold as well as coloured: the two directions have to be
+            // distinguishable from the files around them on a terminal that
+            // renders no colour at all, and from each other on one that does.
+            InkStyle::Out => pal.map_out.add_modifier(Modifier::BOLD),
+            InkStyle::In => pal.map_in.add_modifier(Modifier::BOLD),
             // Everything the cursor does not touch steps back, so the handful
             // of lines that are drawn have the picture to themselves.
             InkStyle::Far => pal.dim,

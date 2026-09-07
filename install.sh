@@ -82,6 +82,117 @@ fi
 
 mkdir -p "$PREFIX"
 
+# Turn cargo's running commentary into one line that moves.
+#
+# The bar is drawn with `\r` and no newline, so the whole build occupies a
+# single line however many crates go past. The field holding the crate name is
+# padded, because a shorter name has to wipe the longer one it replaced and no
+# clear-to-end-of-line escape is worth assuming.
+#
+# With no total — an old cargo, or a `cargo tree` that failed — it counts
+# instead of filling. A bar that cannot say how far along it is should say so
+# rather than invent a denominator.
+#
+# This was an awk script, and the bar arrived in one burst at the end of the
+# build. The output was already flushed every frame, so it was not awk's
+# writing that was buffered — it was awk's *reading*. mawk, which is `awk` on
+# Debian and Ubuntu, fills a several-kilobyte input buffer before it runs a
+# single rule, so nothing reached the screen until cargo had printed enough to
+# fill it, which for a build is somewhere near the end. A `while read` loop has
+# no such buffer: the shell takes one line at a time, which is what a progress
+# bar needs and is cheap at the couple of hundred lines cargo prints.
+BAR_FULL='############################'
+BAR_EMPTY='............................'
+BAR_WIDTH=28
+
+# A one-off message in the same place the bar lives. Silent when there is
+# nothing to draw on, so the log-file case stays readable.
+draw() { if tty_out; then printf '\r  %-52.52s' "$1"; fi; }
+
+# `$1` crates done of `$TOTAL`, and what is happening right now.
+bar() {
+    if [ "$TOTAL" -le 0 ]; then
+        if [ "$1" -eq 1 ]; then
+            printf '\r  %d crate   %-30.30s' "$1" "$2"
+        else
+            printf '\r  %d crates  %-30.30s' "$1" "$2"
+        fi
+        return 0
+    fi
+    p=$(( $1 * 100 / TOTAL ))
+    if [ "$p" -gt 100 ]; then p=100; fi
+    f=$(( p * BAR_WIDTH / 100 ))
+    printf '\r  [%.*s%.*s] %3d%%  %-30.30s' \
+        "$f" "$BAR_FULL" "$(( BAR_WIDTH - f ))" "$BAR_EMPTY" "$p" "$2"
+}
+
+watch_build() {
+    if tty_out; then
+        n=0
+        d=0
+        # `|| [ -n "$line" ]` catches a last line with no newline on the end,
+        # which `read` reports as failure even though it read something.
+        while IFS= read -r line || [ -n "$line" ]; do
+            # Cargo indents its verbs by a variable amount to line them up.
+            rest=${line#"${line%%[! ]*}"}
+            case "$rest" in
+                # The sentinel is bookkeeping, not something to show anyone.
+                tiny-install-failed*) ;;
+                Updating\ *) draw "updating the crate index" ;;
+                Downloaded\ *)
+                    d=$(( d + 1 ))
+                    if [ "$d" -eq 1 ]; then
+                        draw "fetched 1 crate"
+                    else
+                        draw "fetched $d crates"
+                    fi
+                    ;;
+                Compiling\ *)
+                    n=$(( n + 1 ))
+                    name=${rest#Compiling }
+                    name=${name%% *}
+                    # tiny is always the last crate: everything it depends on
+                    # has to exist before it can be built. So its arrival means
+                    # the only work left is the link, however few `Compiling`
+                    # lines came before it — which is the ordinary case when
+                    # the build directory is warm and the dependencies are all
+                    # still there from last time.
+                    if [ "$name" = tiny ] && [ "$TOTAL" -gt 0 ]; then
+                        bar "$(( TOTAL - 1 ))" "linking tiny"
+                    else
+                        bar "$n" "compiling $name"
+                    fi
+                    ;;
+                # The end of the build, and the only honest marker of it.
+                # `cargo install` prints `Installing tiny v0.2.0` when it
+                # *starts* as well as `Installing <path>` when it finishes, so
+                # matching on that drew a full bar before the first crate had
+                # compiled.
+                Finished\ *)
+                    # A full bar when there is a total to fill; with no total
+                    # the line is a count, and the count is what it is.
+                    if [ "$TOTAL" -gt 0 ]; then
+                        bar "$TOTAL" "installing"
+                    else
+                        bar "$n" "installing"
+                    fi
+                    ;;
+            esac
+            line=''
+        done
+        if [ "$n" -gt 0 ] || [ "$d" -gt 0 ]; then printf '\n'; fi
+    else
+        # Not a terminal: a bar redrawn with carriage returns into a log file
+        # is one unreadable line thousands of characters long. Drain it and
+        # let the log speak.
+        cat >/dev/null
+    fi
+    # The log is what actually says whether it worked — the loop's exit status
+    # is its own, and the shell has no way to reach back for cargo's through a
+    # pipe.
+    ! grep -q 'tiny-install-failed' "$LOG"
+}
+
 # How many crates the bar is counting against.
 #
 # `cargo tree` lists the packages actually reachable at build time — normal and
@@ -89,12 +200,13 @@ mkdir -p "$PREFIX"
 # line for each. Asking cargo rather than writing a number down means the bar
 # stays right when the dependency list changes, and an old cargo that does not
 # know the command just leaves this empty, which turns the bar into a count.
+say "building — this takes a minute the first time"
+draw "reading the dependency list"
 TOTAL=$(cargo tree --manifest-path "$SRC/Cargo.toml" \
             -e normal,build --prefix none --no-dedupe 2>/dev/null \
         | awk 'NF' | sort -u | wc -l | tr -d ' ')
 case "$TOTAL" in ''|*[!0-9]*|0) TOTAL=0 ;; esac
 
-say "building — this takes a minute the first time"
 LOG="$(mktemp)"
 
 # Cargo says what it is doing on stderr, a line per crate. Reading those is
@@ -110,51 +222,6 @@ build() {
         || echo "tiny-install-failed"; } | tee "$LOG" | watch_build
 }
 
-# Turn cargo's running commentary into one line that moves.
-#
-# The bar is drawn with `\r` and no newline, so the whole build occupies a
-# single line however many crates go past. Two details are not optional:
-# the field holding the crate name is padded, because a shorter name has to
-# wipe the longer one it replaced and no clear-to-end-of-line escape is worth
-# assuming; and every frame is flushed, because awk buffers and a bar that
-# arrives in one burst at the end is not a bar.
-#
-# With no total — an old cargo, or a `cargo tree` that failed — it counts
-# instead of filling. A bar that cannot say how far along it is should say so
-# rather than invent a denominator.
-watch_build() {
-    if tty_out; then
-        awk -v total="$TOTAL" '
-            function bar(n, what,   p, f, s, i) {
-                if (total <= 0) {
-                    printf "\r  %d crates  %-30.30s", n, what
-                    fflush()
-                    return
-                }
-                p = int(n * 100 / total); if (p > 100) p = 100
-                f = int(p * 28 / 100); s = ""
-                for (i = 0; i < 28; i++) s = s (i < f ? "#" : ".")
-                printf "\r  [%s] %3d%%  %-30.30s", s, p, what
-                fflush()
-            }
-            /^ *Updating /   { printf "\r  %-52.52s", "updating the crate index"; fflush(); next }
-            /^ *Downloaded / { d++; printf "\r  %-52.52s", "fetched " d " crate" (d == 1 ? "" : "s"); fflush(); next }
-            /^ *Compiling /  { n++; bar(n, "compiling " $2); next }
-            /^ *Installing / { bar(total, "installing"); next }
-            # The sentinel is bookkeeping, not something to show anyone.
-            /tiny-install-failed/ { next }
-            END { if (n > 0 || d > 0) printf "\n" }
-        '
-    else
-        # Not a terminal: a bar redrawn with carriage returns into a log file
-        # is one unreadable line thousands of characters long. Drain it and
-        # let the log speak.
-        cat >/dev/null
-    fi
-    # The log is what actually says whether it worked — awk's exit status is
-    # awk's, and the shell has no way to reach back for cargo's through a pipe.
-    ! grep -q 'tiny-install-failed' "$LOG"
-}
 
 if ! build; then
     # The sentinel is ours; showing it to someone whose build just failed would

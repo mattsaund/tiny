@@ -5,7 +5,7 @@ Tiny is a personal knowledge management system (PKMS), IDE, and text editor that
 Everything tiny manages and edits is non proprietary and not obfuscated.
 
 ## Install:
-Full Installation Size: 7.12 MB
+Full Installation Size: 7.45 MB
 
 **One Liner:**
 ```sh
@@ -68,7 +68,7 @@ Every control that does something to a project is a **chord**, so it works while
 | `Ctrl+S`  | save — on a folder, everything unsaved in it|
 | `Ctrl+C` `Ctrl+V` | copy, and paste into the folder you are in |
 | `Ctrl+.`  | show or hide dotfiles                       |
-| `F5`      | re-read from disk (or `*reload`)            |
+| `F5`      | re-read from disk now (or `*reload`)        |
 
 **Windows**
 
@@ -80,7 +80,7 @@ Every control that does something to a project is a **chord**, so it works while
 | `Ctrl+M`    | the project map                             |
 | `Ctrl+,`    | the settings area                           |
 | `F1`        | keys and commands                           |
-| `Ctrl+Q`    | quit                                        |
+| `Ctrl+Q`    | quit — offers to save anything unsaved      |
 
 **The browser pane**
 
@@ -152,28 +152,29 @@ a directory it will save all files under that directory.
 
 The project map `Ctrl+M` shows every file in the project, grouped under the folder it lives in, and draws what the file under the cursor is joined to.
 
-Files that nothing reaches are grouped under `unconnected` at the bottom. Underneath, `out:` and `in:` name every file this one reaches and every file that reaches it — which is where direction lives, because the lines themselves are plain.
 
 ```
-┌ PROJECT MAP  6/6 files | 4 links ────────────────────────────────────────┐
+┌ PROJECT MAP  6/6 files | 3 links ────────────────────────────────────────┐
 │src/  4 files                                                             │
 │                                                                          │
 │╭──────╮       ╭───────╮      ╭─────────╮    ╭────────╮                   │
 ││cli.py│       │main.py│──────│parser.py│────│utils.py│                   │
 │╰──────╯       ╰───────╯      ╰─────────╯    ╰────────╯                   │
 │                                                                          │
+│                                                                          │
 │unconnected  2 files                                                      │
 │                                                                          │
 │╭────────╮     ╭────────╮                                                 │
 ││notes.md│     │store.py│                                                 │
 │╰────────╯     ╰────────╯                                                 │
+│                                                                          │
 └──────────────────────────────────────────────────────────────────────────┘
   src/parser.py  code
   out: 1   utils.py:load
   in:  1   main.py:read
   defines read
-  1:wikilink 2:link 3:call   calls traced in Python, Rust, JavaScript
-```
+  1:wikilink 2:link 3:call
+
 
 | key       | does                                        |
 |-----------|---------------------------------------------|
@@ -262,6 +263,7 @@ Theme entries are style specs, so a line can carry weight as well as color:
 ```toml
 show_hidden        = false
 tab_width          = 4
+auto_reload        = true   # pick up changes made by other programs
 line_numbers       = true
 syntax_theme       = "base16-ocean.dark"
 max_search_results = 500
@@ -280,6 +282,8 @@ heading      = "bold"
 link         = "underline"
 code         = "dim"
 marker       = "bold"
+map_in       = "green"      # project map: files that reach the selected one
+map_out      = "red"        # project map: files the selected one reaches
 ```
 
 

@@ -29,7 +29,6 @@
 //! `move_towards(0.0, 1.0)`. Navigation then walks the picture exactly as it
 //! is drawn.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent};
@@ -178,24 +177,6 @@ impl ProjectMap {
     pub fn selected_node(&self) -> Option<&Node> {
         let i = self.selected;
         self.node_visible(i).then(|| self.graph.nodes.get(i))?
-    }
-
-    /// Everything connected to `i` by a visible edge, in either direction.
-    /// Drives label priority and highlighting: neighbours are drawn brighter
-    /// than the rest of the graph.
-    pub fn neighbours(&self, i: usize) -> HashSet<usize> {
-        let mut out = HashSet::new();
-        for e in &self.graph.edges {
-            if !self.edge_visible(e) {
-                continue;
-            }
-            if e.from == i {
-                out.insert(e.to);
-            } else if e.to == i {
-                out.insert(e.from);
-            }
-        }
-        out
     }
 
     /// Edges touching a node, split into the ones it points at and the ones
@@ -400,11 +381,6 @@ impl ProjectMap {
             out.push_str(&format!(" | {hidden} hidden"));
         }
         out
-    }
-
-    /// Languages whose calls can be followed, for the line beside the toggles.
-    pub fn languages(&self) -> &[String] {
-        &self.graph.languages
     }
 }
 

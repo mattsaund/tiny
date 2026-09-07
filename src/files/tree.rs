@@ -19,13 +19,14 @@
 //! refresh — has to be followed by a re-flatten, which `App::rebuild_rows`
 //! does while preserving the cursor by path rather than by index.
 //!
-//! # There is no file watcher
+//! # Who asks it to re-read
 //!
-//! The tree only re-reads the disk when something asks it to: `R`/`F5`, a
-//! create/rename/delete, or a `.`-toggle. Files changed by another program do
-//! not appear until then. That is a deliberate simplification — an inotify
-//! watcher would mean a background thread and a redraw signal, and the event
-//! loop is built to block until a key arrives (see `main`).
+//! The tree never watches anything itself: it re-reads when something asks it
+//! to. That is a create/rename/delete, a `.`-toggle, `F5`, or — twice a second
+//! while tiny is idle — [`app`'s disk watcher](crate::app), which stats the
+//! directories [`Tree::loaded_dirs`] names and calls [`Tree::refresh_all`] when
+//! one of them has a new modification time. There is still no inotify and no
+//! background thread; see `app::watch` for why polling was the cheaper answer.
 
 use std::cmp::Ordering;
 use std::fs;
@@ -246,7 +247,11 @@ impl Tree {
 
     /// Paths of every currently-loaded directory, parents before children so
     /// a refresh pass rebuilds the tree top-down.
-    fn loaded_dirs(&self) -> Vec<PathBuf> {
+    ///
+    /// Also what `app`'s disk watcher stats: these are exactly the directories
+    /// whose contents are on screen, so they are exactly the ones where an
+    /// entry appearing or disappearing has to be noticed.
+    pub fn loaded_dirs(&self) -> Vec<PathBuf> {
         fn walk(n: &Node, out: &mut Vec<PathBuf>) {
             if n.is_dir && n.loaded {
                 out.push(n.path.clone());

@@ -128,7 +128,7 @@ pub struct Settings {
 pub enum ConfirmKind {
     /// Remove a file, or a directory and everything under it.
     Delete(PathBuf),
-    /// Quit, discarding unsaved buffers.
+    /// Leave with unsaved buffers open: `y` writes them first, `n` does not.
     QuitUnsaved,
     /// Rewrite every occurrence across the project.
     Replace { find: String, replace: String },
