@@ -66,6 +66,7 @@ mod map;
 mod parts;
 mod preview;
 mod settings;
+mod source;
 mod tree;
 
 use ratatui::Frame;
@@ -76,9 +77,10 @@ use self::help::draw_help;
 use self::map::draw_map;
 use self::preview::draw_preview;
 use self::settings::{draw_keybinds, draw_settings};
+use self::source::draw_source;
 use self::tree::{draw_results, draw_tree, results_height};
 
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, Window};
 use crate::config::{Position, Side};
 
 /// Paint one frame. Called once per keypress by the event loop in `main`.
@@ -134,9 +136,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
 
-    if app.project_map.is_some() {
-        draw_map(f, app, main);
-        return;
+    // Two of the three windows take the whole pane and answer for themselves.
+    match app.window {
+        Window::Map => {
+            draw_map(f, app, main);
+            return;
+        }
+        Window::Source => {
+            draw_source(f, app, main);
+            return;
+        }
+        Window::Main => {}
     }
 
     // Results drop down from the top of the panes, pushing them down rather

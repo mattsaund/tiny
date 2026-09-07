@@ -27,40 +27,99 @@
 //! chords in [`Context::Global`] are checked first everywhere, which is why
 //! `Ctrl+S` saves from wherever you are.
 //!
-//! Everything that acts on the project is in `Global`, and every one of those
-//! is a chord. That is not a style choice: in the editor a letter is a letter
-//! being typed, so a control that has to work while you are writing has no
-//! other shape available. The tree keeps a bare-letter binding for the common
-//! ones beside the chord — `n` as well as `Ctrl+N` — because there, nothing is
-//! being typed and the short one costs nothing.
+//! Everything in `Global` is a chord. That is not a style choice: in the editor
+//! a letter is a letter being typed, so a control that has to work while you
+//! are writing has no other shape available. The tree keeps a bare-letter
+//! binding for the common ones beside the chord — `n` as well as `Ctrl+N` —
+//! because there, nothing is being typed and the short one costs nothing.
+//!
+//! # What is a key and what is a command
+//!
+//! Not everything tiny does is here, and that is the point. Keys are for
+//! moving around and for changing a file: things done constantly, in the middle
+//! of something else, where a key is the only shape fast enough. Deleting a
+//! path, re-reading the disk, opening the settings — those are deliberate acts,
+//! usually with something to type after them, and they are commands (`*delete`,
+//! `*reload`, `*config`). They had keys as well until the two lists were told
+//! apart, and a second way in earned nothing but a row in this table.
+//!
+//! It runs the other way too: saving and quitting are `Ctrl+S` and `Ctrl+Q`,
+//! and the `*w`, `*q` and `*wq` that shadowed them are gone.
 //!
 //! # Keys a terminal cannot send
 //!
 //! Four of the shipped chords do not exist in a terminal's legacy encoding.
-//! `Ctrl+M` is the byte 0x0D, which is also Enter; `Ctrl+.` and `Ctrl+,` have
-//! no byte at all; `Ctrl+/` arrives as 0x1F, which is indistinguishable from
-//! `Ctrl+7`. `main` asks the terminal for the disambiguating keyboard protocol,
-//! which separates all four, and on a terminal that declines those chords do
-//! not arrive — the tree's bare `m`, `.`, `,` and `/` are what reach those
-//! actions there.
+//! `Ctrl+.` has no byte at all; `Ctrl+/` arrives as 0x1F, which is
+//! indistinguishable from `Ctrl+7`; `Ctrl` with a digit is not in the encoding
+//! either. `main` asks the terminal for the disambiguating keyboard protocol,
+//! which separates them all, and on a terminal that declines they do not
+//! arrive.
+//!
+//! Where that would leave a function unreachable, the key that always arrives
+//! is the one that is bound: dotfiles are the browser's bare `.` rather than
+//! `Ctrl+.`, and the bar keeps `/` in the browser beside `Ctrl+/`. That last
+//! one is the single deliberate repeat in the table, and it is here because
+//! searching from inside a file needs the chord while searching at all needs
+//! the letter.
 //!
 //! A key can also fail to arrive because something above the terminal answered
 //! it first. `Ctrl+Shift` with an arrow starts a selection in a good many
 //! emulators, and GNOME and KDE both ship with `Ctrl+Alt` and an arrow bound to
 //! switching workspaces — a desktop shortcut is taken before the terminal sees
-//! the key at all. Between those two and the three arrow sets tiny already
-//! uses, there is no modifier left that an arrow can safely carry, which is why
-//! [`Action::PaneNarrower`] and [`Action::PaneWider`] are not arrows.
+//! the key at all. Neither is used here for that reason.
 //!
-//! # Alt, not Shift
+//! Two of the contexts belong to a window rather than a pane: [`Context::Map`]
+//! and [`Context::Source`] are read when that window is on screen, and the
+//! global chords are checked first there as everywhere — which is how `Ctrl+P`
+//! reaches the command bar from the source window, where `*commit` is typed.
 //!
-//! `Alt` with an arrow is "all the way": the first entry, the last entry, the
-//! start of the line, the end of the file. It is on `Alt` rather than `Shift`
-//! because `Shift` with an arrow is how terminals have always started a
-//! selection, and a key the terminal may act on itself is a key that works on
-//! some machines and not others. The capital letters `I` and `K` stay as they
-//! are — they are characters, not a modifier, and a terminal cannot mistake
-//! them for anything.
+//! # Three windows, on Ctrl and a number
+//!
+//! `Ctrl+1` is the browser and the file, `Ctrl+2` is source control, `Ctrl+3`
+//! is the project map. They are windows and not overlays: there is no stack to
+//! pop, so the way out of one is to name another, and Esc returns to the first.
+//!
+//! Numbers rather than initials because the set is small, ordered and unlikely
+//! to grow much — and because `Ctrl+M` (the map's old key) *is* Enter in a
+//! terminal's legacy encoding, which is the sort of collision a number cannot
+//! have.
+//!
+//! What a number costs: `Ctrl` with a digit is not in the legacy encoding
+//! either. `Ctrl+1` sends nothing at all, `Ctrl+2` arrives as `Ctrl+Space` and
+//! `Ctrl+3` as `Esc`. On a terminal that speaks the disambiguating keyboard
+//! protocol all three arrive properly; on one that does not — macOS Terminal,
+//! Konsole, an old VTE — `Ctrl+2` will fold the browser and `Ctrl+3` will act
+//! as Escape. There is no encoding trick that avoids this; a terminal that
+//! cannot say which key was pressed cannot be made to.
+//!
+//! # No Alt at all
+//!
+//! There used to be an `Alt` half to the movement keys. There is none now, and
+//! this is the reason: on macOS, Option is not a modifier. Terminal sends `⌥-`
+//! as an en dash and `⌥←` as an escape sequence of its own, so an `Alt`
+//! binding never arrived at all. A key that works on one machine and not
+//! another is worse than no key, and every one of them had a twin that any
+//! terminal can send — `Home`, `End`, `Ctrl+Home`, `Ctrl+End`, `I`, `K`, and
+//! `Ctrl` with an arrow for the browser's width.
+//!
+//! # Shift
+//!
+//! `Shift` with an arrow is not used either, and never was: it is how terminals
+//! have always started a selection, and a key the terminal may act on itself is
+//! a key that works on some machines and not others. The capital letters `I`
+//! and `K` are fine — they are characters, not a modifier, and a terminal
+//! cannot mistake them for anything.
+//!
+//! # One key per thing
+//!
+//! Two keys that do the same thing are one key and one thing to remember for
+//! nothing, so there are none. The exception is `i` `j` `k` `l`, which stand in
+//! for the four arrows on a keyboard that has none, and `I` / `K` beside `Home`
+//! / `End` for the same reason.
+//!
+//! The width pair is why [`Action::TreeNarrower`] lives in [`Context::Tree`]
+//! rather than in `Global`: `Ctrl` with an arrow is a word motion in the
+//! editor, and a global binding would take it from there.
 //!
 //! # Defaults and overrides
 //!
@@ -88,6 +147,8 @@ pub enum Context {
     /// The editor, and the one key that leaves it.
     Editor,
     Map,
+    /// The source-control window: the change list and its buttons.
+    Source,
 }
 
 impl Context {
@@ -98,6 +159,7 @@ impl Context {
             Context::View => "VIEWING",
             Context::Editor => "EDITOR",
             Context::Map => "PROJECT MAP",
+            Context::Source => "SOURCE CONTROL",
         }
     }
 }
@@ -117,18 +179,12 @@ pub enum Action {
     Bar,
     CommandBar,
     ToggleTreePane,
-    PaneNarrower,
-    PaneWider,
-    New,
-    Rename,
-    Delete,
     Copy,
     Paste,
-    Hidden,
-    Map,
-    Refresh,
+    WindowMain,
+    WindowSource,
+    WindowMap,
     Help,
-    Settings,
     // Tree
     TreeUp,
     TreeDown,
@@ -142,13 +198,9 @@ pub enum Action {
     TreeInto,
     TreeOut,
     TreePreview,
-    TreeNew,
-    TreeRename,
-    TreeDelete,
     TreeHidden,
-    TreeHelp,
-    TreeSettings,
-    TreeMap,
+    TreeNarrower,
+    TreeWider,
     TreeBar,
     TreeQuit,
     // Reading
@@ -186,6 +238,21 @@ pub enum Action {
     MapWikilinks,
     MapLinks,
     MapCalls,
+    // Source control
+    SourceUp,
+    SourceDown,
+    SourceJumpUp,
+    SourceJumpDown,
+    SourceLeft,
+    SourceRight,
+    SourceEnter,
+    SourceOpen,
+    SourceRefresh,
+    SourcePageUp,
+    SourcePageDown,
+    SourceNarrower,
+    SourceWider,
+    SourceClose,
 }
 
 /// Every action, its context, its name in the config file, what it does, and
@@ -231,47 +298,6 @@ const TABLE: &[Row] = &[
         "fold the browser away, and back",
         "ctrl+space",
     ),
-    (
-        Action::PaneNarrower,
-        Context::Global,
-        "pane_narrower",
-        "a narrower browser",
-        // Not an arrow. Every arrow is spoken for: bare, Ctrl and Alt are all
-        // movement, Ctrl+Shift is how a terminal starts a selection, and
-        // Ctrl+Alt is how GNOME and KDE switch workspaces — a desktop
-        // shortcut is taken before the terminal sees the key at all. Minus
-        // and equals are the shrink-and-grow pair every zoom control uses,
-        // and nothing claims them.
-        "alt+-",
-    ),
-    (
-        Action::PaneWider,
-        Context::Global,
-        "pane_wider",
-        "a wider browser",
-        "alt+=",
-    ),
-    (
-        Action::New,
-        Context::Global,
-        "new",
-        "new file or folder",
-        "ctrl+n",
-    ),
-    (
-        Action::Rename,
-        Context::Global,
-        "rename",
-        "rename",
-        "ctrl+r",
-    ),
-    (
-        Action::Delete,
-        Context::Global,
-        "delete",
-        "delete, after asking",
-        "ctrl+d",
-    ),
     (Action::Copy, Context::Global, "copy", "copy", "ctrl+c"),
     (
         Action::Paste,
@@ -281,25 +307,27 @@ const TABLE: &[Row] = &[
         "ctrl+v",
     ),
     (
-        Action::Hidden,
+        Action::WindowMain,
         Context::Global,
-        "hidden",
-        "show or hide dotfiles",
-        "ctrl+.",
+        "window_main",
+        "the browser and the file",
+        // The three windows are `Ctrl` with their number. Nothing else
+        // switches between them, so the number *is* the window.
+        "ctrl+1",
     ),
     (
-        Action::Map,
+        Action::WindowSource,
         Context::Global,
-        "map",
+        "window_source",
+        "git and what has changed",
+        "ctrl+2",
+    ),
+    (
+        Action::WindowMap,
+        Context::Global,
+        "window_map",
         "the project map",
-        "ctrl+m",
-    ),
-    (
-        Action::Refresh,
-        Context::Global,
-        "reload",
-        "re-read from disk — also *reload",
-        "f5",
+        "ctrl+3",
     ),
     (
         Action::Help,
@@ -307,13 +335,6 @@ const TABLE: &[Row] = &[
         "help",
         "keys and commands",
         "f1",
-    ),
-    (
-        Action::Settings,
-        Context::Global,
-        "settings",
-        "the settings area",
-        "ctrl+,",
     ),
     (Action::TreeUp, Context::Tree, "tree.up", "move up", "up i"),
     (
@@ -328,14 +349,14 @@ const TABLE: &[Row] = &[
         Context::Tree,
         "tree.first",
         "first entry",
-        "alt+up I",
+        "home I",
     ),
     (
         Action::TreeLast,
         Context::Tree,
         "tree.last",
         "last entry",
-        "alt+down K",
+        "end K",
     ),
     (
         Action::TreeJumpUp,
@@ -394,27 +415,6 @@ const TABLE: &[Row] = &[
         "tab",
     ),
     (
-        Action::TreeNew,
-        Context::Tree,
-        "tree.new",
-        "new file or folder",
-        "n",
-    ),
-    (
-        Action::TreeRename,
-        Context::Tree,
-        "tree.rename",
-        "rename",
-        "r",
-    ),
-    (
-        Action::TreeDelete,
-        Context::Tree,
-        "tree.delete",
-        "delete, after asking",
-        "d",
-    ),
-    (
         Action::TreeHidden,
         Context::Tree,
         "tree.hidden",
@@ -422,25 +422,25 @@ const TABLE: &[Row] = &[
         ".",
     ),
     (
-        Action::TreeHelp,
+        Action::TreeNarrower,
         Context::Tree,
-        "tree.help",
-        "keys and commands",
-        "?",
+        "tree.narrower",
+        "a narrower browser",
+        // The pane's own resize keys, and the reason they live here rather
+        // than in `Global`: `Ctrl` with an arrow is a word motion in the
+        // editor, and a global binding would take it there too. In the
+        // browser nothing is being typed and both are free.
+        //
+        // Every terminal sends these, which the `Alt` pair beside them cannot
+        // claim — see the module docs on Option.
+        "ctrl+left",
     ),
     (
-        Action::TreeSettings,
+        Action::TreeWider,
         Context::Tree,
-        "tree.settings",
-        "the settings area",
-        ",",
-    ),
-    (
-        Action::TreeMap,
-        Context::Tree,
-        "tree.map",
-        "the project map",
-        "m",
+        "tree.wider",
+        "a wider browser",
+        "ctrl+right",
     ),
     (
         Action::TreeBar,
@@ -454,7 +454,7 @@ const TABLE: &[Row] = &[
         Context::Tree,
         "tree.quit",
         "leave tiny",
-        "q esc",
+        "esc",
     ),
     (
         Action::ViewUp,
@@ -475,14 +475,14 @@ const TABLE: &[Row] = &[
         Context::View,
         "view.top",
         "to the top",
-        "alt+up I",
+        "home I",
     ),
     (
         Action::ViewBottom,
         Context::View,
         "view.bottom",
         "to the bottom",
-        "alt+down K",
+        "end K",
     ),
     (
         Action::ViewPageUp,
@@ -566,35 +566,35 @@ const TABLE: &[Row] = &[
         Context::Editor,
         "editor.line_start",
         "to the start of the line",
-        "alt+left",
+        "home",
     ),
     (
         Action::EditorLineEnd,
         Context::Editor,
         "editor.line_end",
         "to the end of the line",
-        "alt+right",
+        "end",
     ),
     (
         Action::EditorDocStart,
         Context::Editor,
         "editor.start",
         "to the first line",
-        "alt+up",
+        "ctrl+home",
     ),
     (
         Action::EditorDocEnd,
         Context::Editor,
         "editor.end",
         "to the last line",
-        "alt+down",
+        "ctrl+end",
     ),
     (
         Action::MapClose,
         Context::Map,
         "map.close",
-        "back to the tree",
-        "esc q m ctrl+m",
+        "back to the browser",
+        "esc",
     ),
     (
         Action::MapOpen,
@@ -679,6 +679,109 @@ const TABLE: &[Row] = &[
         "map.calls",
         "draw calls",
         "3",
+    ),
+    (
+        Action::SourceUp,
+        Context::Source,
+        "source.up",
+        "move up",
+        "up i",
+    ),
+    (
+        Action::SourceDown,
+        Context::Source,
+        "source.down",
+        "move down",
+        "down k",
+    ),
+    (
+        Action::SourceJumpUp,
+        Context::Source,
+        "source.jump_up",
+        "five at a time",
+        // The same two keys that move five at a time in the browser and in a
+        // file, doing the same thing to whichever half of this window has the
+        // arrows.
+        "ctrl+up",
+    ),
+    (
+        Action::SourceJumpDown,
+        Context::Source,
+        "source.jump_down",
+        "five at a time",
+        "ctrl+down",
+    ),
+    (
+        Action::SourceLeft,
+        Context::Source,
+        "source.left",
+        "the button to the left",
+        "left j",
+    ),
+    (
+        Action::SourceRight,
+        Context::Source,
+        "source.right",
+        "the button to the right",
+        "right l",
+    ),
+    (
+        Action::SourceEnter,
+        Context::Source,
+        "source.stage",
+        "stage or unstage — a file, or a whole section",
+        "enter",
+    ),
+    (
+        Action::SourceOpen,
+        Context::Source,
+        "source.open",
+        "open this file in the editor",
+        "tab",
+    ),
+    (
+        Action::SourceRefresh,
+        Context::Source,
+        "source.refresh",
+        "ask git again",
+        "r",
+    ),
+    (
+        Action::SourcePageUp,
+        Context::Source,
+        "source.page_up",
+        "the diff, a screen up",
+        "pageup",
+    ),
+    (
+        Action::SourcePageDown,
+        Context::Source,
+        "source.page_down",
+        "the diff, a screen down",
+        "pagedown",
+    ),
+    (
+        Action::SourceNarrower,
+        Context::Source,
+        "source.narrower",
+        "a narrower change list",
+        // The same two keys that size the browser, because it is the same
+        // column in the same place doing the same job.
+        "ctrl+left",
+    ),
+    (
+        Action::SourceWider,
+        Context::Source,
+        "source.wider",
+        "a wider change list",
+        "ctrl+right",
+    ),
+    (
+        Action::SourceClose,
+        Context::Source,
+        "source.close",
+        "back to the browser",
+        "esc",
     ),
 ];
 

@@ -26,6 +26,7 @@
 //! | [`settings`] | the settings area and the keybinds window |
 //! | [`prompt`] | answering a prompt or a confirmation |
 //! | [`parts`] | small helpers more than one of the above needs |
+//! | [`source`] | the git window: what has changed, and what to do about it |
 //! | [`watch`] | noticing files another program changed |
 //!
 //! They are all `impl App` blocks on the same struct. Splitting an impl across
@@ -115,11 +116,13 @@ mod parts;
 mod preview;
 mod prompt;
 mod settings;
+mod source;
 mod watch;
 
 pub use self::bar::completion_for;
-pub use self::mode::{BUTTONS, Bar, Focus, KEYBIND_BUTTONS, Keybinds, Mode, Settings};
+pub use self::mode::{BUTTONS, Bar, Focus, KEYBIND_BUTTONS, Keybinds, Mode, Settings, Window};
 pub use self::preview::{Preview, TextKind};
+pub use self::source::{BUTTONS as GIT_BUTTONS, GitFocus, GitPane, Row as GitRow};
 use self::watch::Watch;
 
 use self::parts::display_name;
@@ -183,7 +186,12 @@ pub struct App {
     /// it on every keystroke. Written by `ui` while drawing, like the media
     /// cache and for the same reason — see the module docs.
     pub highlight_cache: Resume,
-    /// The project map, while it is being looked at.
+    /// Which of the three windows is on screen. `Ctrl+1`, `Ctrl+2`, `Ctrl+3`.
+    pub window: Window,
+    /// Everything the source-control window draws — see [`source`].
+    pub git: GitPane,
+    /// The project map, built when [`Window::Map`] is switched to and kept
+    /// until the next time it is.
     pub project_map: Option<ProjectMap>,
     /// What `Ctrl+C` picked up, waiting for a `Ctrl+V`. A path, not a copy of
     /// the bytes: the file is read at paste time, so editing it in between
@@ -220,7 +228,7 @@ impl App {
     ///
     /// The startup warning, if any, is shown in place of the usual greeting —
     /// a broken config file should be the first thing you see, not something
-    /// buried behind a "? for help".
+    /// buried behind an "F1 for help".
     ///
     /// When the target named a file, the cursor is revealed onto it and the
     /// editor is focused straight away: that is the entire point of writing
@@ -237,9 +245,9 @@ impl App {
         let palette = Palette::from_theme(&config.theme);
 
         let opening = if target.created {
-            "new project — ? for help".to_string()
+            "new project — F1 for help".to_string()
         } else {
-            "? for help".to_string()
+            "F1 for help".to_string()
         };
         let mut app = Self {
             tree,
@@ -257,6 +265,8 @@ impl App {
             palette,
             highlighter,
             highlight_cache: Resume::default(),
+            window: Window::Main,
+            git: GitPane::default(),
             project_map: None,
             clipboard: None,
             tree_hidden: false,
@@ -371,12 +381,37 @@ impl App {
         }
     }
 
-    /// Build the map and hand the screen over to it.
+    /// Switch windows.
     ///
-    /// Built fresh every time rather than cached: it is the only way to be
-    /// sure it reflects files edited since the last look, and there is no
-    /// invalidation scheme that would be simpler than just rebuilding.
-    /// Synchronous, so a large project pauses here — see `graph::build`.
+    /// The one place the three of them are chosen between, so what each switch
+    /// costs is visible in one screen: the map is rebuilt on the way in and
+    /// the other two cost nothing at all.
+    pub(super) fn show_window(&mut self, window: Window) {
+        if window == self.window && window != Window::Map {
+            return;
+        }
+        self.window = window;
+        match window {
+            // Rebuilt on every switch rather than cached: it is the only way
+            // to be sure it reflects files changed since the last look, and no
+            // invalidation scheme would be simpler than building it again.
+            Window::Map => self.open_map(),
+            Window::Source => {
+                self.refresh_git();
+                self.status = match &self.git.error {
+                    Some(e) => e.clone(),
+                    None if self.git.status.is_clean() => {
+                        format!("{} — nothing to commit", self.git.status.branch.summary())
+                    }
+                    None => self.git.status.branch.summary(),
+                };
+            }
+            Window::Main => self.status = "back to the browser".into(),
+        }
+    }
+
+    /// Build the map. Synchronous, so a large project pauses here — see
+    /// `graph::build`.
     fn open_map(&mut self) {
         let root = self.root().to_path_buf();
         let options = self.graph_options();

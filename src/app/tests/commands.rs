@@ -129,7 +129,7 @@ fn quitting_with_unsaved_work_offers_to_save_it() {
     let (td, mut app) = fixture();
     with_unsaved_work(&mut app);
 
-    app.on_key(ch('q'));
+    app.on_key(ctrl('q'));
     assert!(!app.should_quit);
     let asked = joined(&mut app);
     assert!(asked.contains("Save changes to main.py"), "in {asked}");
@@ -138,7 +138,7 @@ fn quitting_with_unsaved_work_offers_to_save_it() {
     app.on_key(k(KeyCode::Esc));
     assert!(!app.should_quit, "Esc takes the whole quit back");
 
-    app.on_key(ch('q'));
+    app.on_key(ctrl('q'));
     app.on_key(ch('y'));
     assert!(app.should_quit, "y saves and goes");
     assert!(
@@ -154,7 +154,7 @@ fn answering_no_to_saving_quits_without_writing() {
     let (td, mut app) = fixture();
     with_unsaved_work(&mut app);
 
-    app.on_key(ch('q'));
+    app.on_key(ctrl('q'));
     app.on_key(ch('n'));
     assert!(
         app.should_quit,
@@ -179,7 +179,7 @@ fn a_save_that_fails_on_the_way_out_keeps_tiny_open() {
     perms.set_readonly(true);
     fs::set_permissions(&file, perms).unwrap();
 
-    app.on_key(ch('q'));
+    app.on_key(ctrl('q'));
     app.on_key(ch('y'));
 
     let after = joined(&mut app);
@@ -199,7 +199,7 @@ fn a_save_that_fails_on_the_way_out_keeps_tiny_open() {
 #[test]
 fn help_opens_and_any_key_closes_it() {
     let (_td, mut app) = fixture();
-    app.on_key(ch('?'));
+    app.on_key(k(KeyCode::F(1)));
     // Tall enough for the whole thing; the short-terminal case scrolls,
     // and has a test of its own.
     let out = screen(&mut app, 90, 70).join("\n");
@@ -213,17 +213,36 @@ fn help_opens_and_any_key_closes_it() {
 #[test]
 fn help_lists_the_commands_as_well_as_the_keys() {
     let (_td, mut app) = fixture();
-    app.on_key(ch('?'));
+    app.on_key(k(KeyCode::F(1)));
     let out = screen(&mut app, 90, 70).join("\n");
-    assert!(out.contains("*copy a to b"), "commands are in it:\n{out}");
-    assert!(out.contains("*line 42"), "{out}");
-    assert!(out.contains("*replace old new"), "{out}");
+    assert!(
+        out.contains("*copy [from] to [to]"),
+        "commands are in it:\n{out}"
+    );
+    assert!(out.contains("*line [42]"), "{out}");
+    assert!(out.contains("*replace [old] [new]"), "{out}");
     assert!(
         // Keys read as they would be written in the config, which is what
         // the keybinds window shows too.
         out.contains("ctrl+s"),
         "and the keys are still there:\n{out}"
     );
+}
+
+#[test]
+fn a_key_two_actions_share_is_listed_once() {
+    // `Home` and `End` are the ends of a list in the browser and the ends of a
+    // line in the editor. The row that merges those four actions has to say so
+    // once, not `home end home end`.
+    let (_td, mut app) = fixture();
+    app.on_key(k(KeyCode::F(1)));
+    let out = screen(&mut app, 100, 70).join("\n");
+    let row = out
+        .lines()
+        .find(|l| l.contains("to the ends"))
+        .unwrap_or_else(|| panic!("no ends row in:\n{out}"));
+    assert!(row.contains("home end"), "{row}");
+    assert!(!row.contains("home end home"), "said twice: {row}");
 }
 
 #[test]
@@ -235,7 +254,7 @@ fn the_help_window_shows_a_rebinding_not_the_shipped_key() {
     app.on_key(k(KeyCode::Esc));
     app.on_key(k(KeyCode::Esc));
 
-    app.on_key(ch('?'));
+    app.on_key(k(KeyCode::F(1)));
     let out = screen(&mut app, 90, 70).join("\n");
     let row = out
         .lines()
@@ -251,22 +270,22 @@ fn the_help_window_shows_a_rebinding_not_the_shipped_key() {
 #[test]
 fn an_unbound_action_leaves_the_help_row_empty_rather_than_lying() {
     let (_td, mut app) = fixture();
-    // Ctrl+N is taken off `new` by giving it to another action in the same
-    // context — `new` is what the help row for making a file reads.
-    keybinds_on(&mut app, Action::Rename);
+    // Ctrl+S is taken off `save` by giving it to another action in the same
+    // context — `save` is what the help row for saving reads.
+    keybinds_on(&mut app, Action::Copy);
     app.on_key(k(KeyCode::Enter));
-    app.on_key(ctrl('n'));
+    app.on_key(ctrl('s'));
     app.on_key(k(KeyCode::Esc));
     app.on_key(k(KeyCode::Esc));
 
-    app.on_key(ch('?'));
+    app.on_key(k(KeyCode::F(1)));
     let out = screen(&mut app, 90, 70).join("\n");
     let row = out
         .lines()
-        .find(|l| l.contains("dot makes a file"))
+        .find(|l| l.contains("on a folder, all of it"))
         .unwrap_or_else(|| panic!("{out}"));
     assert!(
-        !row.contains("ctrl+n"),
+        !row.contains("ctrl+s"),
         "nothing reaches it, so nothing is offered:\n{row}"
     );
 }
@@ -274,7 +293,7 @@ fn an_unbound_action_leaves_the_help_row_empty_rather_than_lying() {
 #[test]
 fn a_wide_window_puts_keys_and_commands_side_by_side() {
     let (_td, mut app) = fixture();
-    app.on_key(ch('?'));
+    app.on_key(k(KeyCode::F(1)));
     let rows = screen(&mut app, 130, 46);
     // Whichever command happens to line up with it — the point is that a
     // key and a command share a row.
@@ -289,7 +308,7 @@ fn a_wide_window_puts_keys_and_commands_side_by_side() {
 #[test]
 fn a_narrow_window_stacks_them_into_one_column() {
     let (_td, mut app) = fixture();
-    app.on_key(ch('?'));
+    app.on_key(k(KeyCode::F(1)));
     let rows = screen(&mut app, 70, 70);
     let out = rows.join("\n");
     assert!(
@@ -300,7 +319,7 @@ fn a_narrow_window_stacks_them_into_one_column() {
     );
     assert!(out.contains("open or close"), "{out}");
     assert!(
-        out.contains("*copy a to b"),
+        out.contains("*copy [from] to [to]"),
         "both are still listed:\n{out}"
     );
 }
@@ -308,7 +327,7 @@ fn a_narrow_window_stacks_them_into_one_column() {
 #[test]
 fn help_scrolls_on_a_terminal_too_short_for_it() {
     let (_td, mut app) = fixture();
-    app.on_key(ch('?'));
+    app.on_key(k(KeyCode::F(1)));
     let top = screen(&mut app, 80, 16).join("\n");
     assert!(top.contains("MOVING"), "starts at the top:\n{top}");
 
@@ -326,7 +345,7 @@ fn help_scrolls_on_a_terminal_too_short_for_it() {
     app.on_key(k(KeyCode::End));
     let bottom = screen(&mut app, 80, 16).join("\n");
     assert!(
-        bottom.contains("quit"),
+        bottom.contains("*config"),
         "the last entry is reachable:\n{bottom}"
     );
     assert!(
@@ -441,6 +460,12 @@ fn screenshot() {
                 '~' => {
                     if let Some(c) = chars.next() {
                         app.on_key(alt(KeyCode::Char(c)));
+                    }
+                }
+                // `!1` is F1, so a shot can be taken of the help window.
+                '!' => {
+                    if let Some(c) = chars.next().and_then(|c| c.to_digit(10)) {
+                        app.on_key(k(KeyCode::F(c as u8)));
                     }
                 }
                 '\n' | '⏎' => app.on_key(k(KeyCode::Enter)),

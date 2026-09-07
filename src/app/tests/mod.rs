@@ -36,6 +36,7 @@ mod scrolling;
 mod search;
 mod settings;
 mod single_file;
+mod source;
 mod watch;
 
 /// A small project with one of each thing the panes have to handle.
@@ -229,6 +230,16 @@ pub(super) fn completed(app: &mut App, line: &str) -> String {
     out
 }
 
+/// Open the settings area. A command now, not a key — see `config::keys`.
+pub(super) fn settings(app: &mut App) {
+    command(app, "config");
+}
+
+/// Switch to the map window, the way `Ctrl+3` does.
+pub(super) fn open_map(app: &mut App) {
+    app.on_key(ctrl('3'));
+}
+
 pub(super) fn select(app: &mut App, name: &str) {
     for _ in 0..12 {
         let paths: Vec<PathBuf> = app
@@ -264,7 +275,7 @@ pub(super) fn select(app: &mut App, name: &str) {
 
 /// Open the keybinds window with the cursor on `action`.
 pub(super) fn keybinds_on(app: &mut App, action: Action) {
-    app.on_key(ch(','));
+    settings(app);
     app.on_key(k(KeyCode::Enter)); // the Keybinds button is the first row
     let rows = Action::all().position(|a| a == action).unwrap() + KEYBIND_BUTTONS.len();
     for _ in 0..rows {

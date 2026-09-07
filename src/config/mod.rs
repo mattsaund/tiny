@@ -97,7 +97,7 @@ pub struct Config {
     pub show_hidden: bool,
     pub tab_width: usize,
     /// Re-read files and folders that another program changed, without being
-    /// asked. Off makes `F5` the only way the disk is looked at again.
+    /// asked. Off makes `*reload` the only way the disk is looked at again.
     pub auto_reload: bool,
 
     /// Which side the project tree sits on.

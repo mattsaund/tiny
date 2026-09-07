@@ -92,7 +92,7 @@ fn a_bare_left_moves_the_cursor_instead_of_leaving() {
 #[test]
 fn the_keybinds_window_lists_every_action_without_columns_colliding() {
     let (_td, mut app) = fixture();
-    app.on_key(ch(','));
+    settings(&mut app);
     app.on_key(k(KeyCode::Enter));
     // Tall enough for the lot: this is about the columns, not scrolling.
     let out = screen(&mut app, 100, 120).join("\n");
@@ -166,7 +166,7 @@ fn ctrl_and_an_arrow_skips_five_entries_in_the_tree() {
 }
 
 #[test]
-fn alt_and_an_arrow_jumps_to_an_edge_of_the_text() {
+fn home_and_end_jump_to_an_edge_of_the_text() {
     let (td, mut app) = fixture();
     fs::write(
         td.path().join("notes/edges.md"),
@@ -178,16 +178,16 @@ fn alt_and_an_arrow_jumps_to_an_edge_of_the_text() {
     app.on_key(k(KeyCode::Enter));
     app.on_key(k(KeyCode::Down));
 
-    app.on_key(alt(KeyCode::Right));
+    app.on_key(k(KeyCode::End));
     let ed = app.active_buffer().unwrap();
     assert_eq!((ed.cursor_line, ed.cursor_col), (1, 6), "end of the line");
-    app.on_key(alt(KeyCode::Left));
+    app.on_key(k(KeyCode::Home));
     let ed = app.active_buffer().unwrap();
     assert_eq!((ed.cursor_line, ed.cursor_col), (1, 0), "start of it");
 
-    app.on_key(alt(KeyCode::Down));
+    app.on_key(ctrl_key(KeyCode::End));
     assert_eq!(app.active_buffer().unwrap().cursor_line, 3, "last line");
-    app.on_key(alt(KeyCode::Up));
+    app.on_key(ctrl_key(KeyCode::Home));
     assert_eq!(app.active_buffer().unwrap().cursor_line, 0, "first line");
     assert_eq!(app.focus, Focus::Editor, "none of that leaves the file");
 }

@@ -18,7 +18,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::parts::split_at_char;
 
-use crate::app::{App, Focus, Mode};
+use crate::app::{App, Focus, GitFocus, Mode, Window};
 
 /// The search (`/`) or command (`:`) line.
 ///
@@ -89,35 +89,33 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
 pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette;
     let line = match &app.mode {
-        Mode::Prompt(p) => {
-            let (before, after) = split_at_char(&p.input, p.cursor);
-            Line::from(vec![
-                Span::styled(format!(" {}: ", p.label), pal.heading),
-                Span::styled(before, pal.text),
-                Span::styled(
-                    after
-                        .chars()
-                        .next()
-                        .map(String::from)
-                        .unwrap_or_else(|| " ".into()),
-                    pal.text.add_modifier(Modifier::REVERSED),
-                ),
-                Span::styled(after.chars().skip(1).collect::<String>(), pal.text),
-                Span::styled("   Enter confirm | Esc cancel", pal.dim),
-            ])
-        }
         Mode::Confirm(c) => Line::from(vec![
             Span::styled(" ! ", pal.marker.add_modifier(Modifier::REVERSED)),
             Span::styled(format!(" {}", c.message), pal.marker),
         ]),
         _ => {
-            if app.project_map.is_some() {
+            if app.window == Window::Map {
                 let line = Line::from(vec![
                     Span::styled(format!(" {}", app.status), pal.text),
                     Span::styled(
                         "   arrows move | Enter open | 1-3 kinds | / filter | Esc back",
                         pal.dim,
                     ),
+                ]);
+                f.render_widget(Paragraph::new(line).style(pal.text), area);
+                return;
+            }
+            if app.window == Window::Source {
+                // What the arrows do here depends on which half has them, and
+                // a hint naming the other half's keys is worse than none.
+                let hints = match app.git.focus {
+                    GitFocus::Message => "Ctrl+S commit | Esc put it down",
+                    GitFocus::Diff => "up/down scroll | left back to the changes",
+                    GitFocus::List => "Enter stage | Tab open | r refresh | Esc back",
+                };
+                let line = Line::from(vec![
+                    Span::styled(format!(" {}", app.status), pal.text),
+                    Span::styled(format!("   {hints}"), pal.dim),
                 ]);
                 f.render_widget(Paragraph::new(line).style(pal.text), area);
                 return;
@@ -130,7 +128,7 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 // wherever it is read. Written out in full rather than as
                 // `^S` — this line is the first place most people meet these
                 // keys, and a caret is a thing you have to already know.
-                (_, Focus::Tree) => "Ctrl+/ search | Ctrl+M map | Ctrl+N new | F1 help",
+                (_, Focus::Tree) => "Ctrl+/ search | Ctrl+P command | Ctrl+3 map",
                 (_, Focus::Editor) => "Ctrl+S save | Ctrl+Z undo | Ctrl+K cut | Esc back",
             };
             let pos = position_readout(app);
@@ -157,11 +155,20 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 /// The right-hand end of the status line: `line:col` while editing, otherwise
 /// the tree cursor's position in the row list.
 fn position_readout(app: &App) -> String {
-    match app.active_buffer() {
-        Some(ed) if app.focus == Focus::Editor => {
-            format!("{}:{} ", ed.cursor_line + 1, ed.cursor_col + 1)
-        }
-        _ => format!("{}/{} ", app.selected + 1, app.rows.len()),
+    // Each window counts something different, and counting the browser's rows
+    // while looking at another one is a number that means nothing.
+    match app.window {
+        Window::Source => match app.git.current() {
+            Some((change, _)) => format!("{} ", change.code.word()),
+            None => String::new(),
+        },
+        Window::Map => String::new(),
+        Window::Main => match app.active_buffer() {
+            Some(ed) if app.focus == Focus::Editor => {
+                format!("{}:{} ", ed.cursor_line + 1, ed.cursor_col + 1)
+            }
+            _ => format!("{}/{} ", app.selected + 1, app.rows.len()),
+        },
     }
 }
 

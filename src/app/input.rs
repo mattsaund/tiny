@@ -23,11 +23,13 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::keys::{Action, Context as KeyContext};
 use crate::map::view::Intent;
+use crate::text::editor::Editor;
 
 use super::App;
-use super::mode::{Focus, Mode, PromptKind};
+use super::mode::{Focus, Mode, Window};
 use super::parts::list_move;
 use super::preview::Preview;
+use super::source::GitFocus;
 
 /// How far `Ctrl+Up` and `Ctrl+Down` jump, in the tree and in the editor.
 ///
@@ -35,6 +37,82 @@ use super::preview::Preview;
 /// you can feel the size of and repeat, which a number tied to the window
 /// height would not be. `PageUp`/`PageDown` are the ones that move by a screen.
 const JUMP_LINES: usize = 5;
+
+/// Apply one key to a buffer, and say what to complain about if anything.
+///
+/// The one text-editing keyboard in tiny, in one place. The editor pane uses
+/// it, and so does the commit message box in the source window — two panes that
+/// type, which must not disagree about what Backspace does.
+///
+/// `action` is what the keymap made of the key, already resolved by the caller
+/// so the borrow of the buffer can come after it. Anything the keymap did not
+/// name falls through to the fixed half: the arrows, Enter, Backspace and the
+/// characters themselves, which are not bindable because a keyboard that cannot
+/// type is not a keyboard.
+pub(super) fn edit_with_key(
+    ed: &mut Editor,
+    action: Option<Action>,
+    key: KeyEvent,
+    page: usize,
+    tab_width: usize,
+) -> Option<&'static str> {
+    match action {
+        Some(Action::EditorUndo) => return (!ed.undo()).then_some("nothing to undo"),
+        Some(Action::EditorRedo) => return (!ed.redo()).then_some("nothing to redo"),
+        Some(Action::EditorDeleteLine) => {
+            ed.delete_line();
+            return None;
+        }
+        Some(Action::EditorWordLeft) => {
+            ed.move_word_left();
+            return None;
+        }
+        Some(Action::EditorWordRight) => {
+            ed.move_word_right();
+            return None;
+        }
+        Some(Action::EditorJumpUp) => {
+            ed.page_up(JUMP_LINES);
+            return None;
+        }
+        Some(Action::EditorJumpDown) => {
+            ed.page_down(JUMP_LINES);
+            return None;
+        }
+        Some(Action::EditorLineStart) => {
+            ed.move_home();
+            return None;
+        }
+        Some(Action::EditorLineEnd) => {
+            ed.move_end();
+            return None;
+        }
+        Some(Action::EditorDocStart) => {
+            ed.move_doc_start();
+            return None;
+        }
+        Some(Action::EditorDocEnd) => {
+            ed.move_doc_end();
+            return None;
+        }
+        _ => {}
+    }
+    match key.code {
+        KeyCode::Left => ed.move_left(),
+        KeyCode::Right => ed.move_right(),
+        KeyCode::Up => ed.move_up(),
+        KeyCode::Down => ed.move_down(),
+        KeyCode::PageUp => ed.page_up(page),
+        KeyCode::PageDown => ed.page_down(page),
+        KeyCode::Enter => ed.insert_newline(),
+        KeyCode::Backspace => ed.backspace(),
+        KeyCode::Delete => ed.delete_forward(),
+        KeyCode::Tab => ed.insert_tab(tab_width),
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => ed.insert_char(c),
+        _ => {}
+    }
+    None
+}
 
 impl App {
     // ---- key dispatch -----------------------------------------------------
@@ -46,24 +124,88 @@ impl App {
     /// out and `Normal` left in its place, so a handler that does nothing
     /// closes its overlay, and one that wants to stay open has to say so.
     pub fn on_key(&mut self, key: KeyEvent) {
-        // The map takes the whole screen while it is open, and every key
-        // with it.
-        if self.project_map.is_some() {
-            return self.on_map_key(key);
+        // The window switcher answers before anything else, from every window
+        // and through every overlay. A key that changes which window you are
+        // looking at cannot be one that a pane might swallow first, or it
+        // would work from some places and not others.
+        if let Some(window) = self.window_key(&key) {
+            return self.show_window(window);
         }
-        // Take the mode out so handlers can own it without fighting the borrow
-        // checker, then put back whatever they leave behind.
-        match std::mem::replace(&mut self.mode, Mode::Normal) {
-            Mode::Help(scroll) => self.on_help_key(scroll, key),
-            Mode::Prompt(p) => self.on_prompt_key(p, key),
-            Mode::Confirm(c) => self.on_confirm_key(c, key),
-            Mode::Bar(b) => self.on_bar_key(b, key),
-            Mode::Settings(s) => self.on_settings_key(s, key),
-            Mode::Keybinds(kb) => self.on_keybinds_key(kb, key),
-            Mode::Normal => match self.focus {
+        // An overlay owns the keyboard wherever it was opened from — the bar
+        // is drawn over every window, so it has to be typed into from every
+        // window. Taken out and left as `Normal`, so a handler that does
+        // nothing closes it; see the module docs.
+        if !matches!(self.mode, Mode::Normal) {
+            return match std::mem::replace(&mut self.mode, Mode::Normal) {
+                Mode::Help(scroll) => self.on_help_key(scroll, key),
+                Mode::Confirm(c) => self.on_confirm_key(c, key),
+                Mode::Bar(b) => self.on_bar_key(b, key),
+                Mode::Settings(s) => self.on_settings_key(s, key),
+                Mode::Keybinds(kb) => self.on_keybinds_key(kb, key),
+                Mode::Normal => {}
+            };
+        }
+        // With nothing over it, the window that is not the main one takes the
+        // whole screen and every key with it.
+        match self.window {
+            Window::Map => self.on_map_key(key),
+            Window::Source => self.on_source_key(key),
+            Window::Main => match self.focus {
                 Focus::Tree => self.on_tree_key(key),
                 Focus::Editor => self.on_editor_key(key),
             },
+        }
+    }
+
+    /// Keys for the source-control window.
+    ///
+    /// The same shape as the map's: the window owns the whole screen, so there
+    /// is no focus to consider and no mode to fall through to — one lookup, one
+    /// action, and Esc is the way out.
+    fn on_source_key(&mut self, key: KeyEvent) {
+        // The message box is a pane that types, so it takes the keyboard whole
+        // — a `k` in a commit message is the letter k.
+        if self.git.focus == GitFocus::Message {
+            return self.on_message_key(key);
+        }
+        let Some(action) = self.keymap.resolve(KeyContext::Source, &key) else {
+            return;
+        };
+        // The global chords work here too: `Ctrl+P` is how `*commit` is typed,
+        // and a window you cannot run a command from is a window with a hole
+        // in it.
+        if self.on_global_action(action) {
+            return;
+        }
+        match action {
+            Action::SourceUp => self.move_git_cursor(-1),
+            Action::SourceDown => self.move_git_cursor(1),
+            Action::SourceJumpUp => self.move_git_cursor(-(JUMP_LINES as isize)),
+            Action::SourceJumpDown => self.move_git_cursor(JUMP_LINES as isize),
+            Action::SourceLeft => self.move_git_button(-1),
+            Action::SourceRight => self.move_git_button(1),
+            Action::SourceEnter => self.activate_git(),
+            Action::SourceOpen => self.open_from_git(),
+            Action::SourceRefresh => {
+                self.refresh_git();
+                self.status = "asked git again".into();
+            }
+            Action::SourcePageUp => self.page_git_diff(-1),
+            Action::SourcePageDown => self.page_git_diff(1),
+            Action::SourceNarrower => self.resize_tree_pane(-1),
+            Action::SourceWider => self.resize_tree_pane(1),
+            Action::SourceClose => self.show_window(Window::Main),
+            _ => {}
+        }
+    }
+
+    /// Which window this key asks for, if it asks for one.
+    fn window_key(&self, key: &KeyEvent) -> Option<Window> {
+        match self.keymap.find(KeyContext::Global, key) {
+            Some(Action::WindowMain) => Some(Window::Main),
+            Some(Action::WindowSource) => Some(Window::Source),
+            Some(Action::WindowMap) => Some(Window::Map),
+            _ => None,
         }
     }
 
@@ -92,12 +234,11 @@ impl App {
         match intent {
             Intent::None => {}
             Intent::Close => {
-                self.project_map = None;
-                self.status = "back to the tree".into();
+                self.show_window(Window::Main);
                 return;
             }
             Intent::Open(path) => {
-                self.project_map = None;
+                self.window = Window::Main;
                 self.open_path(&path);
                 return;
             }
@@ -133,18 +274,12 @@ impl App {
             Action::Bar => self.open_bar(false),
             Action::CommandBar => self.open_bar(true),
             Action::ToggleTreePane => self.toggle_tree_pane(),
-            Action::PaneNarrower => self.resize_tree_pane(-1),
-            Action::PaneWider => self.resize_tree_pane(1),
-            Action::New => self.begin_prompt(PromptKind::New),
-            Action::Rename => self.begin_prompt(PromptKind::Rename),
-            Action::Delete => self.begin_delete(),
             Action::Copy => self.copy_selection(),
             Action::Paste => self.paste_clipboard(),
-            Action::Hidden => self.toggle_hidden(),
-            Action::Refresh => self.refresh(),
             Action::Help => self.mode = Mode::Help(0),
-            Action::Settings => self.open_settings(),
-            Action::Map => self.open_map(),
+            Action::WindowMain => self.show_window(Window::Main),
+            Action::WindowSource => self.show_window(Window::Source),
+            Action::WindowMap => self.show_window(Window::Map),
             _ => return false,
         }
         true
@@ -153,9 +288,13 @@ impl App {
     /// Keys for the tree pane.
     ///
     /// Single letters are free here — unlike the editor, nothing is being
-    /// typed — so `n`, `r`, `d` and friends stay bound as bare keys alongside
+    /// typed — so `n`, `r`, `m` and friends stay bound as bare keys alongside
     /// the chords that do the same thing from anywhere. Two ways to reach one
     /// action, and the tree is the pane where the short one still works.
+    ///
+    /// A few keys are *only* here: the browser's own width, on `Ctrl` with an
+    /// arrow, which cannot be global because those two are word motions in the
+    /// editor.
     fn on_tree_key(&mut self, key: KeyEvent) {
         let page = self.last_tree_height.saturating_sub(1).max(1) as isize;
         let Some(action) = self.keymap.resolve(KeyContext::Tree, &key) else {
@@ -180,13 +319,9 @@ impl App {
             Action::TreeInto => self.activate(),
             Action::TreeOut => self.collapse_or_parent(),
             Action::TreePreview => self.focus_editor(),
-            Action::TreeNew => self.begin_prompt(PromptKind::New),
-            Action::TreeRename => self.begin_prompt(PromptKind::Rename),
-            Action::TreeDelete => self.begin_delete(),
             Action::TreeHidden => self.toggle_hidden(),
-            Action::TreeHelp => self.mode = Mode::Help(0),
-            Action::TreeSettings => self.open_settings(),
-            Action::TreeMap => self.open_map(),
+            Action::TreeNarrower => self.resize_tree_pane(-1),
+            Action::TreeWider => self.resize_tree_pane(1),
             _ => {}
         }
     }
@@ -201,7 +336,6 @@ impl App {
     /// Below that the function forks on whether there is a buffer behind the
     /// preview: a text file types, a picture scrolls.
     fn on_editor_key(&mut self, key: KeyEvent) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let tab_width = self.config.tab_width;
         let page = self.last_edit_height.saturating_sub(1).max(1);
 
@@ -239,46 +373,8 @@ impl App {
             self.focus = Focus::Tree;
             return;
         };
-        // Editing proper. The bindable half is handled first; what is left is
-        // the text-editing keyboard itself, which is fixed — a keyboard that
-        // cannot type is not a keyboard.
-        match action {
-            Some(Action::EditorUndo) => {
-                if !ed.undo() {
-                    self.status = "nothing to undo".into();
-                }
-                return;
-            }
-            Some(Action::EditorRedo) => {
-                if !ed.redo() {
-                    self.status = "nothing to redo".into();
-                }
-                return;
-            }
-            Some(Action::EditorDeleteLine) => return ed.delete_line(),
-            Some(Action::EditorWordLeft) => return ed.move_word_left(),
-            Some(Action::EditorWordRight) => return ed.move_word_right(),
-            Some(Action::EditorJumpUp) => return ed.page_up(JUMP_LINES),
-            Some(Action::EditorJumpDown) => return ed.page_down(JUMP_LINES),
-            Some(Action::EditorLineStart) => return ed.move_home(),
-            Some(Action::EditorLineEnd) => return ed.move_end(),
-            Some(Action::EditorDocStart) => return ed.move_doc_start(),
-            Some(Action::EditorDocEnd) => return ed.move_doc_end(),
-            _ => {}
-        }
-        match key.code {
-            KeyCode::Left => ed.move_left(),
-            KeyCode::Right => ed.move_right(),
-            KeyCode::Up => ed.move_up(),
-            KeyCode::Down => ed.move_down(),
-            KeyCode::PageUp => ed.page_up(page),
-            KeyCode::PageDown => ed.page_down(page),
-            KeyCode::Enter => ed.insert_newline(),
-            KeyCode::Backspace => ed.backspace(),
-            KeyCode::Delete => ed.delete_forward(),
-            KeyCode::Tab => ed.insert_tab(tab_width),
-            KeyCode::Char(c) if !ctrl => ed.insert_char(c),
-            _ => {}
+        if let Some(complaint) = edit_with_key(ed, action, key, page, tab_width) {
+            self.status = complaint.into();
         }
     }
 

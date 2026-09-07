@@ -299,12 +299,14 @@ fn ctrl_p_reaches_the_command_bar_from_inside_the_editor() {
     // A bare `:` here would be a character, so the editor needs its own way in.
     app.on_key(ctrl('p'));
     assert!(matches!(app.mode, Mode::Bar(_)));
-    type_str(&mut app, "w");
+    type_str(&mut app, "set tab_width 7");
     app.on_key(k(KeyCode::Enter));
+    assert_eq!(app.config.tab_width, 7, "the command ran: {}", app.status);
     assert!(
         fs::read_to_string(td.path().join("src/main.py"))
             .unwrap()
-            .starts_with('z')
+            .starts_with("import"),
+        "and the z is still unsaved in the buffer, not on disk"
     );
 }
 
@@ -319,13 +321,24 @@ fn a_colon_in_the_editor_is_a_character_not_a_command() {
 }
 
 #[test]
-fn commands_cover_saving_and_quitting() {
+fn saving_and_quitting_are_keys_and_not_commands() {
     let (td, mut app) = fixture();
     select(&mut app, "main.py");
     app.on_key(k(KeyCode::Enter));
     type_str(&mut app, "z");
     app.on_key(k(KeyCode::Esc));
+
+    // `*w` and `*q` were a second way to do what two chords already did.
     command(&mut app, "w");
+    assert!(app.status.contains("unknown command"), "{}", app.status);
+    assert!(
+        !fs::read_to_string(td.path().join("src/main.py"))
+            .unwrap()
+            .starts_with('z'),
+        "and it did not quietly save anyway"
+    );
+
+    app.on_key(ctrl('s'));
     assert!(
         fs::read_to_string(td.path().join("src/main.py"))
             .unwrap()
@@ -333,5 +346,7 @@ fn commands_cover_saving_and_quitting() {
     );
 
     command(&mut app, "q");
+    assert!(!app.should_quit, "nor quit");
+    app.on_key(ctrl('q'));
     assert!(app.should_quit);
 }

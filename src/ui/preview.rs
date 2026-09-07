@@ -110,7 +110,7 @@ pub(super) fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
                 // The chord, not the browser's bare `n`: this hint is read
                 // from the file pane, and the chord is the one that works
                 // wherever you happen to be when you read it.
-                Line::from(Span::styled("right to open   Ctrl+N new", pal.dim)),
+                Line::from(Span::styled("right to open   *new for a file", pal.dim)),
             ];
             app.preview_len = lines.len();
             f.render_widget(Paragraph::new(lines), inner);

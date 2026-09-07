@@ -22,26 +22,20 @@ pub enum Focus {
     Editor,
 }
 
-/// Which single-line prompt is open in the status bar.
+/// Which window is on screen.
+///
+/// `Ctrl+1`, `Ctrl+2` and `Ctrl+3`, and nothing else switches between them —
+/// they are windows rather than overlays, so there is no stack to pop and no
+/// "back" that could land you somewhere you did not choose. Esc from either of
+/// the other two returns to [`Window::Main`], which is where the files are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptKind {
-    /// A file or a folder, decided by whether the typed name has an extension.
-    New,
-    Rename,
-}
-
-/// A one-line text prompt in the status bar, for naming and renaming.
-#[derive(Debug, Clone)]
-pub struct Prompt {
-    pub kind: PromptKind,
-    /// Shown before the field, e.g. `New file`.
-    pub label: String,
-    pub input: String,
-    /// Character index into `input`, not a byte offset.
-    pub cursor: usize,
-    /// Directory the typed name is resolved against. Captured when the prompt
-    /// opens, so moving the tree cursor afterwards cannot change the target.
-    pub base: PathBuf,
+pub enum Window {
+    /// The browser and the file: what tiny opens on.
+    Main,
+    /// Git, and what has changed. Not built yet.
+    Source,
+    /// The project map.
+    Map,
 }
 
 /// The character that turns the bar from a search into a command line.
@@ -153,7 +147,6 @@ pub struct Confirm {
 pub enum Mode {
     /// No overlay; keys go to whichever pane has focus.
     Normal,
-    Prompt(Prompt),
     Confirm(Confirm),
     /// The keymap, with a scroll offset for terminals too short for it.
     Help(usize),

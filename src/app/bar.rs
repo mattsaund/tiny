@@ -103,10 +103,10 @@ fn complete_command(b: &mut Bar, root: &Path, show_hidden: bool) {
 /// needs adding to `TAKES_PATHS` as well.
 pub fn completion_for(b: &Bar, root: &Path, show_hidden: bool) -> Option<String> {
     const COMMANDS: &[&str] = &[
-        "set", "replace", "config", "settings", "map", "write", "save", "quit", "help", "reload",
-        "new", "mkdir", "delete", "rm", "copy", "cp", "line",
+        "set", "replace", "config", "settings", "reload", "new", "mkdir", "rename", "mv", "delete",
+        "rm", "copy", "cp", "line", "commit",
     ];
-    const TAKES_PATHS: &[&str] = &["new", "mkdir", "delete", "rm", "copy", "cp"];
+    const TAKES_PATHS: &[&str] = &["new", "mkdir", "rename", "mv", "delete", "rm", "copy", "cp"];
 
     // The sigil is not part of the command, so completion never sees it. The
     // replacement at the bottom still works on `b.input`, because whatever is
@@ -140,7 +140,7 @@ pub fn completion_for(b: &Bar, root: &Path, show_hidden: bool) -> Option<String>
         // `copy README.md ` — what comes next is the word joining the two
         // halves, so offer that and nothing else. Anyone copying a name with
         // spaces in it can type the two letters themselves.
-        Some("copy" | "cp") if position == 2 => (typed, vec!["to".to_string()]),
+        Some("copy" | "cp" | "rename" | "mv") if position == 2 => (typed, vec!["to".to_string()]),
         Some(c) if TAKES_PATHS.contains(&c) => {
             (typed.clone(), path_candidates(root, &typed, show_hidden))
         }

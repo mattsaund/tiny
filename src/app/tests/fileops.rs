@@ -7,22 +7,30 @@
 use super::*;
 
 #[test]
-fn n_creates_a_file_in_the_selected_folder_and_selects_it() {
+fn new_creates_a_file_in_the_selected_folder_and_selects_it() {
     let (td, mut app) = fixture();
     select(&mut app, "notes");
-    app.on_key(ch('n'));
-    type_str(&mut app, "today.md");
-    app.on_key(k(KeyCode::Enter));
+    command(&mut app, "new today.md");
     assert!(td.path().join("notes/today.md").is_file());
     assert_eq!(app.selected_row().unwrap().name, "today.md");
 }
 
 #[test]
+fn mkdir_makes_a_folder_where_new_makes_a_file() {
+    let (td, mut app) = fixture();
+    command(&mut app, "new archive");
+    assert!(
+        td.path().join("archive").is_file(),
+        "*new makes a file whatever the name looks like"
+    );
+    command(&mut app, "mkdir boxes");
+    assert!(td.path().join("boxes").is_dir(), "and *mkdir a folder");
+}
+
+#[test]
 fn a_nested_name_creates_the_folders_along_the_way() {
     let (td, mut app) = fixture();
-    app.on_key(ch('n'));
-    type_str(&mut app, "journal/2026/aug.md");
-    app.on_key(k(KeyCode::Enter));
+    command(&mut app, "new journal/2026/aug.md");
     assert!(td.path().join("journal/2026/aug.md").is_file());
     assert_eq!(app.selected_row().unwrap().name, "aug.md");
 }
@@ -30,9 +38,7 @@ fn a_nested_name_creates_the_folders_along_the_way() {
 #[test]
 fn creating_over_an_existing_name_is_refused() {
     let (_td, mut app) = fixture();
-    app.on_key(ch('n'));
-    type_str(&mut app, "README.md");
-    app.on_key(k(KeyCode::Enter));
+    command(&mut app, "new README.md");
     assert!(app.status.contains("already exists"), "{}", app.status);
 }
 
@@ -44,12 +50,8 @@ fn rename_moves_the_file_and_carries_its_open_buffer() {
     type_str(&mut app, "EDITED");
     app.on_key(k(KeyCode::Esc));
 
-    app.on_key(ch('r'));
-    for _ in 0.."main.py".len() {
-        app.on_key(k(KeyCode::Backspace));
-    }
-    type_str(&mut app, "app.py");
-    app.on_key(k(KeyCode::Enter));
+    // One argument renames whatever the cursor is on, in place.
+    command(&mut app, "rename app.py");
 
     assert!(td.path().join("src/app.py").is_file());
     assert!(!td.path().join("src/main.py").exists());
@@ -57,14 +59,42 @@ fn rename_moves_the_file_and_carries_its_open_buffer() {
 }
 
 #[test]
+fn rename_with_two_paths_moves_between_folders() {
+    let (td, mut app) = fixture();
+    command(&mut app, "rename src/main.py to notes/main.py");
+    assert!(td.path().join("notes/main.py").is_file(), "{}", app.status);
+    assert!(!td.path().join("src/main.py").exists());
+}
+
+#[test]
+fn renaming_onto_a_name_that_exists_is_refused() {
+    let (td, mut app) = fixture();
+    command(&mut app, "rename README.md to logo.png");
+    assert!(app.status.contains("already exists"), "{}", app.status);
+    assert!(td.path().join("README.md").exists(), "nothing moved");
+}
+
+#[test]
+fn a_bare_new_name_renames_in_place_and_a_path_moves() {
+    let (td, mut app) = fixture();
+    // No separator: the file stays in the folder it was in.
+    command(&mut app, "rename src/main.py to app.py");
+    assert!(td.path().join("src/app.py").is_file(), "{}", app.status);
+
+    // A separator means a path from the project root.
+    command(&mut app, "rename src/app.py to notes/app.py");
+    assert!(td.path().join("notes/app.py").is_file(), "{}", app.status);
+}
+
+#[test]
 fn delete_asks_before_removing_and_n_backs_out() {
     let (td, mut app) = fixture();
     select(&mut app, "README.md");
-    app.on_key(ch('d'));
+    command(&mut app, "delete");
     assert!(joined(&mut app).contains("Delete README.md?"));
     app.on_key(ch('n'));
     assert!(td.path().join("README.md").exists());
-    app.on_key(ch('d'));
+    command(&mut app, "delete");
     app.on_key(ch('y'));
     assert!(!td.path().join("README.md").exists());
 }
@@ -73,7 +103,7 @@ fn delete_asks_before_removing_and_n_backs_out() {
 fn deleting_a_folder_takes_everything_under_it() {
     let (td, mut app) = fixture();
     select(&mut app, "notes");
-    app.on_key(ch('d'));
+    command(&mut app, "delete");
     let out = joined(&mut app);
     assert!(out.contains("Delete folder notes"), "{out}");
     app.on_key(ch('y'));

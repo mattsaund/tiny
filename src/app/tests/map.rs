@@ -34,11 +34,11 @@ fn linked_fixture() -> (tempfile::TempDir, App) {
 fn the_bottom_bar_says_only_what_is_not_already_on_screen() {
     let (_td, mut app) = fixture();
     let bar = screen(&mut app, 96, 14).pop().expect("a status line");
-    assert!(bar.contains("| Ctrl+M map |"), "dividers are pipes:\n{bar}");
+    assert!(bar.contains("| Ctrl+3 map"), "dividers are pipes:\n{bar}");
     assert!(!bar.contains('·'), "{bar}");
     assert!(
-        !bar.contains("? help"),
-        "the status already opens with `? for help`:\n{bar}"
+        !bar.contains("F1 help"),
+        "the status already opens with `F1 for help`:\n{bar}"
     );
     assert!(
         !bar.contains(": commands"),
@@ -49,7 +49,7 @@ fn the_bottom_bar_says_only_what_is_not_already_on_screen() {
 #[test]
 fn the_map_draws_every_file_in_a_box() {
     let (_td, mut app) = linked_fixture();
-    app.on_key(ch('m'));
+    open_map(&mut app);
     let out = screen(&mut app, 100, 34).join("\n");
     assert!(out.contains("PROJECT MAP"), "{out}");
     // Names sit inside boxes, so the borders are right beside them.
@@ -66,7 +66,7 @@ fn the_map_draws_every_file_in_a_box() {
 #[test]
 fn the_map_joins_linked_files_with_a_line() {
     let (_td, mut app) = linked_fixture();
-    app.on_key(ch('m'));
+    open_map(&mut app);
     let out = screen(&mut app, 100, 34).join("\n");
     assert!(out.contains('─') || out.contains('│'), "lines:\n{out}");
     // Only the arrow glyphs: the ascii set is `< > ^ v`, which are letters
@@ -81,7 +81,7 @@ fn the_map_joins_linked_files_with_a_line() {
 #[test]
 fn a_code_file_that_calls_another_is_joined_to_it() {
     let (_td, mut app) = linked_fixture();
-    app.on_key(ch('m'));
+    open_map(&mut app);
     // Only calls: the notes are switched off, so whatever is left on
     // screen is there because of the code.
     app.on_key(ch('1'));
@@ -101,7 +101,7 @@ fn the_map_draws_the_cursors_connections_and_nobody_elses() {
     // A file joined to nothing, so there is a selection with no lines.
     fs::write(td.path().join("lonely.md"), "nothing points here\n").unwrap();
     command(&mut app, "reload");
-    app.on_key(ch('m'));
+    open_map(&mut app);
 
     // Every cell a line can occupy. The same boxes are drawn either way, so
     // the difference between two frames is exactly the connections in them.
@@ -145,7 +145,7 @@ fn the_map_draws_the_cursors_connections_and_nobody_elses() {
 #[test]
 fn nothing_is_drawn_on_top_of_a_box() {
     let (_td, mut app) = linked_fixture();
-    app.on_key(ch('m'));
+    open_map(&mut app);
     let rows = screen(&mut app, 100, 34);
     // Every name on screen is whole, with its own border either side: a
     // line crossing the box would have overwritten one of those cells.
@@ -199,7 +199,7 @@ fn cursor_on(app: &mut App, name: &str) {
 #[test]
 fn a_file_this_one_reaches_is_drawn_in_the_outgoing_colour() {
     let (_td, mut app) = linked_fixture();
-    app.on_key(ch('m'));
+    open_map(&mut app);
     // `main.py` calls `utils.load`, and nothing calls `main.py`.
     cursor_on(&mut app, "main.py");
 
@@ -217,7 +217,7 @@ fn a_file_this_one_reaches_is_drawn_in_the_outgoing_colour() {
 #[test]
 fn a_file_that_reaches_this_one_is_drawn_in_the_incoming_colour() {
     let (_td, mut app) = linked_fixture();
-    app.on_key(ch('m'));
+    open_map(&mut app);
     cursor_on(&mut app, "utils.py");
 
     let green = drawn_in(&mut app, Color::Green);
@@ -237,7 +237,7 @@ fn a_file_that_reaches_this_one_is_drawn_in_the_incoming_colour() {
 #[test]
 fn a_file_on_neither_side_of_the_cursor_is_left_uncoloured() {
     let (_td, mut app) = linked_fixture();
-    app.on_key(ch('m'));
+    open_map(&mut app);
     cursor_on(&mut app, "main.py");
     for colour in [Color::Red, Color::Green] {
         let painted = drawn_in(&mut app, colour);
@@ -253,7 +253,7 @@ fn the_two_directions_can_be_recoloured_from_the_config() {
     let (_td, mut app) = linked_fixture();
     command(&mut app, "set theme.map_out #ff00aa");
     command(&mut app, "set theme.map_in #00ccff");
-    app.on_key(ch('m'));
+    open_map(&mut app);
     cursor_on(&mut app, "utils.py");
 
     let hex = drawn_in(&mut app, Color::Rgb(0x00, 0xcc, 0xff));
@@ -278,7 +278,7 @@ fn the_map_can_be_drawn_without_box_characters() {
         ..Config::default()
     };
     let (_td, mut app) = linked_fixture_with(cfg);
-    app.on_key(ch('m'));
+    open_map(&mut app);
     let out = screen(&mut app, 100, 34).join("\n");
     assert!(!out.contains('╭'), "no box drawing at all:\n{out}");
     assert!(

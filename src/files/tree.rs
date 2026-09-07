@@ -22,7 +22,7 @@
 //! # Who asks it to re-read
 //!
 //! The tree never watches anything itself: it re-reads when something asks it
-//! to. That is a create/rename/delete, a `.`-toggle, `F5`, or — twice a second
+//! to. That is a create/rename/delete, a `.`-toggle, `*reload`, or — twice a second
 //! while tiny is idle — [`app`'s disk watcher](crate::app), which stats the
 //! directories [`Tree::loaded_dirs`] names and calls [`Tree::refresh_all`] when
 //! one of them has a new modification time. There is still no inotify and no

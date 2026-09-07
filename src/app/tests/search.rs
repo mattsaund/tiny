@@ -180,7 +180,7 @@ fn marking_a_code_file_never_lands_on_a_line_number() {
     // Line 3 holds a literal 3, so the gutter and the text both offer one
     // to mark and only the text's should be taken.
     fs::write(td.path().join("count.py"), "a = 1\nb = 2\nc = 3\n").unwrap();
-    app.on_key(k(KeyCode::F(5)));
+    command(&mut app, "reload");
     type_search(&mut app, "3");
 
     let marked = marked_in_preview(&mut app, 100, 24);
@@ -220,21 +220,21 @@ fn ctrl_q_quits_from_inside_the_search_bar() {
 }
 
 #[test]
-fn control_chords_do_not_type_letters_into_a_prompt() {
+fn control_chords_do_not_type_letters_into_the_bar() {
     let (_td, mut app) = fixture();
-    app.on_key(ch('n'));
-    type_str(&mut app, "note");
+    app.on_key(ctrl('p'));
+    type_str(&mut app, "new note.md");
     app.on_key(ctrl('s'));
-    let Mode::Prompt(p) = &app.mode else {
-        panic!("prompt closed")
+    let Mode::Bar(b) = &app.mode else {
+        panic!("the bar closed")
     };
-    assert_eq!(p.input, "note", "Ctrl+S must not append an s");
+    assert_eq!(b.command(), "new note.md", "Ctrl+S must not append an s");
 }
 
 #[test]
 fn ctrl_s_while_editing_a_setting_does_not_type_an_s_into_it() {
     let (_td, mut app) = fixture();
-    app.on_key(ch(','));
+    settings(&mut app);
     // Past the two buttons, then to tab_width, second in the index.
     for _ in 0..3 {
         app.on_key(k(KeyCode::Down));
@@ -334,18 +334,16 @@ fn completion_leaves_dotfiles_alone_unless_asked_for() {
 fn the_project_root_cannot_be_deleted_or_renamed() {
     let (_td, mut app) = fixture();
     app.selected = 0;
-    app.on_key(ch('d'));
+    command(&mut app, "delete");
     assert!(app.status.contains("cannot delete"));
-    app.on_key(ch('r'));
-    assert!(app.status.contains("cannot rename"));
+    command(&mut app, "rename anything.md");
+    assert!(app.status.contains("cannot rename"), "{}", app.status);
 }
 
 #[test]
 fn a_typed_path_cannot_escape_the_project() {
     let (td, mut app) = fixture();
-    app.on_key(ch('n'));
-    type_str(&mut app, "../escaped.md");
-    app.on_key(k(KeyCode::Enter));
+    command(&mut app, "new ../escaped.md");
     assert!(app.status.contains("escapes"), "{}", app.status);
     assert!(!td.path().parent().unwrap().join("escaped.md").exists());
 }
@@ -359,7 +357,7 @@ fn a_search_from_inside_a_file_lists_that_files_hits_first() {
     fs::write(td.path().join("aaa.md"), "the marker is here\n").unwrap();
     fs::write(td.path().join("mmm.md"), "the marker again\n").unwrap();
     fs::write(td.path().join("zzz.md"), "one marker\nand another marker\n").unwrap();
-    app.on_key(k(KeyCode::F(5)));
+    command(&mut app, "reload");
 
     // From the browser, nothing is favoured: the walk's order stands.
     type_search(&mut app, "marker");
@@ -401,7 +399,7 @@ fn stepping_through_results_does_not_re_order_them_underneath_you() {
     let (td, mut app) = fixture();
     fs::write(td.path().join("aaa.md"), "the marker is here\n").unwrap();
     fs::write(td.path().join("zzz.md"), "one marker\n").unwrap();
-    app.on_key(k(KeyCode::F(5)));
+    command(&mut app, "reload");
 
     select(&mut app, "zzz.md");
     app.on_key(k(KeyCode::Tab));

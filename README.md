@@ -5,7 +5,7 @@ Tiny is a personal knowledge management system (PKMS), IDE, and text editor that
 Everything tiny manages and edits is non proprietary and not obfuscated.
 
 ## Install:
-Full Installation Size: 7.45 MB
+Full Installation Size: 7.54 MB
 
 **One Liner:**
 ```sh
@@ -41,62 +41,57 @@ tiny --uninstall          # remove tiny, leaving your notes alone
 
 ## Controls and Commands:
 
-Press `F1` — or `?` in the browser — and it lists every key and every command at once, side by side if the window is wide enough.
-
-Every control that does something to a project is a **chord**, so it works while you are typing into a file as well as from the browser. Bare letters would not: in the editor `n` is the letter n, and always will be.
-
 **Moving**
 
 | key                                | does                                     |
 |------------------------------------|------------------------------------------|
 | `↑` `↓` `←` `→` — or `i` `k` `j` `l` | move                                   |
-| `Ctrl+↑` `Ctrl+↓` `Ctrl+←` `Ctrl+→` | five at a time, or a word              |
-| `Alt+↑` `Alt+↓` `Alt+←` `Alt+→` — or `I` `K` | to the ends                    |
+| `Ctrl+↑` `Ctrl+↓` | five at a time — and in a file, `Ctrl+←` `Ctrl+→` are a word |
+| `Home` `End` — or `I` `K`          | to the ends of a list, or of a line      |
+| `Ctrl+Home` `Ctrl+End`             | the first and last line of a file        |
 | `Enter`                            | open or close a folder, or edit a file   |
 | `Tab`                              | hand the keyboard to the file            |
 | `Esc`                              | back — and from the browser, quit        |
-
-`i` `j` `k` `l` are the arrows, in the inverted-T anyone who has held a keyboard sideways already knows. They work wherever a pane is being navigated rather than typed into: the browser, the map, a picture. Not in the editor, where they are letters.
 
 **Files**
 
 | key       | does                                        |
 |-----------|---------------------------------------------|
-| `Ctrl+N`  | new — a dot in the name makes it a file     |
-| `Ctrl+R`  | rename                                      |
-| `Ctrl+D`  | delete (asks first)                         |
 | `Ctrl+S`  | save — on a folder, everything unsaved in it|
 | `Ctrl+C` `Ctrl+V` | copy, and paste into the folder you are in |
-| `Ctrl+.`  | show or hide dotfiles                       |
-| `F5`      | re-read from disk now (or `*reload`)        |
+| `.`       | show or hide dotfiles (in the browser)      |
 
 **Windows**
 
 | key         | does                                        |
 |-------------|---------------------------------------------|
-| `Ctrl+/`    | the bar — searches names and contents       |
+| `Ctrl+/`    | the bar — searches names and contents (`/` in the browser) |
 | `*`         | typed into the bar first, it is a command   |
 | `Ctrl+P`    | the bar, with the `*` already typed         |
-| `Ctrl+M`    | the project map                             |
-| `Ctrl+,`    | the settings area                           |
 | `F1`        | keys and commands                           |
 | `Ctrl+Q`    | quit — offers to save anything unsaved      |
 
+**Windows**
+
+| key      | window                                      |
+|----------|---------------------------------------------|
+| `Ctrl+1` | the browser and the file                    |
+| `Ctrl+2` | git: what has changed, and what to do about it |
+| `Ctrl+3` | the project map                             |
+
 **The browser pane**
 
-| key       | does                                        |
-|-----------|---------------------------------------------|
-| `Alt+-` `Alt+=` | narrower / wider                          |
-| `Ctrl+Space` | fold it away, and bring it back          |
+| key                    | does                                |
+|------------------------|-------------------------------------|
+| `Ctrl+←` `Ctrl+→`      | narrower / wider                    |
+| `Ctrl+Space`           | fold it away, and bring it back     |
 
 
 ```toml
 [keys]
-pane_narrower = "alt+["
-pane_wider    = "alt+]"
+tree.narrower = "ctrl+["
+tree.wider    = "ctrl+]"
 ```
-
-The browser also keeps the short forms for the keys above: `n`, `r`, `d`, `.`, `m`, `/`, `?` and `,` all work there, where nothing is being typed.
 
 **Search**
 
@@ -118,12 +113,12 @@ Search is smart-cased: `widget` matches `Widget`, `Widget` matches only `Widget`
 *delete notes/old.md          delete a path, counted from the project root
 *line 42                      jump to a line; *42 on its own does too
 *replace old new              find-replace across the project, after confirming
+*rename old.md to new.md      rename, or move between folders
+*rename new.md                just a name renames what the cursor is on
 *replace "old thing" "new"    quote anything with spaces in it
-*map                          open the project map
+*commit [message]             commit what is staged
+*reload                       re-read the project from disk now
 *config                       open the settings area
-*w  *q  *wq                   save, quit
-*reload                       re-read the project from disk
-*help
 ```
 
 **Editing**
@@ -138,8 +133,8 @@ Everything in the tables above works here too. These are the keys that only mean
 | `Ctrl+K`          | delete the current line |
 | `Ctrl+←` `Ctrl+→` | move by word            |
 | `Ctrl+↑` `Ctrl+↓` | five lines at a time    |
-| `Alt+←` `Alt+→`   | start / end of the line |
-| `Alt+↑` `Alt+↓`   | first / last line       |
+| `Home` `End`      | start / end of the line |
+| `Ctrl+Home` `Ctrl+End` | first / last line       |
 | wheel             | one line per notch      |
 | `*line 42`        | jump to a line          |
 
@@ -148,9 +143,66 @@ Everything in the tables above works here too. These are the keys that only mean
 `Ctrl+S` saves whatever file you are working in or hovering over. If you `Ctrl+S` on
 a directory it will save all files under that directory.
 
+## Source control
+
+`Ctrl+2` is git. The left column lists what has changed, the two columns beside it are the file before and after, and the panel underneath is the branch map — `git log --graph`, as git draws it.
+
+```
+┌ SOURCE CONTROL  main ─────────┐┌ before ──────────────┐┌ after — notes.md  not staged ─┐
+│ fetch   pull   push   sync    ││  # Notes             ││  # Notes                      │
+│ rebase   commit               ││                      ││                               │
+│ STAGED 1                      ││- the first draft     ││+ the second draft             │
+│ D src/utils.py                ││  second line         ││  second line                  │
+│ UNSTAGED 4                    ││- third line          ││+ a new third line             │
+│ M notes.md                    ││~                     ││+ and a fourth                 │
+│ M src/main.py                 ││                      ││                               │
+│ U scratch.txt                 ││                      ││                               │
+└───────────────────────────────┘└──────────────────────┘└───────────────────────────────┘
+┌ branches ────────────────────────────────────────────────────────────────────────────────┐
+│ * 99c3a99  (feature) add extra                                                           │
+│ * 367b380  (HEAD -> main) first commit                                                   │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+The two halves of the diff are always the same height: where one side has a line the other does not, the other is padded. So line 12 on the left is the same place in the file as line 12 on the right, and you read across rather than counting. A gap says what it is once — `· 11 lines added` — rather than marking every row of it.
+
+The diff is **syntax highlighted** on both sides, by the grammar the file's own name picks. The `-` and `+` stay in the gutter rather than colouring the text: a line cannot be two colours at once, and this way a change is obvious at a glance while the code still reads as code.
+
+| key       | does                                        |
+|-----------|---------------------------------------------|
+| `↑` `↓`   | move through the changes — or scroll the diff, once you are in it |
+| `Ctrl+↑` `Ctrl+↓` | the same, five at a time — either half, and the message box |
+| `Enter`   | stage or unstage — a file, or a whole section from its header |
+| `→`       | into the diff; `←` comes back. On the button row, walk along it |
+| `Tab`     | open this file in the editor                |
+| `PgUp` `PgDn` | scroll the diff a screen at a time       |
+| `Ctrl+←` `Ctrl+→` | narrower / wider change list        |
+| `r`       | ask git again                               |
+| `Esc`     | back to the browser                         |
+
+Both halves scroll on one offset, so they cannot drift apart. The change list steps back while you are in the diff — dim border, dim title, the cursor's row marked quietly rather than highlighted — exactly as the browser does when the keyboard goes into a file.
+
+**Committing** is two presses of the `commit` button. The first opens a message box over both diff columns; the second sends what is in it. `Ctrl+S` from inside does the same without moving, and `Esc` puts the box down *without losing what you wrote*.
+
+```
+┌ SOURCE CONTROL  main ──────┐┌ commit message — 1 staged file ────────────────────────────────────┐
+│ fetch   pull   push        ││ double the loop                                                    │
+│ sync   rebase   commit     ││                                                                    │
+│ STAGED 1                   ││ and print the total when it is done                                │
+│ M src/main.py              ││                                                                    │
+└────────────────────────────┘└ Ctrl+S commits · Esc puts it down ─────────────────────────────────┘
+```
+
+It is a real editor, not a one-line prompt — the same keyboard as the file editor, undo and all. The first line is drawn apart from the rest because git treats it apart: it is the summary every log shows on its own. `*commit [message]` is still there for a one-liner from anywhere.
+
+**The letters are git's own**, and so is what they mean: `A` added, `M` modified, `D` deleted, `R` renamed, `C` copied, `U` untracked, `!` a conflict. Each has a colour as well, so the list reads at a glance — and still reads on a terminal with no colour, because the letter says it too.
+
+Everything goes through the `git` on your machine rather than a library linked into tiny. That keeps the binary small and the build fast, and it means tiny agrees with the `git` you already have — your aliases, your config, your credential helper. Pushing and pulling run on a thread, so the window keeps drawing while they work.
+
+
 **The Project Map**
 
-The project map `Ctrl+M` shows every file in the project, grouped under the folder it lives in, and draws what the file under the cursor is joined to.
+The project map `Ctrl+3` shows every file in the project, grouped under the folder it lives in, and draws what the file under the cursor is joined to.
 
 
 ```
@@ -184,7 +236,7 @@ The project map `Ctrl+M` shows every file in the project, grouped under the fold
 | `1`-`3`   | wikilinks / md links / calls                |
 | `/`       | filter to matching paths                    |
 | `r`       | build the map again                         |
-| `Esc`     | back to the browser (or `Ctrl+M` again)     |
+| `Esc`     | back to the browser (or `Ctrl+1`)           |
 
 
 A line means two files are actually joined — a link you could click, or a
@@ -214,8 +266,7 @@ markers         = "arrows"  # or "ascii"
 
 ### Settings and keys, from inside
 
-Press `Ctrl+,` (or `,` in the browser, or run `*config`) for the settings area.
-Two buttons sit at the top of it:
+Run `*config` for the settings area. Two buttons sit at the top of it:
 
 | button           | does                                                     |
 |------------------|----------------------------------------------------------|
@@ -246,13 +297,12 @@ map.reload   = ""           # or none at all
 ```
 
 Names without a prefix are the chords that work everywhere: `save`, `quit`,
-`bar`, `command`, `new`, `rename`, `delete`, `copy`, `paste`, `hidden`, `map`,
-`reload`, `help`, `settings`, `fold_tree`, `pane_narrower`, `pane_wider`. A
-prefix names the pane a key only works in — `tree.`, `view.`, `editor.`,
-`map.`.
+`bar`, `command`, `copy`, `paste`, `help`, `fold_tree`, `window_main`,
+`window_source`, `window_map`. A prefix names the pane a key only works in —
+`tree.`, `view.`, `editor.`, `map.`.
 
 Names are what the keybinds window shows in its left column. A key is written
-the way it reads: `ctrl+s`, `alt+up`, `ctrl+alt+left`, `f5`, `enter`, `esc`,
+the way it reads: `ctrl+s`, `alt+up`, `ctrl+home`, `f5`, `enter`, `esc`,
 `pageup`, `.`, or a single character. A capital letter *is* the shifted one —
 `I` is Shift+i.
 

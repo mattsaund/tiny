@@ -24,11 +24,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::files::project;
 use crate::text::editor::Editor;
 
 use super::App;
-use super::mode::{Confirm, ConfirmKind, Focus, Mode, Prompt, PromptKind};
+use super::mode::{Confirm, ConfirmKind, Focus, Mode};
 use super::parts::{display_name, safe_join};
 use super::preview::Preview;
 
@@ -281,61 +280,6 @@ impl App {
         }
     }
 
-    /// Open a naming prompt. Rename pre-fills the current name and refuses to
-    /// touch the project root, which has no parent inside the tree to rename
-    /// it within.
-    pub(super) fn begin_prompt(&mut self, kind: PromptKind) {
-        let (label, input, base) = match kind {
-            PromptKind::New => ("New".to_string(), String::new(), self.creation_base()),
-            PromptKind::Rename => {
-                let Some(row) = self.selected_row() else {
-                    return;
-                };
-                if row.path == self.tree.root_path() {
-                    self.status = "cannot rename the project root".into();
-                    return;
-                }
-                let parent = row
-                    .path
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| self.tree.root_path().to_path_buf());
-                ("Rename".to_string(), row.name.clone(), parent)
-            }
-        };
-        let cursor = input.chars().count();
-        self.mode = Mode::Prompt(Prompt {
-            kind,
-            label,
-            input,
-            cursor,
-            base,
-        });
-    }
-
-    /// Act on a confirmed prompt. An empty name cancels rather than erroring —
-    /// pressing Enter on a blank field clearly means "never mind".
-    pub(super) fn commit_prompt(&mut self, p: Prompt) {
-        let name = p.input.trim().to_string();
-        if name.is_empty() {
-            self.status = "cancelled".into();
-            return;
-        }
-        let result = match p.kind {
-            // The same rule the command line uses: a name with an extension is
-            // a file, one without is a folder.
-            PromptKind::New => {
-                let is_dir = !project::names_a_file(&name, Path::new(&name));
-                self.create_entry(&p.base, &name, is_dir)
-            }
-            PromptKind::Rename => self.rename_selected(&p.base, &name),
-        };
-        match result {
-            Ok(msg) => self.status = msg,
-            Err(e) => self.status = format!("{e:#}"),
-        }
-    }
-
     /// Create a file or directory. A name containing separators creates the
     /// intermediate directories too, so `notes/2026/today.md` works in one go.
     pub(super) fn create_entry(&mut self, base: &Path, name: &str, is_dir: bool) -> Result<String> {
@@ -362,54 +306,58 @@ impl App {
         Ok(format!("created {}", display_name(&target)))
     }
 
-    /// Rename the selected entry, moving any open buffer with it so unsaved
-    /// edits follow the file to its new name. Refuses to overwrite an existing
-    /// path.
-    fn rename_selected(&mut self, base: &Path, name: &str) -> Result<String> {
-        let Some(row) = self.selected_row().cloned() else {
-            return Err(anyhow!("nothing selected"));
-        };
-        let target = safe_join(base, name, self.tree.root_path())?;
-        if target == row.path {
+    /// Move `from` to `target`, carrying any open buffer with it so unsaved
+    /// edits follow the file to its new name. Refuses to overwrite.
+    ///
+    /// One path in and one path out, rather than "the selection, renamed
+    /// within its folder", because `*rename a to b` can move a file between
+    /// folders and the old naming prompt could not. Both are still a rename to
+    /// the filesystem, which is the only reason this is not called move.
+    pub(super) fn rename_path(&mut self, from: &Path, target: &Path) -> Result<String> {
+        if from == self.tree.root_path() {
+            return Err(anyhow!("cannot rename the project root"));
+        }
+        if !from.exists() {
+            return Err(anyhow!("{} is not here", display_name(from)));
+        }
+        if target == from {
             return Ok("unchanged".into());
         }
         if target.exists() {
-            return Err(anyhow!("{} already exists", display_name(&target)));
+            return Err(anyhow!("{} already exists", display_name(target)));
         }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::rename(&row.path, &target)
-            .with_context(|| format!("cannot rename {}", display_name(&row.path)))?;
+        fs::rename(from, target)
+            .with_context(|| format!("cannot rename {}", display_name(from)))?;
 
         // Carry any open buffer, and its unsaved edits, to the new path.
-        if let Some(mut ed) = self.buffers.remove(&row.path) {
-            ed.path = target.clone();
-            self.buffers.insert(target.clone(), ed);
+        if let Some(mut ed) = self.buffers.remove(from) {
+            ed.path = target.to_path_buf();
+            self.buffers.insert(target.to_path_buf(), ed);
             self.highlight_cache.clear();
         }
         self.tree.refresh_all();
-        self.reveal(&target);
-        Ok(format!("renamed to {}", display_name(&target)))
-    }
-
-    /// Ask before deleting. The message counts a directory's entries first,
-    /// because `remove_dir_all` takes everything underneath and the user should
-    /// see the number before pressing `y`.
-    pub(super) fn begin_delete(&mut self) {
-        let Some(row) = self.selected_row().cloned() else {
-            return;
-        };
-        if let Err(e) = self.arm_delete(&row.path) {
-            self.status = format!("{e:#}");
-        }
+        self.reveal(target);
+        Ok(format!(
+            "renamed {} to {}",
+            display_name(from),
+            display_name(target)
+        ))
     }
 
     /// Put up the yes/no question for removing `path`.
     ///
-    /// The single gate on every delete: `d` and `:delete` both arrive here, so
-    /// there is one place deciding what may be removed and one question to
-    /// answer. Nothing touches the disk until [`App::do_delete`].
+    /// The single gate on every delete, and there is now only one way in:
+    /// `*delete`, with a path or with none for whatever the cursor is on.
+    /// Deleting used to have a key as well, which is exactly the overlap that
+    /// went — it is a deliberate act, and a deliberate act can afford to be
+    /// typed. Nothing touches the disk until [`App::do_delete`].
+    ///
+    /// The message counts a directory's entries first, because `remove_dir_all`
+    /// takes everything underneath and the number should be on screen before
+    /// anyone presses `y`.
     pub(super) fn arm_delete(&mut self, path: &Path) -> Result<()> {
         if path == self.tree.root_path() {
             return Err(anyhow!("cannot delete the project root"));

@@ -15,7 +15,7 @@ use crate::config::keys::Action;
 use crate::files::media;
 
 use super::App;
-use super::mode::{Confirm, ConfirmKind, Focus, Mode};
+use super::mode::{Confirm, ConfirmKind, Focus, Mode, Window};
 use super::parts::display_name;
 use super::preview::Preview;
 
@@ -166,6 +166,19 @@ impl App {
     /// reading into a change to your configuration. `*set tree_width 0.4` is
     /// still there for a width you want to keep.
     pub(super) fn resize_tree_pane(&mut self, step: i32) {
+        // The source window's left column is the same width, and resized by
+        // the same keys — but it cannot be folded away. Folding the browser
+        // gives the file the whole screen, which is a thing you want; folding
+        // the change list leaves that window with nothing in it.
+        if self.window == Window::Source {
+            let want = self.config.tree_width + step as f32 * TREE_WIDTH_STEP;
+            self.config.tree_width = want.clamp(TREE_WIDTH_MIN, TREE_WIDTH_MAX);
+            self.status = format!(
+                "changes {}% of the window",
+                (self.config.tree_width * 100.0).round()
+            );
+            return;
+        }
         if self.tree_hidden {
             // Nothing to resize while it is folded away; widening is the
             // gesture that asks for it back, and narrowing has nowhere to go.

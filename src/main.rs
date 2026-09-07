@@ -37,10 +37,11 @@
 //! There is no background thread. `run` waits for the keyboard and redraws
 //! once when something arrives, so nothing happens between keypresses that the
 //! user did not cause — with one exception. The wait has a timeout, and each
-//! time it expires the loop asks [`app`'s disk watcher](app) whether anything
-//! on screen has been changed by another program; a frame is drawn only if
-//! something has. That is a few `stat` calls twice a second while idle. See
-//! `app::watch` for why polling beat inotify here.
+//! time it expires the loop asks two questions: has anything on screen been
+//! changed by another program (see [`app`'s disk watcher](app)), and has a git
+//! push or pull finished on its thread. A frame is drawn only if the answer to
+//! one of them is yes. That is a few `stat` calls and one `try_recv` twice a
+//! second while idle. See `app::watch` for why polling beat inotify here.
 //!
 //! Everything is still synchronous: a slow search or a big graph build freezes
 //! the UI while it runs, so anything expensive needs its own budget (see the
@@ -49,6 +50,7 @@
 mod app;
 mod config;
 mod files;
+mod git;
 mod map;
 mod text;
 mod ui;
@@ -89,9 +91,9 @@ tiny writes nothing into a folder of yours that you did not name: no starter
 page, no dotfiles, no per-project settings.
 
 KEYS:
-    ?                   every key and command, from inside the app
+    F1                  every key and command, from inside the app
     /                   the bar: searches, or `*` first for a command
-    m                   the project map
+    Ctrl+1 2 3          the browser, source control, the project map
 ";
 
 /// Print to stdout, and do not mind if nobody is listening.
@@ -230,16 +232,17 @@ fn hand_back_the_terminal_on_panic() {
 /// this is held.
 ///
 /// A terminal's legacy keyboard encoding cannot express some of the keys tiny
-/// binds. `Ctrl+M` *is* Enter — both are the byte 0x0D — and `Ctrl+.` has no
-/// byte at all, so on a plain terminal those keypresses either arrive as
-/// something else or never arrive. The disambiguating half of the kitty
-/// keyboard protocol separates them, and asking for it is a request the
-/// terminal is free to decline.
+/// binds. `Ctrl` with a digit is not in it at all — `Ctrl+1` sends nothing,
+/// `Ctrl+2` arrives as `Ctrl+Space` and `Ctrl+3` as `Esc` — and neither is
+/// `Ctrl+.`, while `Ctrl+/` is indistinguishable from `Ctrl+7`. The
+/// disambiguating half of the kitty keyboard protocol separates them all, and
+/// asking for it is a request the terminal is free to decline.
 ///
-/// Nothing depends on the answer. Every action on a chord the legacy encoding
-/// cannot carry is also bound to a function key, and the browser keeps its bare
-/// letters, so a terminal that says no is a terminal where the other binding is
-/// the one you use.
+/// A terminal that declines is a terminal where the window keys do not work,
+/// and there is no encoding trick that would change that: one that cannot say
+/// which key was pressed cannot be made to. What still works there is
+/// everything with a key of its own — the arrows, `Home`, `End`, the browser's
+/// bare `.` and `/`, and every command.
 ///
 /// # Why this is a guard, and why it is asked for late
 ///
@@ -313,8 +316,9 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
         }
         loop {
             if !event::poll(IDLE)? {
-                // Nobody typed anything. Has anyone else been writing?
-                if app.rescan_disk() {
+                // Nobody typed anything. Has anyone else been writing — and
+                // has the push we started come back?
+                if app.poll_git_job() || app.rescan_disk() {
                     break;
                 }
                 continue;

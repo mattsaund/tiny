@@ -17,6 +17,7 @@
 //! inside the project. A command that joins a path itself is a bug.
 
 use anyhow::{Result, anyhow};
+use std::path::Path;
 
 use crate::text::search::{self};
 
@@ -52,7 +53,20 @@ fn split_on_to(args: &[String]) -> Result<(String, String)> {
 impl App {
     // ---- commands ---------------------------------------------------------
 
-    /// Parse and run a `:` command.
+    /// Parse and run a `*` command.
+    ///
+    /// # What is a command and what is a key
+    ///
+    /// The split is by what the thing *is*, not by how often it is done.
+    /// Moving around and changing a file are keys: they happen constantly, in
+    /// the middle of something else, and a key is the only shape fast enough.
+    /// Everything a command does is the other kind — deleting a path, re-reading
+    /// the disk, opening the settings, replacing a word across the project —
+    /// done deliberately, often with an argument to type, and none the worse
+    /// for costing four keystrokes instead of one.
+    ///
+    /// That is why there is no `*w`, `*q` or `*wq`: saving and quitting are
+    /// `Ctrl+S` and `Ctrl+Q`, and a second way in earned nothing.
     ///
     /// Adding one means adding an arm here and an entry in `complete_command`'s
     /// `COMMANDS` list, or it will work but never tab-complete. Handlers return
@@ -73,31 +87,12 @@ impl App {
                 self.open_settings();
                 Ok(String::new())
             }
-            "map" | "graph" | "web" => {
-                self.open_map();
-                Ok(String::new())
-            }
-            "w" | "write" | "save" => {
-                self.save_active();
-                Ok(String::new())
-            }
-            "q" | "quit" => {
-                self.request_quit();
-                Ok(String::new())
-            }
-            "wq" => {
-                self.save_active();
-                self.request_quit();
-                Ok(String::new())
-            }
-            "help" => {
-                self.mode = Mode::Help(0);
-                Ok(String::new())
-            }
             "reload" | "refresh" => {
                 self.refresh();
                 Ok(String::new())
             }
+            "commit" => self.commit(&rest.join(" ")),
+            "rename" | "mv" => self.cmd_rename(rest),
             "new" => self.cmd_new(rest, false),
             "mkdir" => self.cmd_new(rest, true),
             "delete" | "rm" => self.cmd_delete(rest),
@@ -105,7 +100,7 @@ impl App {
             "line" | "go" => self.cmd_line(rest),
             // A bare number is a line number, the way `:42` is everywhere else.
             n if n.parse::<usize>().is_ok() => self.cmd_line(&args),
-            other => Err(anyhow!("unknown command `{other}` — try :help")),
+            other => Err(anyhow!("unknown command `{other}` — F1 lists them")),
         };
         match result {
             Ok(msg) if !msg.is_empty() => self.status = msg,
@@ -119,7 +114,20 @@ impl App {
     /// Remaining arguments are rejoined with spaces, so a style spec like
     /// `:set theme.heading cyan bold` arrives intact.
     fn cmd_set(&mut self, args: &[String]) -> Result<String> {
-        let key = args.first().ok_or_else(|| anyhow!(":set <key> <value>"))?;
+        let key = args
+            .first()
+            .ok_or_else(|| anyhow!("set [setting] to [value]"))?;
+        // `set tab_width to 2` reads better than `set tab_width 2`, so the
+        // joining word is allowed and skipped — the same way `*line` takes it.
+        let args: Vec<String> = match args.get(1) {
+            Some(w) if w.eq_ignore_ascii_case("to") => {
+                let mut rest = vec![key.clone()];
+                rest.extend_from_slice(&args[2..]);
+                rest
+            }
+            _ => args.to_vec(),
+        };
+        let args = &args[..];
         if args.len() < 2 {
             // With no value, report the current one rather than erroring.
             let value = self
@@ -185,6 +193,43 @@ impl App {
         let src = safe_join(&root, &from, &root)?;
         let dst = safe_join(&root, &into, &root)?;
         self.copy_entry(&src, &dst)
+    }
+
+    /// `*rename old.md to new.md` — move a path, keeping any unsaved edits.
+    ///
+    /// The same `a to b` shape as `*copy`, and for the same reason: two paths
+    /// in one line need a word between them that cannot be part of either.
+    /// With one argument it renames whatever the cursor is on, so
+    /// `*rename notes.md` is the short form of the common case.
+    fn cmd_rename(&mut self, args: &[String]) -> Result<String> {
+        let root = self.tree.root_path().to_path_buf();
+        let (from, to) = match split_on_to(args) {
+            Ok((from, to)) => (safe_join(&root, &from, &root)?, to),
+            // Checked before the base is worked out below, because the root's
+            // parent is outside the project and would fail with the wrong
+            // complaint.
+            // No `to`: the cursor says what is being renamed, and the one
+            // argument is the new name.
+            Err(_) if args.len() == 1 => {
+                let from = self
+                    .selected_row()
+                    .map(|r| r.path.clone())
+                    .ok_or_else(|| anyhow!("nothing selected"))?;
+                (from, args[0].clone())
+            }
+            Err(e) => return Err(e),
+        };
+        if from == root {
+            return Err(anyhow!("cannot rename the project root"));
+        }
+        // A bare name renames in place; a path with separators in it moves.
+        let base = if to.contains(['/', '\\']) {
+            root.clone()
+        } else {
+            from.parent().map(Path::to_path_buf).unwrap_or(root.clone())
+        };
+        let target = safe_join(&base, &to, &root)?;
+        self.rename_path(&from, &target)
     }
 
     /// `*line 42`, `*go to 42`, or just `*42` — put the cursor on that line of

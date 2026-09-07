@@ -1,80 +1,25 @@
-//! Answering a prompt, or a confirmation.
+//! Answering a confirmation.
 //!
-//! Two tiny keyboards. A prompt collects a line of text and hands it to
-//! whoever asked; a confirmation collects a yes or a no. Both are modal, and
-//! both close on Esc without doing anything.
+//! One tiny keyboard: a yes or a no, modal, closing on Esc without doing
+//! anything. What the question *means* is in its [`ConfirmKind`], and the work
+//! it triggers lives with the code that asked — deleting a file is
+//! [`super::fileops`]'s job, not this module's. This is only the part that
+//! reads the answer.
 //!
-//! What each one *means* is in its `Kind`, and the work it triggers lives with
-//! the code that asked the question — creating a file is [`super::fileops`]'s
-//! job, not this module's. This is only the part that reads the answer.
+//! There used to be a text prompt here as well, for naming a new file and for
+//! renaming one. Both are commands now (`*new`, `*rename`), and a command line
+//! is a text prompt that already existed — so the second one went.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::config::Config;
 use crate::text::search::{self};
 
 use super::App;
-use super::mode::{Confirm, ConfirmKind, Keybinds, Mode, Prompt, Settings};
-use super::parts::{char_byte, plural};
+use super::mode::{Confirm, ConfirmKind, Keybinds, Mode, Settings};
+use super::parts::plural;
 
 impl App {
-    // ---- prompts & confirmations -----------------------------------------
-
-    /// Keys for the status-bar text prompt. Ctrl chords are ignored outright
-    /// rather than acted on — there is nothing useful to do with them here, and
-    /// letting one through would type its letter into a filename.
-    pub(super) fn on_prompt_key(&mut self, mut p: Prompt, key: KeyEvent) {
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.mode = Mode::Prompt(p);
-            return;
-        }
-        match key.code {
-            KeyCode::Esc => self.status = "cancelled".into(),
-            KeyCode::Enter => self.commit_prompt(p),
-            KeyCode::Backspace => {
-                if p.cursor > 0 {
-                    let b = char_byte(&p.input, p.cursor - 1);
-                    let e = char_byte(&p.input, p.cursor);
-                    p.input.replace_range(b..e, "");
-                    p.cursor -= 1;
-                }
-                self.mode = Mode::Prompt(p);
-            }
-            KeyCode::Delete => {
-                let n = p.input.chars().count();
-                if p.cursor < n {
-                    let b = char_byte(&p.input, p.cursor);
-                    let e = char_byte(&p.input, p.cursor + 1);
-                    p.input.replace_range(b..e, "");
-                }
-                self.mode = Mode::Prompt(p);
-            }
-            KeyCode::Left => {
-                p.cursor = p.cursor.saturating_sub(1);
-                self.mode = Mode::Prompt(p);
-            }
-            KeyCode::Right => {
-                p.cursor = (p.cursor + 1).min(p.input.chars().count());
-                self.mode = Mode::Prompt(p);
-            }
-            KeyCode::Home => {
-                p.cursor = 0;
-                self.mode = Mode::Prompt(p);
-            }
-            KeyCode::End => {
-                p.cursor = p.input.chars().count();
-                self.mode = Mode::Prompt(p);
-            }
-            KeyCode::Char(c) => {
-                let b = char_byte(&p.input, p.cursor);
-                p.input.insert(b, c);
-                p.cursor += 1;
-                self.mode = Mode::Prompt(p);
-            }
-            _ => self.mode = Mode::Prompt(p),
-        }
-    }
-
     /// Keys for a yes/no question. Anything else leaves it standing rather
     /// than guessing.
     ///

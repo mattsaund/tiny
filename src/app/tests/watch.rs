@@ -216,8 +216,9 @@ fn turning_auto_reload_off_leaves_the_disk_alone() {
     assert!(!app.rescan_disk(), "not asked to look");
     assert!(joined(&mut app).contains("hello widget"), "so it did not");
 
-    // F5 still works, which is the whole point of being able to turn it off.
-    app.on_key(k(KeyCode::F(5)));
+    // Asking still works, which is the whole point of being able to turn the
+    // automatic half off.
+    command(&mut app, "reload");
     assert!(joined(&mut app).contains("changed"), "asked, and it looked");
 }
 

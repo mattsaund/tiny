@@ -590,10 +590,19 @@ mod tests {
     // ---- keys -------------------------------------------------------------
 
     #[test]
-    fn escape_and_w_both_close_the_graph() {
-        for key in [k(KeyCode::Esc), ch('m'), ch('q')] {
+    fn escape_closes_the_graph_and_nothing_else_does() {
+        let (_td, mut view) = fixture();
+        assert!(matches!(
+            view.on_key(k(KeyCode::Esc), act(k(KeyCode::Esc))),
+            Intent::Close
+        ));
+        // `m` and `q` used to close it too. One window, one way out.
+        for key in [ch('m'), ch('q')] {
             let (_td, mut view) = fixture();
-            assert!(matches!(view.on_key(key, act(key)), Intent::Close));
+            assert!(
+                !matches!(view.on_key(key, act(key)), Intent::Close),
+                "{key:?}"
+            );
         }
     }
 

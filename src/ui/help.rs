@@ -72,7 +72,7 @@ const KEYS: &[KeyRow] = &[
             Action::EditorWordLeft,
             Action::EditorWordRight,
         ],
-        "five at a time, or a word",
+        "five at a time — or a word, in a file",
     ),
     Merged(
         &[
@@ -88,25 +88,38 @@ const KEYS: &[KeyRow] = &[
     Bound(&[Action::EditorBack], "back — or quit, from the browser"),
     Blank,
     Heading("FILES"),
-    Bound(&[Action::New], "new — a dot makes a file"),
-    Bound(&[Action::Rename], "rename"),
-    Bound(&[Action::Delete], "delete"),
     Bound(&[Action::Save], "save — on a folder, all of it"),
     Bound(&[Action::Copy, Action::Paste], "copy | paste"),
-    Bound(&[Action::Hidden], "show dotfiles"),
-    Bound(&[Action::Refresh], "re-read from disk"),
+    Bound(&[Action::TreeHidden], "show dotfiles"),
     Blank,
-    Heading("WINDOWS"),
+    Heading("THE BAR"),
     Bound(&[Action::Bar], "search — star first, a command"),
-    Bound(&[Action::Map], "the project map"),
-    Bound(&[Action::Settings], "settings and keybinds"),
     Bound(&[Action::Help], "this window"),
     Blank,
-    Heading("THE BROWSER"),
-    // Listed rather than merged: two single-character keys folded under one
-    // modifier come out as `alt+- =`, which reads as one key and a stray.
+    Heading("WINDOWS — CTRL AND A NUMBER"),
+    Bound(&[Action::WindowMain], "the browser and the file"),
+    Bound(&[Action::WindowSource], "git — not built yet"),
+    Bound(&[Action::WindowMap], "the project map"),
+    Blank,
+    Heading("SOURCE CONTROL"),
     Bound(
-        &[Action::PaneNarrower, Action::PaneWider],
+        &[Action::SourceEnter],
+        "stage | unstage — a file or a section",
+    ),
+    Bound(
+        &[Action::SourceLeft, Action::SourceRight],
+        "into the diff | back to the changes",
+    ),
+    Bound(
+        &[Action::SourceJumpUp, Action::SourceJumpDown],
+        "five at a time, in either half",
+    ),
+    Bound(&[Action::SourceOpen], "open this file"),
+    Bound(&[Action::SourceRefresh], "ask git again"),
+    Blank,
+    Heading("THE BROWSER"),
+    Bound(
+        &[Action::TreeNarrower, Action::TreeWider],
         "narrower | wider",
     ),
     Bound(&[Action::ToggleTreePane], "fold it away, and back"),
@@ -152,10 +165,16 @@ fn merge(keymap: &Keymap, actions: &[Action]) -> String {
         };
         // A single character is a letter standing in for an arrow; anything
         // longer is a named key. They read better apart than interleaved.
-        if base.chars().count() == 1 {
-            slot.2.push(base.to_string());
+        let half = if base.chars().count() == 1 {
+            &mut slot.2
         } else {
-            slot.1.push(base.to_string());
+            &mut slot.1
+        };
+        // Once each. Four actions share `Home` and `End` between them — the
+        // ends of a list and the ends of a line are the same two keys in two
+        // panes — and a row reading `home end home end` says nothing twice.
+        if !half.iter().any(|k| k == base) {
+            half.push(base.to_string());
         }
     }
     let mut out: Vec<String> = Vec::new();
@@ -200,26 +219,32 @@ fn key_rows(keymap: &Keymap) -> Vec<(String, String)> {
 /// One line per command, not per variation: the quoting rule for `*replace`
 /// and the dotted theme keys `*set` accepts are in the README rather than
 /// here, where they would have widened the window for everyone.
+/// The commands, for the right-hand half of the `?` window.
+///
+/// Everything here is a deliberate act with something to type after it, or a
+/// thing done rarely enough that a key would be one more key to remember. What
+/// is *not* here is the other half of the split: moving, editing, saving and
+/// quitting are keys, and were commands as well until the two lists were told
+/// apart.
 const COMMANDS: &[(&str, &str)] = &[
     ("", "FILES"),
-    ("*copy a to b", "a file or a folder"),
-    ("*delete path", "bare = the cursor's"),
-    ("*new notes/x.md", "a file"),
-    ("*mkdir notes", "a folder"),
+    ("*new [file.txt]", "a file, folders and all"),
+    ("*mkdir [folder]", "a folder"),
+    ("*rename [old] to [new]", "or *rename [new], in place"),
+    ("*copy [from] to [to]", "a file or a folder"),
+    ("*delete [path]", "bare = the cursor's"),
     ("", ""),
-    ("", "MOVING"),
-    ("*line 42", "jump — *42 works too"),
-    ("*map", "the project map"),
+    ("", "THE PROJECT"),
+    ("*replace [old] [new]", "across every file"),
     ("*reload", "re-read from disk"),
+    ("*line [42]", "jump — *42 works too"),
     ("", ""),
-    ("", "CHANGING THINGS"),
-    ("*replace old new", "across every file"),
-    ("*set tab_width 2", "change a setting"),
+    ("", "SOURCE CONTROL"),
+    ("*commit [message]", "what is staged — Ctrl+2"),
+    ("", ""),
+    ("", "SETTINGS"),
+    ("*set [setting] to [value]", "one setting; bare reports it"),
     ("*config", "settings and keybinds"),
-    ("", ""),
-    ("", "LEAVING"),
-    ("*w  *q  *wq", "save | quit | both"),
-    ("*help", "this window"),
 ];
 
 /// The keymap overlay. Scrollable, because the full list does not fit a short
