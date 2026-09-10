@@ -74,7 +74,7 @@ impl Editor {
     ///
     /// Note that `dirty` is set unconditionally, even when undoing all the way
     /// back to the file's opening state. Tracking whether the buffer matches
-    /// disk again would need a saved-generation counter; erring towards "there
+    /// disk again would need a saved-generation counter; erring toward "there
     /// might be something to save" is the safe direction.
     pub fn undo(&mut self) -> bool {
         let Some(prev) = self.undo.pop() else {

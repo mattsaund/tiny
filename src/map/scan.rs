@@ -335,7 +335,7 @@ pub(super) fn collect_path_calls(text: &str, f: &mut Facts) {
 /// the bare stem — which is how `[[design]]` finds `notes/design.md`.
 ///
 /// The order is the whole design. Relative-to-the-linking-file comes first so
-/// `../utils` means the neighbour you meant, not something with the same name
+/// `../utils` means the neighbor you meant, not something with the same name
 /// on the other side of the project. The bare-stem fallback comes last and is
 /// accepted *only when exactly one file answers to the name*, so an ambiguous
 /// `[[index]]` in a project with five `index.js` files draws no edge rather
@@ -373,7 +373,7 @@ pub(super) fn resolve_link(
 
     for cand in &candidates {
         // Relative to the linking file first: `../utils` should mean the
-        // neighbour, not something with the same name elsewhere.
+        // neighbor, not something with the same name elsewhere.
         if let Some(dir) = from_dir {
             let joined = normalize(&dir.join(cand));
             if let Ok(rel) = joined.strip_prefix(root) {

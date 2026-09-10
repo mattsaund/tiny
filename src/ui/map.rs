@@ -79,9 +79,9 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     let view = app.project_map.as_ref().expect("checked above");
     let selected = view.selected;
     // Which side of the cursor every connected file is on. The picture cannot
-    // say which way a line runs — the lines share a trunk, so a coloured line
+    // say which way a line runs — the lines share a trunk, so a colored line
     // would be lying at every junction — but the boxes at the ends of them
-    // can, and this is what colours them.
+    // can, and this is what colors them.
     let (reaches, reached_by) = view.connections(selected);
     let out_nodes: HashSet<usize> = reaches.iter().map(|e| e.to).collect();
     let in_nodes: HashSet<usize> = reached_by.iter().map(|e| e.from).collect();
@@ -158,7 +158,7 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     for p in &placement.boxes {
-        // Two files that reach each other can only be drawn one colour, and it
+        // Two files that reach each other can only be drawn one color, and it
         // is the outgoing one: the map's question is what this file reaches,
         // and a box the cursor points at is an answer to it whatever else is
         // also true. The strip below lists such a file on both rows, which is
@@ -263,11 +263,11 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
     // A budget rather than a fixed few, because the strip is as wide as the
     // window and how many names fit is a property of the window, not a number
     // worth writing down. Anything that does not fit is counted instead.
-    let summarise = |edges: &[&crate::map::graph::Edge], outgoing: bool| {
+    let summarize = |edges: &[&crate::map::graph::Edge], outgoing: bool| {
         if edges.is_empty() {
             return vec![Span::styled("none", pal.dim)];
         }
-        // The same colour the file's box wears up in the picture, so a name
+        // The same color the file's box wears up in the picture, so a name
         // here and a box there are visibly the same fact.
         let tint = if outgoing { pal.map_out } else { pal.map_in };
         let mut spans: Vec<Span> = Vec::new();
@@ -312,7 +312,7 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
             Span::styled(node.rel.clone(), pal.text.add_modifier(Modifier::BOLD)),
             Span::styled(format!("  {}", node_word(node.kind)), pal.dim),
         ]),
-        // The labels carry the colour too, which is what makes the picture
+        // The labels carry the color too, which is what makes the picture
         // above legible without a key: whatever `out:` is written in, the
         // boxes this file reaches are drawn in.
         Line::from(
@@ -320,7 +320,7 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
                 format!("  out: {:<3} ", out.len()),
                 pal.map_out,
             ))
-            .chain(summarise(&out, true))
+            .chain(summarize(&out, true))
             .collect::<Vec<_>>(),
         ),
         Line::from(
@@ -328,7 +328,7 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
                 format!("  in:  {:<3} ", incoming.len()),
                 pal.map_in,
             ))
-            .chain(summarise(&incoming, false))
+            .chain(summarize(&incoming, false))
             .collect::<Vec<_>>(),
         ),
     ];

@@ -17,7 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::parts::centred;
+use super::parts::centered;
 
 use crate::app::App;
 use crate::config::Palette;
@@ -286,7 +286,7 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect, pal: &Palette, scr
     } else {
         (natural_width(&stacked) + 2) as u16
     };
-    let popup = centred(area, width, rows as u16 + 2);
+    let popup = centered(area, width, rows as u16 + 2);
     let scrolls = (popup.height as usize).saturating_sub(2) < rows;
 
     f.render_widget(Clear, popup);

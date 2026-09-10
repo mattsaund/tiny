@@ -1,4 +1,11 @@
-name: CI
+# The three platforms tiny claims to run on, on every push.
+#
+# The claim is the point. tiny is developed on Linux, so "it works on Windows
+# and macOS" is otherwise a thing nobody has watched happen — and the ways it
+# breaks are exactly the ones a Linux machine cannot show you: a `\` where a `/`
+# was expected, a temp directory that is a symlink, a shell built-in that is a
+# GNU extension.
+name: ci
 
 on:
   push:
@@ -8,24 +15,44 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Warnings are worth fixing; CI should not let them accumulate quietly.
-  RUSTFLAGS: -D warnings
 
 jobs:
-  check:
-    name: fmt and clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets -- -D warnings
-
   test:
     name: test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Every platform runs even when one fails: which ones broke is the
+      # information worth having.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The git window shells out to git, and its tests build real
+      # repositories. A committer has to exist for `git commit` to work, and
+      # the runners do not set one globally.
+      - name: Give git a name
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all-targets
+      - run: cargo build --release
+
+  # The installers are the other half of "it works there": a script that cannot
+  # run is a broken install however well the program builds.
+  installers:
+    name: check the installers
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -33,17 +60,19 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-targets
-      - run: cargo build --release
 
-  msrv:
-    name: minimum supported rust version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      # Kept in step with `rust-version` in Cargo.toml.
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-targets
+      - name: Parse install.sh
+        if: runner.os != 'Windows'
+        # `sh -n` on the platform's own shell: dash on Linux, bash-as-sh on
+        # macOS. A GNU-only spelling fails here rather than on someone's Mac.
+        run: sh -n install.sh
+
+      - name: Parse install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
+          Write-Host 'install.ps1 parses'

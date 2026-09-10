@@ -334,7 +334,7 @@ impl Config {
     /// values rather than silently doing nothing.
     ///
     /// Note that theme entries are stored as raw strings without validation —
-    /// [`theme::parse_style`] ignores words it does not recognise, so a misspelled
+    /// [`theme::parse_style`] ignores words it does not recognize, so a misspelled
     /// color is accepted here and simply has no effect when drawn. Callers
     /// must follow a successful `set` with `App::apply_config` to rebuild the
     /// palette and highlighter; the config alone is just data.

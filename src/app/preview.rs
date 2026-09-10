@@ -59,8 +59,10 @@ impl TextKind {
 ///
 /// Without this, `LICENSE` and `README` would be classified as code and open
 /// straight into the editor with line numbers, which is not what anyone wants
-/// from a licence file.
+/// from a license file.
 pub(super) const PROSE_NAMES: &[&str] = &[
+    // Not a spelling of ours: files really are named this, and matching one
+    // is recognizing a name rather than writing a word.
     "LICENCE",
     "LICENSE",
     "COPYING",
@@ -193,6 +195,17 @@ impl App {
     /// stale.
     pub(super) fn reveal(&mut self, path: &Path) -> bool {
         let root = self.tree.root_path().to_path_buf();
+        // Two spellings of the same place. The root has been through
+        // `canonicalize` and a path from somewhere else — git's idea of where a
+        // file is, say — has not: on Windows that is the difference between
+        // `C:\p` and `\\?\C:\p`, and on macOS between `/var` and the
+        // `/private/var` it is a symlink to. Resolving is what makes them the
+        // same string, and it has to be the resolved one from here on, because
+        // the rows this looks through are spelled the root's way.
+        let path = match path.strip_prefix(&root) {
+            Ok(_) => path.to_path_buf(),
+            Err(_) => path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+        };
         let Ok(rel) = path.strip_prefix(&root) else {
             return false;
         };

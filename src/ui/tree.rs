@@ -69,7 +69,7 @@ pub(super) fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         // the row rather than chrome around it, and arrows in two weights
         // read as two kinds of importance that do not exist. The selected row
         // inverts as one piece (see [`highlight_row`]), so its arrow comes
-        // out dark against the highlight without needing a colour of its own.
+        // out dark against the highlight without needing a color of its own.
         // The indent is the same weight for the same reason: it is spaces, and
         // the row is one thing.
         let marker = if row.is_dir {
@@ -181,12 +181,15 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect, b: &Bar) {
     let query = Matcher::new(&b.input);
     let mut lines: Vec<Line> = Vec::with_capacity(height);
     for (i, hit) in b.results.iter().enumerate().skip(scroll).take(height) {
+        // Forward slashes, whatever the platform: the map writes paths this
+        // way, wikilinks are written this way, and one program showing the
+        // same path two ways is one program too many.
         let rel = hit
             .path
             .strip_prefix(&root)
             .unwrap_or(&hit.path)
             .to_string_lossy()
-            .into_owned();
+            .replace('\\', "/");
         let mut spans = match hit.kind {
             HitKind::Name => vec![
                 Span::styled("name ", pal.dim),

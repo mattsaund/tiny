@@ -207,7 +207,7 @@ impl ProjectMap {
         // One slot size for everything, so the grid is a grid. The widest name
         // on screen sets it, plus two borders and a two-column gutter for the
         // lines to run down. Two columns and two rows of gutter around every
-        // box: one is not enough, because a line travelling past a box would
+        // box: one is not enough, because a line traveling past a box would
         // run flush against its border and the eye reads that as the box
         // having grown a tail.
         let widest = visible
@@ -317,7 +317,7 @@ impl ProjectMap {
     /// How far down to shift the picture so the selected box sits in the
     /// middle of the pane.
     ///
-    /// Centred rather than merely on screen, because the map draws the
+    /// Centered rather than merely on screen, because the map draws the
     /// selected file's connections and nothing else: a cursor sitting one row
     /// from the bottom has half its lines running off the edge, and the
     /// picture is then answering the question with the answer cropped. Putting
@@ -688,7 +688,7 @@ mod tests {
         let (_td, mut view) = tall_fixture();
         let all = view.visible_indices();
         // Not near either end: there the layout runs out before the pane does,
-        // and a view that cannot scroll further cannot centre anything.
+        // and a view that cannot scroll further cannot center anything.
         view.selected = all[all.len() / 2];
         let height = 20;
         let place = view.place(90, height);
@@ -714,7 +714,7 @@ mod tests {
         let place = view.place(90, 40);
         assert_eq!(
             place.offscreen, 0,
-            "the whole fixture fits, so centring has nothing to do"
+            "the whole fixture fits, so centering has nothing to do"
         );
         let heading = place.folders.iter().map(|g| g.row).min().unwrap();
         assert_eq!(heading, 0, "the map still starts at the top of the pane");
@@ -786,7 +786,7 @@ mod tests {
         let utils = find("src/utils.py");
         assert!(
             dist(design, arch) < dist(design, utils),
-            "two notes in one folder are neighbours; a file in src is not"
+            "two notes in one folder are neighbors; a file in src is not"
         );
     }
 

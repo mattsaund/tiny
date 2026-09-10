@@ -57,7 +57,7 @@ fn the_selected_row_is_highlighted_in_one_piece() {
     let (_td, mut app) = fixture();
     // A nested file, so the row has indent and a marker to the left of the
     // name — the part that used to keep its own dim color and show up as
-    // a grey block once the row was reversed.
+    // a gray block once the row was reversed.
     select(&mut app, "design.md");
     app.focus = Focus::Tree;
 
@@ -128,7 +128,7 @@ fn no_arrow_in_the_tree_is_drawn_in_the_dim_color() {
 #[test]
 fn the_arrow_on_the_selected_row_inverts_with_the_rest_of_it() {
     // Hovering a folder reverses the whole row in one piece, so the arrow
-    // comes out dark against the highlight without a colour of its own.
+    // comes out dark against the highlight without a color of its own.
     let (_td, mut app) = fixture();
     let (open, ..) = app.tree_markers();
     let open = open.trim().to_string();
@@ -647,6 +647,36 @@ fn no_key_is_bound_to_alt_at_all() {
             action.name()
         );
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn a_file_named_through_a_symlink_still_opens() {
+    // The shape of the macOS problem, reproducible anywhere with a symlink:
+    // the project root has been resolved and the path being opened has not, so
+    // the two are the same file spelled differently. Windows has the same
+    // problem with the `\\?\` prefix `canonicalize` adds there.
+    let (td, _) = fixture();
+    let real = td.path().canonicalize().unwrap();
+    let link = td.path().parent().unwrap().join(format!(
+        "link-{}",
+        real.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = fs::remove_file(&link);
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    // Rooted at the resolved path, the way `project::resolve` leaves it.
+    let mut app = App::new(target(&real, None), Config::default(), None).unwrap();
+    app.open_path(&link.join("README.md"));
+
+    let got = app.selected_path().expect("something is selected");
+    assert!(
+        got.ends_with("README.md"),
+        "opened through the link: {} — {}",
+        got.display(),
+        app.status
+    );
+    let _ = fs::remove_file(&link);
 }
 
 #[test]

@@ -13,7 +13,7 @@
 //!
 //! # A typo costs an underline, never the program
 //!
-//! [`parse_style`] ignores words it does not recognise and returns whatever it
+//! [`parse_style`] ignores words it does not recognize and returns whatever it
 //! did understand. A misspelled modifier therefore loses you that modifier and
 //! nothing else — there is no error to report and nothing to fail.
 
@@ -168,6 +168,9 @@ fn parse_color(s: &str) -> Option<Color> {
         "blue" => Some(Color::Blue),
         "magenta" => Some(Color::Magenta),
         "cyan" => Some(Color::Cyan),
+        // tiny writes `gray`, and `grey` is only accepted: it is a value
+        // somebody may already have typed into their config file, and breaking
+        // that over a spelling would be a poor trade.
         "gray" | "grey" => Some(Color::Gray),
         "darkgray" | "darkgrey" => Some(Color::DarkGray),
         "lightred" | "brightred" => Some(Color::LightRed),

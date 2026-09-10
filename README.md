@@ -7,9 +7,14 @@ Everything tiny manages and edits is non proprietary and not obfuscated.
 ## Install:
 Full Installation and binary size: 7.54 MB
 
-**One Liner:**
+**One Liner** (Linux, macOS):
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mattsaund/tiny/main/install.sh | sh
+```
+
+**One Liner** (Windows):
+```powershell
+irm https://raw.githubusercontent.com/mattsaund/tiny/main/install.ps1 | iex
 ```
 
 **Checkout**:
@@ -17,14 +22,10 @@ curl -fsSL https://raw.githubusercontent.com/mattsaund/tiny/main/install.sh | sh
 git clone https://github.com/mattsaund/tiny.git && cd tiny && sh install.sh
 ```
 
-the installer will offer to install rust and its dependencies if you do not have them, then shows a progress bar while it builds and drops `tiny` in `~/.local/bin`. Running it again over an existing install is how you update.
-
 **Uninstall:**
 ```sh
 tiny --uninstall
 ```
-
-shows what it is about to delete — the binary, `tiny.conf`, and it asks before doing it. your notes and projects are not touched.
 
 ## Use (in terminal):
 
@@ -166,7 +167,7 @@ a directory it will save all files under that directory.
 
 The two halves of the diff are always the same height: where one side has a line the other does not, the other is padded. So line 12 on the left is the same place in the file as line 12 on the right, and you read across rather than counting. A gap says what it is once — `· 11 lines added` — rather than marking every row of it.
 
-The diff is **syntax highlighted** on both sides, by the grammar the file's own name picks. The `-` and `+` stay in the gutter rather than colouring the text: a line cannot be two colours at once, and this way a change is obvious at a glance while the code still reads as code.
+The diff is **syntax highlighted** on both sides, by the grammar the file's own name picks. The `-` and `+` stay in the gutter rather than coloring the text: a line cannot be two colors at once, and this way a change is obvious at a glance while the code still reads as code.
 
 | key       | does                                        |
 |-----------|---------------------------------------------|
@@ -195,7 +196,7 @@ Both halves scroll on one offset, so they cannot drift apart. The change list st
 
 It is a real editor, not a one-line prompt — the same keyboard as the file editor, undo and all. The first line is drawn apart from the rest because git treats it apart: it is the summary every log shows on its own. `*commit [message]` is still there for a one-liner from anywhere.
 
-**The letters are git's own**, and so is what they mean: `A` added, `M` modified, `D` deleted, `R` renamed, `C` copied, `U` untracked, `!` a conflict. Each has a colour as well, so the list reads at a glance — and still reads on a terminal with no colour, because the letter says it too.
+**The letters are git's own**, and so is what they mean: `A` added, `M` modified, `D` deleted, `R` renamed, `C` copied, `U` untracked, `!` a conflict. Each has a color as well, so the list reads at a glance — and still reads on a terminal with no color, because the letter says it too.
 
 Everything goes through the `git` on your machine rather than a library linked into tiny. That keeps the binary small and the build fast, and it means tiny agrees with the `git` you already have — your aliases, your config, your credential helper. Pushing and pulling run on a thread, so the window keeps drawing while they work.
 
@@ -442,7 +443,7 @@ TINY_SHOT=path/to/project cargo test screenshot -- --ignored --nocapture
 
 Issues and pull requests welcome. `cargo test` should pass and `cargo clippy` should be quiet before you open one; CI checks both, along with `cargo fmt`.
 
-## Licence and Credits
+## License and Credits
 
 Created by Matthew Saunders https://msaunders.dev
 MIT. See [LICENSE](LICENSE).

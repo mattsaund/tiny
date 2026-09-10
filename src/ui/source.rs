@@ -12,10 +12,10 @@
 //! other has a blank. So line 12 on the left is the same place in the file as
 //! line 12 on the right, and the eye can read across without counting.
 //!
-//! # Colour is the code
+//! # Color is the code
 //!
-//! The letter and the colour say the same thing twice on purpose — the letters
-//! are git's own, and on a terminal with no colour the window still works.
+//! The letter and the color say the same thing twice on purpose — the letters
+//! are git's own, and on a terminal with no color the window still works.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -33,13 +33,13 @@ use crate::text::highlight::Piece;
 /// How many rows the branch map gets, when there is room for it at all.
 const GRAPH_HEIGHT: u16 = 8;
 
-/// The colour of a status letter.
+/// The color of a status letter.
 ///
-/// Git's own scheme is two colours — green for staged, red for not — which
+/// Git's own scheme is two colors — green for staged, red for not — which
 /// says where a change is but not what it is. These say what it is, which is
 /// the question the letter answers too.
 fn code_style(code: Code, pal: &Palette) -> Style {
-    let colour = match code {
+    let color = match code {
         Code::Added => Color::Green,
         Code::Modified => Color::Yellow,
         Code::Deleted => Color::Red,
@@ -48,7 +48,7 @@ fn code_style(code: Code, pal: &Palette) -> Style {
         Code::Untracked => Color::Blue,
         Code::Conflict => Color::LightRed,
     };
-    pal.text.fg(colour).add_modifier(Modifier::BOLD)
+    pal.text.fg(color).add_modifier(Modifier::BOLD)
 }
 
 pub(super) fn draw_source(f: &mut Frame, app: &mut App, area: Rect) {
@@ -227,7 +227,7 @@ fn button_lines(selected: usize, on_row: bool, width: u16, pal: &Palette) -> Vec
 /// highlighted separately, because they *are* two different texts: a line that
 /// opens a string on the right may not exist on the left at all.
 ///
-/// Only the visible window is parsed for colour, the same way the editor does
+/// Only the visible window is parsed for color, the same way the editor does
 /// it, so a diff of a very long file costs what is on screen rather than what
 /// is in the file.
 fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
@@ -303,7 +303,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
         // Syntect wants plain lines; a filler is a line that is not there, and
         // an empty string is the closest true thing to hand it.
         let plain: Vec<String> = lines.iter().map(|l| l.text.clone()).collect();
-        let coloured = app.highlighter.highlight_window(
+        let colored = app.highlighter.highlight_window(
             &plain,
             &syntax,
             git.diff_scroll,
@@ -315,7 +315,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
             .skip(git.diff_scroll)
             .take(inner.height as usize)
             .map(|(n, l)| {
-                let pieces = coloured.get(n - git.diff_scroll);
+                let pieces = colored.get(n - git.diff_scroll);
                 diff_line(l, pieces, i == 0, gap_label(lines, n, i == 0), pal)
             })
             .collect();
@@ -358,11 +358,11 @@ fn gap_label(lines: &[DiffLine], n: usize, before: bool) -> Option<String> {
 }
 
 /// One line of one side: a two-character gutter, then the line itself in
-/// whatever colours its grammar gives it.
+/// whatever colors its grammar gives it.
 ///
 /// The gutter is what carries the diff — `-` red on the left, `+` green on the
-/// right — because the text is already spoken for by the syntax colours, and a
-/// line cannot be two colours at once. Keeping them apart means a change is
+/// right — because the text is already spoken for by the syntax colors, and a
+/// line cannot be two colors at once. Keeping them apart means a change is
 /// still obvious at a glance *and* the code still reads as code.
 ///
 /// A filler is the absence of a line rather than an empty one; the run it

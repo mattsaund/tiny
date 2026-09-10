@@ -11,7 +11,7 @@
 //! # Why lines travel in channels
 //!
 //! A route that turns at the midpoint between two boxes lands *inside* a third
-//! one whenever the two are not neighbours, and since boxes are drawn last the
+//! one whenever the two are not neighbors, and since boxes are drawn last the
 //! line then runs behind it and reads as broken. So routes are not allowed to
 //! turn wherever they like: they turn in [`crate::map::layout::Channels`], the
 //! rows and columns that the layout guarantees are clear of every box. Every
@@ -185,14 +185,14 @@ impl Ink {
         }
     }
 
-    /// Turn the grid into one `Line` per row, merging neighbouring cells that
+    /// Turn the grid into one `Line` per row, merging neighboring cells that
     /// share a style so a row is a handful of spans rather than one per column.
     pub(super) fn render(&self, g: &Glyphs, pal: &Palette) -> Vec<Line<'static>> {
         let style_of = |s: InkStyle| match s {
             InkStyle::Selected => pal.text.add_modifier(Modifier::REVERSED),
-            // Bold as well as coloured: the two directions have to be
+            // Bold as well as colored: the two directions have to be
             // distinguishable from the files around them on a terminal that
-            // renders no colour at all, and from each other on one that does.
+            // renders no color at all, and from each other on one that does.
             InkStyle::Out => pal.map_out.add_modifier(Modifier::BOLD),
             InkStyle::In => pal.map_in.add_modifier(Modifier::BOLD),
             // Everything the cursor does not touch steps back, so the handful
@@ -233,7 +233,7 @@ impl Ink {
 }
 
 /// Draw the connection between the file under the cursor and one of its
-/// neighbours.
+/// neighbors.
 ///
 /// `a` is always the selected file, whichever way the connection runs. A plain
 /// line, with nothing on either end: a mutual connection is the same line as a
@@ -270,12 +270,12 @@ impl Ink {
 ///
 /// **Every line out of one file shares one trunk.** The vertical always runs
 /// down [`Channels::column_by`] of the *selected* file's slot, never the other
-/// one's. So a file with ten neighbours draws one spine with ten branches off
+/// one's. So a file with ten neighbors draws one spine with ten branches off
 /// it, instead of ten separate routes that cross each other on the way. It is
 /// the difference between a diagram and a hatch pattern, and it costs nothing:
 /// the trunk is a column no box occupies either way.
 ///
-/// The one shape that skips all of this is two neighbours side by side in the
+/// The one shape that skips all of this is two neighbors side by side in the
 /// same row, which connect straight across the gap between them. Nothing is in
 /// the way, and it is the plainest line on the map.
 pub(super) fn route(ink: &mut Ink, a: &Placed, b: &Placed, ch: Channels) {
@@ -283,7 +283,7 @@ pub(super) fn route(ink: &mut Ink, a: &Placed, b: &Placed, ch: Channels) {
         return; // the same slot: nothing to draw between them
     }
 
-    // Side to side, for neighbours in the same row.
+    // Side to side, for neighbors in the same row.
     if a.row == b.row && a.col.abs_diff(b.col) == ch.slot_w {
         let y = a.middle() as i32;
         let right = b.col > a.col;
@@ -407,7 +407,7 @@ mod tests {
         let ch = channels(14);
         let slot = |c: u16, r: u16, w: u16| placed(0, c * ch.slot_w, 1 + r * ch.slot_h, w);
         vec![
-            (slot(0, 0, 8), slot(1, 0, 9), "neighbours in a row"),
+            (slot(0, 0, 8), slot(1, 0, 9), "neighbors in a row"),
             (slot(0, 0, 8), slot(3, 0, 9), "same row, far apart"),
             (slot(0, 0, 8), slot(0, 1, 11), "directly below"),
             (slot(0, 2, 8), slot(0, 0, 11), "directly above"),

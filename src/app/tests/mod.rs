@@ -230,6 +230,26 @@ pub(super) fn completed(app: &mut App, line: &str) -> String {
     out
 }
 
+/// Whether two paths name the same file, allowing for the ways an operating
+/// system spells one.
+///
+/// A test that builds a path from the temp directory and compares it with one
+/// that came back from `git` is comparing two spellings of the same file. On
+/// macOS the temp directory lives under `/var`, which is a symlink to
+/// `/private/var`, so git's answer and the test's differ by a directory nobody
+/// typed. Windows has it the other way round: canonicalizing adds a `\\?\`
+/// prefix that a plain path does not have, so resolving *both* is the only
+/// comparison that holds everywhere.
+pub(super) fn same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Open the settings area. A command now, not a key — see `config::keys`.
 pub(super) fn settings(app: &mut App) {
     command(app, "config");

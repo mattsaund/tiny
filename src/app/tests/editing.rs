@@ -22,7 +22,7 @@ fn enter_on_a_code_file_focuses_the_editor_and_typing_reaches_the_buffer() {
 fn ctrl_s_on_a_folder_saves_everything_unsaved_under_it() {
     let (td, mut app) = fixture();
     // Two dirty files in notes/, one in src/, so the folder has to save
-    // its own and leave the neighbour alone.
+    // its own and leave the neighbor alone.
     fs::write(td.path().join("notes/architecture.md"), "# Arch\n").unwrap();
     command(&mut app, "reload");
     for name in ["design.md", "architecture.md", "main.py"] {

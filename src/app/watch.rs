@@ -156,7 +156,7 @@ impl App {
             self.preview_scroll = scroll;
         } else if self.focus == Focus::Editor {
             // The row the keyboard was in has gone, and the cursor has fallen
-            // onto a neighbour. Take the keyboard out of the file: otherwise
+            // onto a neighbor. Take the keyboard out of the file: otherwise
             // the next thing typed is typed into whichever file that turned
             // out to be. What happened to the file itself is `take_on_disk`'s
             // to say.

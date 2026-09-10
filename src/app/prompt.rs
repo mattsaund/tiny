@@ -51,7 +51,7 @@ impl App {
                     ConfirmKind::ResetKeybinds => self.mode = Mode::Keybinds(Keybinds::default()),
                     _ => {}
                 }
-                self.status = "cancelled".into();
+                self.status = "canceled".into();
             }
             _ => self.mode = Mode::Confirm(c),
         }

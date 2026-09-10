@@ -21,6 +21,15 @@ say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# A temporary directory, and a temporary file.
+#
+# `mktemp -d` with no template is a GNU extension. BSD's — which is macOS's —
+# wants either a template or `-t`, and exits with a usage message otherwise, so
+# a script that only knows the GNU spelling dies on a Mac before it has done
+# anything. Try the short form, fall back to the form both understand.
+temp_dir() { mktemp -d 2>/dev/null || mktemp -d -t tiny; }
+temp_file() { mktemp 2>/dev/null || mktemp -t tiny; }
+
 # Everything to clean up on the way out, however we leave. One trap, because a
 # second `trap ... EXIT` would silently replace the first.
 SRC=""
@@ -70,7 +79,7 @@ if [ -f "./Cargo.toml" ] && grep -q 'name = "tiny"' ./Cargo.toml 2>/dev/null; th
     say "building from $SRC"
 else
     have git || die "git is required to fetch the source"
-    SRC="$(mktemp -d)"
+    SRC="$(temp_dir)" || die "could not make a temporary directory"
     SRC_IS_TEMP=1
     printf 'fetching %s (%s) ... ' "$REPO" "$REF"
     git clone --depth 1 --branch "$REF" "$REPO" "$SRC" >/dev/null 2>&1 \
@@ -207,7 +216,7 @@ TOTAL=$(cargo tree --manifest-path "$SRC/Cargo.toml" \
         | awk 'NF' | sort -u | wc -l | tr -d ' ')
 case "$TOTAL" in ''|*[!0-9]*|0) TOTAL=0 ;; esac
 
-LOG="$(mktemp)"
+LOG="$(temp_file)" || die "could not make a temporary file"
 
 # Cargo says what it is doing on stderr, a line per crate. Reading those is
 # what turns "wait for a minute with nothing on screen" into something you can

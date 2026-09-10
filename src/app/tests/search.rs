@@ -406,7 +406,7 @@ fn stepping_through_results_does_not_re_order_them_underneath_you() {
     app.on_key(ctrl('/'));
     type_str(&mut app, "marke");
     // Down moves onto a hit in another file, which opens that file in the
-    // preview. The next keystroke must still favour the file the search was
+    // preview. The next keystroke must still favor the file the search was
     // started from, not whichever one the cursor has landed on.
     app.on_key(k(KeyCode::Down));
     app.on_key(ch('r'));

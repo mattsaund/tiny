@@ -155,7 +155,7 @@ fn real_main() -> Result<()> {
             return Ok(());
         }
         Some("--licenses") => {
-            emit(&text::highlight::acknowledgements());
+            emit(&text::highlight::acknowledgments());
             return Ok(());
         }
         Some("--uninstall") => return uninstall(),
@@ -463,10 +463,15 @@ impl Removal {
                 return errors;
             }
         }
-        // Unix unlinks a running executable happily; Windows will not, and
-        // says so, which is the most useful thing we can do about it.
+        // Unix unlinks a running executable happily; Windows will not, so say
+        // what to do about it rather than only that it did not work.
         if let Err(e) = std::fs::remove_file(bin) {
-            errors.push(format!("{}: {e}", bin.display()));
+            let hint = if cfg!(target_os = "windows") {
+                " — Windows will not delete a running program; close tiny and delete it"
+            } else {
+                ""
+            };
+            errors.push(format!("{}: {e}{hint}", bin.display()));
         }
         errors
     }
@@ -499,7 +504,7 @@ fn uninstall() -> Result<()> {
     if std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut reply).is_err()
         || !matches!(reply.trim(), "y" | "Y" | "yes" | "Yes")
     {
-        println!("cancelled — nothing was removed");
+        println!("canceled — nothing was removed");
         return Ok(());
     }
 

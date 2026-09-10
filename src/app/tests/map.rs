@@ -163,9 +163,9 @@ fn nothing_is_drawn_on_top_of_a_box() {
     }
 }
 
-/// Everything on screen drawn in one colour, row by row.
+/// Everything on screen drawn in one color, row by row.
 ///
-/// The map is the only place tiny uses colour at all, so a colour is a
+/// The map is the only place tiny uses color at all, so a color is a
 /// reliable way to ask "which files did it call outgoing" without knowing
 /// where on the grid they landed.
 fn drawn_in(app: &mut App, color: Color) -> String {
@@ -239,8 +239,8 @@ fn a_file_on_neither_side_of_the_cursor_is_left_uncoloured() {
     let (_td, mut app) = linked_fixture();
     open_map(&mut app);
     cursor_on(&mut app, "main.py");
-    for colour in [Color::Red, Color::Green] {
-        let painted = drawn_in(&mut app, colour);
+    for color in [Color::Red, Color::Green] {
+        let painted = drawn_in(&mut app, color);
         assert!(
             !painted.contains("design.md"),
             "design.md has nothing to do with main.py:\n{painted}"
@@ -257,7 +257,7 @@ fn the_two_directions_can_be_recoloured_from_the_config() {
     cursor_on(&mut app, "utils.py");
 
     let hex = drawn_in(&mut app, Color::Rgb(0x00, 0xcc, 0xff));
-    assert!(hex.contains("main.py"), "the incoming colour took:\n{hex}");
+    assert!(hex.contains("main.py"), "the incoming color took:\n{hex}");
     assert!(
         drawn_in(&mut app, Color::Green).trim().is_empty(),
         "and the shipped green is gone"

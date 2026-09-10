@@ -354,8 +354,8 @@ impl App {
                 return;
             }
             // The guard does the work: `on_global_action` runs the action if
-            // it recognises it and says so, and an action it does not
-            // recognise falls through to the editing keyboard below.
+            // it recognizes it and says so, and an action it does not
+            // recognize falls through to the editing keyboard below.
             Some(action) if self.on_global_action(action) => return,
             _ => {}
         }

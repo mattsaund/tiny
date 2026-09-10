@@ -77,7 +77,7 @@ fn path_candidates(root: &Path, typed: &str, show_hidden: bool) -> Vec<String> {
 ///
 /// Completes to the longest common prefix of the matches rather than to the
 /// first one, so Tab on an ambiguous prefix advances as far as it safely can
-/// and then stops — the shell behaviour.
+/// and then stops — the shell behavior.
 ///
 /// The whole of `copy README.md to notes/today.md` can be typed with Tab, which
 /// is the point: a command that reads like a sentence is no use if every word
@@ -92,7 +92,7 @@ fn complete_command(b: &mut Bar, root: &Path, show_hidden: bool) {
 /// What `Tab` would add to the line, if anything.
 ///
 /// Split out from [`complete_command`] so the bar can draw the same answer in
-/// grey before the key is pressed — a suggestion you can see is worth more than
+/// gray before the key is pressed — a suggestion you can see is worth more than
 /// one you have to guess at, and it costs one `read_dir`.
 ///
 /// Returns only the *remainder*: every candidate is filtered by what has been
@@ -179,7 +179,7 @@ impl App {
     /// started from inside a file can put that file's hits at the top. Only
     /// when the editor actually has the keyboard: hovering a file in the tree
     /// is looking around the project, and a search from there has no reason to
-    /// favour whichever row the cursor happened to be resting on.
+    /// favor whichever row the cursor happened to be resting on.
     pub(super) fn open_bar(&mut self, as_command: bool) {
         let input = if as_command {
             COMMAND_SIGIL.to_string()
@@ -278,7 +278,7 @@ impl App {
             KeyCode::Left => b.cursor = b.cursor.saturating_sub(1),
             KeyCode::Right => {
                 // At the end of the line the only thing to the right of the
-                // cursor is the grey suggestion, so the arrow takes it up —
+                // cursor is the gray suggestion, so the arrow takes it up —
                 // the same key, doing the same thing, to what is drawn there.
                 // Anywhere else it moves along the text as it always did.
                 if b.is_command() && b.cursor == b.input.chars().count() {

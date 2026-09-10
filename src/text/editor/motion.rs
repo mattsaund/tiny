@@ -10,7 +10,7 @@
 //! Moving down through a short line and out the other side puts the cursor
 //! back where it was horizontally, not where the short line ended. That
 //! remembered column is `goal`, and it survives vertical movement and is
-//! cleared by anything horizontal — which is the behaviour every editor has
+//! cleared by anything horizontal — which is the behavior every editor has
 //! and nobody notices until it is missing.
 
 use super::Editor;

@@ -32,7 +32,7 @@ tempfile = "3.27.0"
 # Release is what people install, and they wait for it: `install.sh` builds
 # from source on their machine, so this profile is the install time.
 #
-# Thin LTO still lets the optimiser see across crate boundaries — which matters
+# Thin LTO still lets the optimizer see across crate boundaries — which matters
 # here because the hot loop (syntect's regex matching, called from `highlight`)
 # sits behind two of them — but it does the work per-module and in parallel
 # instead of merging the whole program into one unit. With sixteen codegen

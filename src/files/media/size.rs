@@ -7,7 +7,7 @@
 //!
 //! This used to go through the `image` crate, which is an excellent decoder
 //! and brings twenty-odd crates with it — PNG, JPEG, GIF, WebP and TIFF
-//! decoders, two inflate implementations, a colour-management library. That is
+//! decoders, two inflate implementations, a color-management library. That is
 //! the right dependency for a program that draws pictures. tiny stopped
 //! drawing pictures (see the [`super`] module docs), and what is left is
 //! reading two integers.
@@ -306,7 +306,7 @@ mod tests {
         v.extend_from_slice(b"IHDR");
         v.extend_from_slice(&w.to_be_bytes());
         v.extend_from_slice(&h.to_be_bytes());
-        v.extend_from_slice(&[8, 6, 0, 0, 0]); // depth, colour, the rest
+        v.extend_from_slice(&[8, 6, 0, 0, 0]); // depth, color, the rest
         v
     }
 

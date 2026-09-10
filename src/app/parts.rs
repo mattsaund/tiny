@@ -105,7 +105,7 @@ pub(super) fn split_args(line: &str) -> Vec<String> {
 /// is then created, renamed to, or written must pass through here. The check
 /// is lexical, done by walking components and popping on `..`, so it does not
 /// depend on the target existing — and it fails closed twice over: once if
-/// `..` pops past the start, and again if the normalised result does not sit
+/// `..` pops past the start, and again if the normalized result does not sit
 /// under `root`.
 ///
 /// It relies on `root` being canonicalized, which `project::resolve`

@@ -11,7 +11,7 @@
 //! Terminals do not agree about whether a shifted letter arrives as `A` with
 //! no modifier or as `a` with `SHIFT`, and some report both. A comparison
 //! strict about that would work on one terminal and not the next, so [`Key`]
-//! normalises before comparing.
+//! normalizes before comparing.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

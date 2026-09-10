@@ -14,7 +14,7 @@
 //! direction, so the graph is something you walk around rather than a list
 //! that happens to be drawn as dots.
 //!
-//! # Division of labour
+//! # Division of labor
 //!
 //! [`super::graph`] decides *what connects to what*; this module decides
 //! *what you can see and do*; [`super::layout`] decides *where it sits*. The

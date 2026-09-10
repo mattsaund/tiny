@@ -41,7 +41,7 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     };
     let (before, after) = split_at_char(text, cursor);
 
-    // What Tab would fill in, shown in grey ahead of the cursor. Only at the
+    // What Tab would fill in, shown in gray ahead of the cursor. Only at the
     // end of the line: in the middle of one it would read as text that is
     // already there rather than as an offer.
     let ghost = if command && b.cursor == b.input.chars().count() {

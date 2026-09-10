@@ -8,7 +8,7 @@
 //! # Round-tripping is the point
 //!
 //! tiny's promise is that your files stay yours. An editor that silently
-//! normalises CRLF to LF, or appends a trailing newline that was not there,
+//! normalizes CRLF to LF, or appends a trailing newline that was not there,
 //! turns "I opened a file" into a diff. Three fields exist purely to prevent
 //! that: `line_ending`, `trailing_newline`, and `was_empty`. If you add a new
 //! way to construct or write a buffer, keep all three honest — the tests in
@@ -102,7 +102,7 @@ pub struct Editor {
     /// tree and the confirm-on-quit prompt.
     pub dirty: bool,
     /// Column the cursor tries to return to when moving vertically past
-    /// short lines — the behaviour every editor has and nobody notices
+    /// short lines — the behavior every editor has and nobody notices
     /// until it is missing.
     goal_col: usize,
     /// Viewport offsets, in lines and characters. Owned here but written by
@@ -188,7 +188,7 @@ impl Editor {
         Ok(Self::from_str(path.to_path_buf(), &content))
     }
 
-    /// Serialise the buffer back to the exact bytes that should hit the disk,
+    /// Serialize the buffer back to the exact bytes that should hit the disk,
     /// restoring the original line ending and trailing newline.
     ///
     /// Also used by `ui` to re-render markdown from the buffer rather than

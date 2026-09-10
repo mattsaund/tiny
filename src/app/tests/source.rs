@@ -30,6 +30,15 @@ fn repo() -> (tempfile::TempDir, App) {
     git(&["init", "--quiet", "--initial-branch=main"]);
     git(&["config", "user.email", "test@example.com"]);
     git(&["config", "user.name", "Test"]);
+    // Three settings a machine's own git config could otherwise impose on
+    // these tests. `autocrlf` is on by default on Windows and would rewrite
+    // every line ending between the working tree and the index, so a diff
+    // would be of newlines rather than of words; `safecrlf` would turn the
+    // warning about that into an error; and a globally-signed commit needs a
+    // key this repository has no business asking for.
+    git(&["config", "core.autocrlf", "false"]);
+    git(&["config", "core.safecrlf", "false"]);
+    git(&["config", "commit.gpgsign", "false"]);
 
     fs::write(at.join("README.md"), "# Fixture\n\nhello widget\n").unwrap();
     fs::create_dir_all(at.join("src")).unwrap();
@@ -306,10 +315,13 @@ fn tab_leaves_the_window_with_the_file_open() {
 
     app.on_key(k(KeyCode::Tab));
     assert_eq!(app.window, Window::Main, "back to the files");
-    assert_eq!(
-        app.selected_path(),
-        Some(td.path().join("README.md").as_path()),
-        "on the one that was under the cursor"
+    // The path came back from git, and the one to compare it with was built
+    // here — two spellings of the same file on a Mac. See `same_file`.
+    let want = td.path().join("README.md");
+    let got = app.selected_path().expect("a file is selected");
+    assert!(
+        same_file(got, &want),
+        "on the one that was under the cursor: {got:?} vs {want:?}"
     );
 }
 
@@ -363,11 +375,11 @@ fn python_repo() -> (tempfile::TempDir, App) {
     (td, app)
 }
 
-/// The colour the first character of `word` is drawn in, the first time it
+/// The color the first character of `word` is drawn in, the first time it
 /// appears on screen.
 ///
-/// Precise on purpose: counting coloured cells anywhere would count the
-/// borders, which are coloured whatever else is or is not.
+/// Precise on purpose: counting colored cells anywhere would count the
+/// borders, which are colored whatever else is or is not.
 fn colour_of(app: &mut App, word: &str) -> Color {
     let (w, h) = (110u16, 20u16);
     let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -393,9 +405,9 @@ fn the_diff_is_syntax_highlighted_on_both_sides() {
     source(&mut app);
     cursor_on(&mut app, "main.py");
 
-    // `def` is a keyword in Python and syntect gives it a colour of its own.
-    // Unhighlighted text is drawn in the theme's `text`, which names no colour
-    // at all — so a colour here is the grammar talking.
+    // `def` is a keyword in Python and syntect gives it a color of its own.
+    // Unhighlighted text is drawn in the theme's `text`, which names no color
+    // at all — so a color here is the grammar talking.
     let keyword = colour_of(&mut app, "def main");
     assert_ne!(
         keyword,
@@ -406,7 +418,7 @@ fn the_diff_is_syntax_highlighted_on_both_sides() {
     // left of the text and keeps its own red and green.
     assert!(
         !matches!(keyword, Color::Red | Color::Green),
-        "that is the gutter's colour, not the grammar's: {keyword:?}"
+        "that is the gutter's color, not the grammar's: {keyword:?}"
     );
 }
 

@@ -18,7 +18,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::parts::{centred, highlight_row, keep_visible, split_at_char};
+use super::parts::{centered, highlight_row, keep_visible, split_at_char};
 
 use crate::app::{App, BUTTONS, KEYBIND_BUTTONS, Keybinds, Settings};
 use crate::config::Config;
@@ -44,7 +44,7 @@ pub(super) fn draw_keybinds(f: &mut Frame, app: &App, area: Rect, kb: &Keybinds)
         rows.push(BindRow::Action(i, *action));
     }
 
-    let popup = centred(area, 76, area.height.saturating_sub(4));
+    let popup = centered(area, 76, area.height.saturating_sub(4));
     f.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -148,7 +148,7 @@ pub(super) fn draw_settings(f: &mut Frame, app: &App, area: Rect, s: &Settings) 
     let pal = app.palette;
     let index = Config::settings_index();
     let rows = BUTTONS.len() + index.len();
-    let popup = centred(area, 80, rows as u16 + 4);
+    let popup = centered(area, 80, rows as u16 + 4);
     f.render_widget(Clear, popup);
 
     let block = Block::default()

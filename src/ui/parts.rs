@@ -83,7 +83,7 @@ pub(super) fn pane<'a>(
 /// The row's own colors are *replaced*, not patched over. Patching kept each
 /// span's foreground, and the default palette dims the indent and the fold
 /// marker — so under reverse video that foreground became a background and the
-/// left of every selected row was a grey block with the name in white beside
+/// left of every selected row was a gray block with the name in white beside
 /// it. One style across the whole row is what makes it read as one row.
 ///
 /// An unfocused pane still shows its cursor, dimmed, so you can see where you
@@ -181,9 +181,9 @@ pub(super) fn keep_visible(selected: usize, height: usize, total: usize) -> usiz
         .min(total.saturating_sub(height))
 }
 
-/// A centred rectangle for an overlay, shrunk to fit if the window is smaller
+/// A centered rectangle for an overlay, shrunk to fit if the window is smaller
 /// than the requested size.
-pub(super) fn centred(area: Rect, w: u16, h: u16) -> Rect {
+pub(super) fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width.saturating_sub(2));
     let h = h.min(area.height.saturating_sub(2));
     Rect {

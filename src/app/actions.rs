@@ -109,7 +109,7 @@ impl App {
     }
 
     /// Left-arrow: close an open folder, or jump to the parent of anything
-    /// else. Two behaviours on one key, which is what makes it feel like
+    /// else. Two behaviors on one key, which is what makes it feel like
     /// "outwards".
     pub(super) fn collapse_or_parent(&mut self) {
         let Some(row) = self.selected_row().cloned() else {

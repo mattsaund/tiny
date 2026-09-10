@@ -78,7 +78,7 @@ use tree_sitter_tags::TagsContext;
 
 use crate::text::search;
 
-/// What a file is, which decides how it is scanned and how it is labelled.
+/// What a file is, which decides how it is scanned and how it is labeled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
     /// Markdown. Scanned for both wikilinks and `[text](path)` links.

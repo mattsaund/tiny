@@ -5,7 +5,7 @@
 //! typed text and its results, a prompt waiting for a name, a confirmation
 //! waiting for a yes, the settings area's cursor, the keybinds window's.
 //!
-//! These are data, not behaviour. Every one of them is *handled* somewhere
+//! These are data, not behavior. Every one of them is *handled* somewhere
 //! else ([`super::bar`], [`super::prompt`], [`super::settings`]) and what
 //! lives here is only the shape of what those handlers are working on, so
 //! that `App` can hold one of them without depending on any of them.

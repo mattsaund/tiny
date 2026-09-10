@@ -44,7 +44,7 @@
 //! mapping `.ts` onto JavaScript and hoping, which is worse than it sounds
 //! because a wrong grammar mis-styles a file confidently.
 //!
-//! Grammars carry their own licences, listed by [`acknowledgements`] and shown
+//! Grammars carry their own licences, listed by [`acknowledgments`] and shown
 //! by `tiny --licenses`.
 
 use std::path::{Path, PathBuf};
@@ -68,7 +68,7 @@ pub type Piece = (Style, String);
 /// expensive thing tiny does at startup, so `App` builds exactly one and keeps
 /// it for the life of the program. Changing `syntax_theme` goes through
 /// [`Highlighter::set_theme`], which swaps only the theme — rebuilding the
-/// whole thing to change a colour scheme would cost the same as another
+/// whole thing to change a color scheme would cost the same as another
 /// startup.
 pub struct Highlighter {
     syntaxes: SyntaxSet,
@@ -391,12 +391,13 @@ fn load_theme(name: &str) -> (Theme, Option<String>) {
 /// The grammars are third-party files redistributed inside the binary, and a
 /// few of them ask to be acknowledged. Printing the listing is the cheapest
 /// honest way to do that; it costs about 11 KiB and only when called.
-pub fn acknowledgements() -> String {
+pub fn acknowledgments() -> String {
     format!(
         "tiny bundles syntax definitions curated by the bat project, by way of \
          the two-face crate. They are third-party files with their own terms; \
          those that ask to be acknowledged are reproduced below. The full \
          list, including the ones that do not, is at\n{}\n\n{}\n",
+        // Someone else's API, and spelled their way.
         two_face::acknowledgement::url(),
         two_face::acknowledgement::listing().to_md().trim_end(),
     )
