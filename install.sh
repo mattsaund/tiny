@@ -3,13 +3,16 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/mattsaund/tiny/main/install.sh | sh
 #
-# Works two ways: piped from the web, where it fetches the source itself, or
-# run from inside a checkout, where it builds what is already there.
+# On a Mac it downloads the ready-made binary from the latest GitHub release.
+# Otherwise — Linux, a Mac with no release to download, or run from inside a
+# checkout — it builds from source, fetching the source itself when piped from
+# the web and building what is there when run from a checkout.
 #
 # Override anything with the environment:
-#   TINY_REPO=...    git URL to clone
-#   TINY_REF=...     branch or tag (default: main)
-#   TINY_PREFIX=...  where the binary lands (default: ~/.local/bin)
+#   TINY_REPO=...         git URL to clone
+#   TINY_REF=...          branch or tag (default: main)
+#   TINY_PREFIX=...       where the binary lands (default: ~/.local/bin)
+#   TINY_FROM_SOURCE=1    build even where a download is available
 
 set -eu
 
@@ -46,6 +49,81 @@ trap cleanup EXIT INT TERM
 # pipe gets plain lines instead — a progress bar redrawn with carriage returns
 # into a file is a single unreadable line thousands of characters long.
 tty_out() { [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; }
+
+# What to say once there is a binary, from either route to one.
+finish() {
+    say ""
+    say "installed $PREFIX/tiny"
+    case ":$PATH:" in
+        *":$PREFIX:"*)
+            say "run it with:      tiny ~/notes"
+            say "remove it with:   tiny --uninstall"
+            ;;
+        *)
+            say "$PREFIX is not on your PATH. Add it:"
+            say ""
+            case "${SHELL##*/}" in
+                fish) say "  fish_add_path $PREFIX" ;;
+                zsh)  say "  echo 'export PATH=\"$PREFIX:\$PATH\"' >> ~/.zshrc" ;;
+                *)    say "  echo 'export PATH=\"$PREFIX:\$PATH\"' >> ~/.bashrc" ;;
+            esac
+            say ""
+            say "then run:  tiny ~/notes"
+            say ""
+            say "to remove tiny later:  tiny --uninstall"
+            ;;
+    esac
+}
+
+# --- a ready-made binary -----------------------------------------------------
+#
+# Building on a Mac needs the Xcode command line tools as well as Rust — a
+# large download to try a small program — so a Mac takes the binary the
+# release workflow built, and only builds when there is none to take. Linux
+# keeps building: it has a compiler already, and a binary linked against one
+# distribution's C library is one that can fail on another's.
+#
+# Not when asked to build, and not for a named ref: a release is a tag, and a
+# branch today is not what the last tag was.
+prebuilt() {
+    [ "$(uname -s)" = Darwin ] || return 1
+    [ -z "${TINY_FROM_SOURCE:-}" ] || return 1
+    [ "$REF" = main ] || return 1
+    have curl || return 1
+    case "$(uname -m)" in
+        arm64|aarch64) arch=aarch64 ;;
+        x86_64) arch=x86_64 ;;
+        *) return 1 ;;
+    esac
+    slug=${REPO#https://github.com/}
+    slug=${slug%.git}
+    case "$slug" in *://*|*/*/*) return 1 ;; */*) ;; *) return 1 ;; esac
+    url="https://github.com/$slug/releases/latest/download/tiny-$arch-apple-darwin.tar.gz"
+    dir="$(temp_dir)" || return 1
+    printf 'downloading tiny for %s ... ' "$arch"
+    if ! curl -fsSL "$url" -o "$dir/tiny.tar.gz" 2>/dev/null; then
+        say "none published yet, so building from source instead"
+        rm -rf "$dir"
+        return 1
+    fi
+    if ! tar -xzf "$dir/tiny.tar.gz" -C "$dir" tiny 2>/dev/null; then
+        say "could not unpack it, so building instead"
+        rm -rf "$dir"
+        return 1
+    fi
+    mkdir -p "$PREFIX"
+    mv "$dir/tiny" "$PREFIX/tiny" && chmod +x "$PREFIX/tiny"
+    rm -rf "$dir"
+    say "done"
+}
+
+# Running from inside a checkout means "build this", so a checkout never
+# downloads.
+if ! { [ -f "./Cargo.toml" ] && grep -q 'name = "tiny"' ./Cargo.toml 2>/dev/null; } \
+    && prebuilt; then
+    finish
+    exit 0
+fi
 
 
 # --- rust -------------------------------------------------------------------
@@ -173,7 +251,7 @@ watch_build() {
                     fi
                     ;;
                 # The end of the build, and the only honest marker of it.
-                # `cargo install` prints `Installing tiny v0.2.0` when it
+                # `cargo install` prints `Installing tiny v0.2.1` when it
                 # *starts* as well as `Installing <path>` when it finishes, so
                 # matching on that drew a full bar before the first crate had
                 # compiled.
@@ -240,29 +318,5 @@ if ! build; then
     die "build failed — the output above says why"
 fi
 
-BIN="$PREFIX/tiny"
-[ -x "$BIN" ] || die "expected a binary at $BIN"
-
-# --- PATH -------------------------------------------------------------------
-
-say ""
-say "installed $BIN"
-case ":$PATH:" in
-    *":$PREFIX:"*)
-        say "run it with:      tiny ~/notes"
-        say "remove it with:   tiny --uninstall"
-        ;;
-    *)
-        say "$PREFIX is not on your PATH. Add it:"
-        say ""
-        case "${SHELL##*/}" in
-            fish) say "  fish_add_path $PREFIX" ;;
-            zsh)  say "  echo 'export PATH=\"$PREFIX:\$PATH\"' >> ~/.zshrc" ;;
-            *)    say "  echo 'export PATH=\"$PREFIX:\$PATH\"' >> ~/.bashrc" ;;
-        esac
-        say ""
-        say "then run:  tiny ~/notes"
-        say ""
-        say "to remove tiny later:  tiny --uninstall"
-        ;;
-esac
+[ -x "$PREFIX/tiny" ] || die "expected a binary at $PREFIX/tiny"
+finish

@@ -680,6 +680,36 @@ fn a_file_named_through_a_symlink_still_opens() {
 }
 
 #[test]
+#[cfg(unix)]
+fn a_resolved_path_opens_in_a_project_rooted_at_a_symlink() {
+    // The macOS case exactly, the mirror of the test above: the project root is
+    // a path through a symlink — a Mac's temp directory is under `/var`, which
+    // is `/private/var` — and the path being opened is the resolved one, which
+    // is what git reports. Neither side matches the other until *both* are
+    // resolved. Windows does the same with 8.3 names like `RUNNER~1`.
+    let (td, _) = fixture();
+    let real = td.path().canonicalize().unwrap();
+    let link = td.path().parent().unwrap().join(format!(
+        "rooted-{}",
+        real.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = fs::remove_file(&link);
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let mut app = App::new(target(&link, None), Config::default(), None).unwrap();
+    app.open_path(&real.join("README.md"));
+
+    let got = app.selected_path().map(Path::to_path_buf);
+    let _ = fs::remove_file(&link);
+    assert_eq!(
+        got,
+        Some(link.join("README.md")),
+        "opened, and spelled the way the tree spells it: {}",
+        app.status
+    );
+}
+
+#[test]
 fn f1_reaches_the_help_window_from_inside_the_editor() {
     let (_td, mut app) = fixture();
     editing(&mut app);

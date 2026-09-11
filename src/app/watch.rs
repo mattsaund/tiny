@@ -43,6 +43,15 @@
 //! change, and nothing on screen moves. It costs one read of a file small
 //! enough to be open in an editor, and only on the scan after a write.
 //!
+//! # A stamp can be too young to trust
+//!
+//! Some filesystems keep coarse time: NTFS moves in steps of about sixteen
+//! milliseconds, HFS+ in one second, FAT in two. Two changes inside one step
+//! leave the same stamp, so a scan that fell between them would see nothing
+//! for the second. A stamp younger than [`RACY`] is therefore a reason to look
+//! rather than proof that nothing moved — a folder is re-read, a clean file
+//! re-read and compared — and neither draws a frame unless something did.
+//!
 //! # Unsaved work is never overwritten
 //!
 //! A dirty buffer is never reloaded, whatever the disk says. It gets a line on
@@ -52,7 +61,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use super::App;
 use super::mode::Focus;
@@ -84,6 +93,27 @@ pub struct Watch {
 fn stamp(path: &Path) -> Stamp {
     let m = fs::metadata(path).ok()?;
     Some((m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len()))
+}
+
+/// How long after a change a stamp cannot be trusted to have caught the next.
+///
+/// This is git's "racily clean" problem — a timestamp is only as fine as the
+/// clock that wrote it — and the answer is git's: a stamp too young to vouch
+/// for itself is a reason to look. Two seconds covers the coarsest filesystem
+/// anyone is likely to open a project on.
+const RACY: Duration = Duration::from_secs(2);
+
+/// Whether this stamp is too recent to prove nothing has changed since.
+fn racy(stamp: &Stamp) -> bool {
+    match stamp {
+        Some((when, _)) => match SystemTime::now().duration_since(*when) {
+            Ok(age) => age < RACY,
+            // A time in the future — clock skew, a network share — cannot
+            // vouch for anything either.
+            Err(_) => true,
+        },
+        None => false,
+    }
 }
 
 impl App {
@@ -137,7 +167,11 @@ impl App {
         let mut fresh: HashMap<PathBuf, Stamp> = HashMap::new();
         for dir in self.tree.loaded_dirs() {
             let now = stamp(&dir);
-            changed |= self.watch.dirs.get(&dir).is_some_and(|was| *was != now);
+            changed |= self
+                .watch
+                .dirs
+                .get(&dir)
+                .is_some_and(|was| *was != now || racy(was));
             fresh.insert(dir, now);
         }
         self.watch.dirs = fresh;
@@ -148,6 +182,7 @@ impl App {
         // is right when the cursor has moved to another file and wrong when it
         // has not — a file being written elsewhere in the project should not
         // send you back to the top of the one you are reading.
+        let before: Vec<PathBuf> = self.rows.iter().map(|r| r.path.clone()).collect();
         let was_on = self.selected_path().map(Path::to_path_buf);
         let scroll = self.preview_scroll;
         self.tree.refresh_all();
@@ -162,7 +197,9 @@ impl App {
             // to say.
             self.focus_tree();
         }
-        true
+        // A racy stamp is a reason to look, not proof that anything moved, and
+        // looking and finding the same listing is not worth a frame.
+        !self.rows.iter().map(|r| &r.path).eq(before.iter())
     }
 
     /// Open files whose contents have been written by someone else.
@@ -170,8 +207,13 @@ impl App {
         let mut changed = false;
         for path in self.buffers.keys().cloned().collect::<Vec<_>>() {
             let now = stamp(&path);
+            let dirty = self.is_dirty(&path);
             match self.watch.files.get(&path) {
-                Some(was) if *was == now => continue,
+                // Unchanged — unless the stamp is too young to prove it. Then a
+                // clean buffer is read and compared, which costs one read and
+                // says nothing when nothing changed. A dirty one is not: its
+                // warning is given once per real change, not once per tick.
+                Some(was) if *was == now && (dirty || !racy(was)) => continue,
                 Some(_) => {
                     self.watch.files.insert(path.clone(), now);
                     changed |= self.take_on_disk(&path);

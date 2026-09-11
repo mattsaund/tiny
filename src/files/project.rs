@@ -95,10 +95,8 @@ pub fn resolve(arg: Option<&str>, cfg: &Config) -> Result<Target> {
         }
     };
 
-    root = root
-        .canonicalize()
-        .with_context(|| format!("cannot open {}", root.display()))?;
-    let file = file.map(|f| f.canonicalize().unwrap_or(f));
+    root = canonical(&root).with_context(|| format!("cannot open {}", root.display()))?;
+    let file = file.map(|f| canonical(&f).unwrap_or(f));
 
     Ok(Target {
         root,
@@ -166,6 +164,58 @@ fn expand(s: &str) -> PathBuf {
         Some((rest, home)) => home.join(rest),
         None => PathBuf::from(s),
     }
+}
+
+/// `canonicalize`, spelled the way the rest of the system expects to read it.
+///
+/// On Windows the standard library's answer is a *verbatim* path — `\\?\C:\x`
+/// rather than `C:\x`. The file APIs take it happily, which is why it goes
+/// unnoticed until something else is handed one: git given it as a working
+/// directory, `cmd /C start` given it as a file to open, a path from git that
+/// has to be compared with it. None of those agree it is the same place.
+///
+/// So the prefix comes off wherever that is safe, which is what the `dunce`
+/// crate does and the reason it exists — a dozen lines are not worth a
+/// dependency. Everywhere else this is `canonicalize` and nothing more.
+pub fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    let resolved = path.canonicalize()?;
+    if cfg!(windows)
+        && let Some(plain) = resolved.to_str().and_then(strip_verbatim)
+    {
+        return Ok(PathBuf::from(plain));
+    }
+    Ok(resolved)
+}
+
+/// `\\?\C:\x` as `C:\x`, when dropping the prefix changes nothing.
+///
+/// Only an ordinary drive path qualifies. A `\\?\UNC\` share, anything past the
+/// old 260-character limit, and a name Windows reserves for a device (`CON`,
+/// `NUL`, `COM1`…) all genuinely need the prefix to mean what they say.
+///
+/// Plain text in and out rather than a `Path`, so it is compiled and tested on
+/// every platform — not only on the one where it is ever called.
+fn strip_verbatim(s: &str) -> Option<&str> {
+    let rest = s.strip_prefix(r"\\?\")?;
+    let b = rest.as_bytes();
+    let drive = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\';
+    if !drive || rest.len() >= 260 {
+        return None;
+    }
+    let reserved = rest.split('\\').any(|part| {
+        let stem = part
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .trim_end()
+            .to_ascii_uppercase();
+        let numbered = |device: &str| {
+            stem.strip_prefix(device)
+                .is_some_and(|n| n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9'))
+        };
+        matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT")
+    });
+    (!reserved).then_some(rest)
 }
 
 #[cfg(test)]
@@ -253,7 +303,7 @@ mod tests {
         fs::write(deep.join("main.py"), "print(1)").unwrap();
 
         let t = resolve(Some(deep.to_str().unwrap()), &cfg()).unwrap();
-        assert_eq!(t.root, deep.canonicalize().unwrap());
+        assert_eq!(t.root, canonical(&deep).unwrap());
     }
 
     #[test]
@@ -265,8 +315,8 @@ mod tests {
         fs::write(&file, "print(1)").unwrap();
 
         let t = resolve(Some(file.to_str().unwrap()), &cfg()).unwrap();
-        assert_eq!(t.root, root.canonicalize().unwrap());
-        assert_eq!(t.file, Some(file.canonicalize().unwrap()));
+        assert_eq!(t.root, canonical(&root).unwrap());
+        assert_eq!(t.file, Some(canonical(&file).unwrap()));
         assert_eq!(listing(&t.root), ["main.py"], "opening it wrote nothing");
     }
 
@@ -280,8 +330,8 @@ mod tests {
         let t = resolve(Some(file.to_str().unwrap()), &cfg()).unwrap();
         assert!(file.is_file(), "the file is created, not a folder");
         assert_eq!(fs::read_to_string(&file).unwrap(), "");
-        assert_eq!(t.root, root.canonicalize().unwrap());
-        assert_eq!(t.file, Some(file.canonicalize().unwrap()));
+        assert_eq!(t.root, canonical(&root).unwrap());
+        assert_eq!(t.file, Some(canonical(&file).unwrap()));
         assert_eq!(
             listing(&t.root),
             ["todo.txt"],
@@ -296,7 +346,7 @@ mod tests {
 
         let t = resolve(Some(file.to_str().unwrap()), &cfg()).unwrap();
         assert!(file.is_file());
-        assert_eq!(t.root, file.parent().unwrap().canonicalize().unwrap());
+        assert_eq!(t.root, canonical(file.parent().unwrap()).unwrap());
         assert_eq!(listing(&t.root), ["notes.md"]);
     }
 
@@ -327,5 +377,47 @@ mod tests {
         assert_eq!(expand("/tmp/x"), PathBuf::from("/tmp/x"));
         assert_eq!(expand("relative/x"), PathBuf::from("relative/x"));
         assert_eq!(expand("~notes"), PathBuf::from("~notes"), "not a home path");
+    }
+
+    #[test]
+    fn a_verbatim_drive_path_loses_its_prefix() {
+        assert_eq!(
+            strip_verbatim(r"\\?\C:\Users\tj\notes"),
+            Some(r"C:\Users\tj\notes")
+        );
+        assert_eq!(strip_verbatim(r"\\?\d:\x"), Some(r"d:\x"));
+    }
+
+    #[test]
+    fn a_path_that_needs_its_prefix_keeps_it() {
+        assert_eq!(
+            strip_verbatim(r"C:\already\plain"),
+            None,
+            "nothing to strip"
+        );
+        assert_eq!(
+            strip_verbatim(r"\\?\UNC\server\share\x"),
+            None,
+            "a network share"
+        );
+        assert_eq!(strip_verbatim(r"\\?\C:\dir\NUL"), None, "a device name");
+        assert_eq!(
+            strip_verbatim(r"\\?\C:\dir\con.txt"),
+            None,
+            "even with an extension"
+        );
+        assert_eq!(strip_verbatim(r"\\?\C:\dir\COM1"), None);
+        assert_eq!(
+            strip_verbatim(r"\\?\C:\dir\COM0"),
+            Some(r"C:\dir\COM0"),
+            "there is no COM0"
+        );
+        assert_eq!(
+            strip_verbatim(r"\\?\C:\dir\console"),
+            Some(r"C:\dir\console"),
+            "a longer name is only a name"
+        );
+        let long = format!(r"\\?\C:\{}", "a".repeat(300));
+        assert_eq!(strip_verbatim(&long), None, "past the old path limit");
     }
 }

@@ -3,8 +3,8 @@
 # The claim is the point. tiny is developed on Linux, so "it works on Windows
 # and macOS" is otherwise a thing nobody has watched happen — and the ways it
 # breaks are exactly the ones a Linux machine cannot show you: a `\` where a `/`
-# was expected, a temp directory that is a symlink, a shell built-in that is a
-# GNU extension.
+# was expected, a temp directory that is a symlink, a short name like
+# `RUNNER~1`, a shell that turns stderr into an error.
 name: ci
 
 on:
@@ -49,10 +49,8 @@ jobs:
       - run: cargo test --all-targets
       - run: cargo build --release
 
-  # The installers are the other half of "it works there": a script that cannot
-  # run is a broken install however well the program builds.
   installers:
-    name: check the installers
+    name: parse the installers on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -67,12 +65,72 @@ jobs:
         # macOS. A GNU-only spelling fails here rather than on someone's Mac.
         run: sh -n install.sh
 
-      - name: Parse install.ps1
+      # Both PowerShells. 5.1 is the one every copy of Windows has, and it
+      # reads a script file differently from 7 — which is how a script that
+      # parsed perfectly in 7 could still fail on a real machine.
+      - name: Parse install.ps1 in PowerShell 7
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile(
-            "$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+            "$PWD\install.ps1", [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
-          Write-Host 'install.ps1 parses'
+          Write-Host 'install.ps1 parses in PowerShell 7'
+
+      - name: Parse install.ps1 in Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD\install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
+          Write-Host 'install.ps1 parses in Windows PowerShell 5.1'
+
+      - name: Keep install.ps1 plain ASCII
+        if: runner.os != 'Windows'
+        # 5.1 reads a local .ps1 in the ANSI code page, where one byte of a
+        # UTF-8 em dash is a curly quote that ends a string early.
+        run: |
+          if LC_ALL=C grep -n '[^ -~]' install.ps1; then
+            echo "install.ps1 must be plain ASCII (lines above)"; exit 1
+          fi
+
+  # The installers end to end, the way someone would run them — from a
+  # directory that is not the checkout, so they take the real path: download
+  # the release if there is one, otherwise clone the branch and build it.
+  # Pushes only, because a pull request's merge ref is not a branch the
+  # installer can clone by name.
+  install-windows:
+    name: install on Windows (PowerShell 5.1)
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run install.ps1
+        shell: powershell
+        env:
+          TINY_REF: ${{ github.ref_name }}
+          TINY_PREFIX: ${{ runner.temp }}\tinybin
+        run: |
+          Set-Location $env:RUNNER_TEMP
+          & "$env:GITHUB_WORKSPACE\install.ps1"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "$env:TINY_PREFIX\tiny.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  install-macos:
+    name: install on macOS
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run install.sh
+        env:
+          TINY_REF: ${{ github.ref_name }}
+          TINY_PREFIX: ${{ runner.temp }}/tinybin
+        run: |
+          cd "$RUNNER_TEMP"
+          sh "$GITHUB_WORKSPACE/install.sh"
+          "$TINY_PREFIX/tiny" --version

@@ -1,0 +1,93 @@
+# Ready-made binaries, attached to a GitHub release whenever a version is tagged.
+#
+# This is what makes tiny installable on a machine with no compiler. Building
+# from source needs Rust, and on Windows it also needs the Visual Studio Build
+# Tools — several gigabytes, an administrator prompt and twenty minutes, to try
+# a seven-megabyte program. A Mac needs the Xcode command line tools for the
+# same reason. The installers download one of these instead, and only fall back
+# to building when there is no release to download.
+#
+#   git tag v0.2.1 && git push matt v0.2.1
+#
+# builds every target below and publishes them as the release for that tag.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  # Runs the builds by hand, to check the packaging without publishing. Only a
+  # tag publishes; see the `publish` job's condition.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          # Apple silicon natively, and Intel cross-built on the same runner:
+          # Apple's toolchain builds both, and Intel runners are going away.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # The names here are what the installers ask for — `tiny-<target>.zip` on
+      # Windows, `tiny-<target>.tar.gz` everywhere else — so change them in both
+      # places or neither.
+      - name: Package for Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = "target/${{ matrix.target }}/release/tiny.exe"
+          Compress-Archive -Path $bin, README.md, LICENSE `
+            -DestinationPath "tiny-${{ matrix.target }}.zip"
+
+      - name: Package for macOS and Linux
+        if: runner.os != 'Windows'
+        run: |
+          tar -czf "tiny-${{ matrix.target }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" tiny \
+            -C "$GITHUB_WORKSPACE" README.md LICENSE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tiny-${{ matrix.target }}
+          path: tiny-${{ matrix.target }}.*
+
+  publish:
+    needs: build
+    # A hand-run build has no tag to hang a release on; it stops here with the
+    # packages downloadable from the run page.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

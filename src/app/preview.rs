@@ -195,20 +195,28 @@ impl App {
     /// stale.
     pub(super) fn reveal(&mut self, path: &Path) -> bool {
         let root = self.tree.root_path().to_path_buf();
-        // Two spellings of the same place. The root has been through
-        // `canonicalize` and a path from somewhere else — git's idea of where a
-        // file is, say — has not: on Windows that is the difference between
-        // `C:\p` and `\\?\C:\p`, and on macOS between `/var` and the
-        // `/private/var` it is a symlink to. Resolving is what makes them the
-        // same string, and it has to be the resolved one from here on, because
-        // the rows this looks through are spelled the root's way.
-        let path = match path.strip_prefix(&root) {
-            Ok(_) => path.to_path_buf(),
-            Err(_) => path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+        // Two spellings of the same place. The tree's root has been through
+        // `canonical`, and a path from somewhere else — git's idea of where a
+        // file is, say — may not have been; or the other way round. A temp
+        // directory under a symlink on macOS and an 8.3 short name such as
+        // `RUNNER~1` on Windows both do this. Resolving *both* sides is the only
+        // comparison that holds everywhere, and the part after the root is then
+        // spelled the root's way, because that is how the rows are spelled.
+        let rel: std::path::PathBuf = match path.strip_prefix(&root) {
+            Ok(rel) => rel.to_path_buf(),
+            Err(_) => {
+                let resolved = crate::files::project::canonical(path);
+                let root_resolved = crate::files::project::canonical(&root);
+                let (Ok(p), Ok(r)) = (resolved, root_resolved) else {
+                    return false;
+                };
+                match p.strip_prefix(&r) {
+                    Ok(rel) => rel.to_path_buf(),
+                    Err(_) => return false,
+                }
+            }
         };
-        let Ok(rel) = path.strip_prefix(&root) else {
-            return false;
-        };
+        let path = root.join(&rel);
         let mut cur = root;
         let parts: Vec<_> = rel.components().collect();
         for part in parts.iter().take(parts.len().saturating_sub(1)) {

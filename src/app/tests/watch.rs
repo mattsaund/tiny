@@ -108,6 +108,43 @@ fn a_file_another_program_deletes_leaves_the_tree() {
 }
 
 #[test]
+fn a_change_hidden_by_a_coarse_clock_is_still_found() {
+    // The Windows failure, reproduced anywhere. NTFS stamps a folder from the
+    // system clock tick, about sixteen milliseconds, so a file deleted and made
+    // again inside one tick leaves the folder's stamp exactly as the last scan
+    // recorded it. `note_dirs` plays the coarse clock here: it records the
+    // stamp as it is *after* the file came back, so the stamps agree and only
+    // their age can say that something may be hiding behind them.
+    let (td, mut app) = fixture();
+    let path = td.path().join("README.md");
+    select(&mut app, "README.md");
+
+    fs::remove_file(&path).unwrap();
+    assert!(app.rescan_disk(), "the delete is seen");
+    fs::write(&path, "# back\n").unwrap();
+    app.note_dirs();
+
+    assert!(app.rescan_disk(), "a stamp this young is a reason to look");
+    assert!(
+        app.rows.iter().any(|r| r.name == "README.md"),
+        "and looking finds it: {:?}",
+        app.rows.iter().map(|r| &r.name).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_young_stamp_with_nothing_behind_it_draws_nothing() {
+    // Looking has a cost, and it must not be a frame: a folder re-read because
+    // its stamp is young, and found the same, is not news.
+    let (_td, mut app) = fixture();
+    app.note_dirs();
+    assert!(
+        !app.rescan_disk(),
+        "looked, found the same listing, said nothing"
+    );
+}
+
+#[test]
 fn losing_the_file_you_are_editing_takes_the_keyboard_out_of_it() {
     let (td, mut app) = fixture();
     select(&mut app, "design.md");
