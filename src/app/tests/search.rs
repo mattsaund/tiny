@@ -359,14 +359,14 @@ fn a_search_from_inside_a_file_lists_that_files_hits_first() {
     fs::write(td.path().join("zzz.md"), "one marker\nand another marker\n").unwrap();
     command(&mut app, "reload");
 
-    // From the browser, nothing is favoured: the walk's order stands.
+    // From the browser, nothing is favored: the walk's order stands.
     type_search(&mut app, "marker");
     let Mode::Bar(b) = &app.mode else {
         panic!("bar closed")
     };
     assert!(
         !b.results[0].path.ends_with("zzz.md"),
-        "nothing should be favoured from the browser"
+        "nothing should be favored from the browser"
     );
     let from_tree = b.results.len();
     app.on_key(k(KeyCode::Esc));

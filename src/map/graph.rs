@@ -400,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn a_relative_link_prefers_the_neighbouring_file() {
+    fn a_relative_link_prefers_the_neighboring_file() {
         let td = tempfile::tempdir().unwrap();
         // Two files share a stem; the relative path has to win.
         write(td.path(), "a/index.md", "[x](./target.md)\n");

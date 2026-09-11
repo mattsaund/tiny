@@ -167,7 +167,7 @@
         Write-Host ("`r  [{0}] {1,3}%  {2}" -f $bar, $percent, $label) -NoNewline
     }
 
-    function Build-Tiny([string]$Source, [string]$Prefix, [string]$Log) {
+    function Build-Tiny([string]$Source, [string]$Prefix, [string]$Root, [string]$Log) {
         New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
         Write-Host 'building - this takes a minute the first time'
 
@@ -183,14 +183,12 @@
 
         $moving = -not [Console]::IsOutputRedirected
         $done = 0
-        # cargo's --root puts the binary in <root>\bin, so it is given the parent.
-        $root = Split-Path -Parent $Prefix
 
         # Cargo says what it is doing a line at a time, on stderr. Merged into
         # the pipeline, each line arrives here as it is written; the log keeps
         # all of it for the failure case, where what went wrong matters more
         # than how far it got.
-        & cargo install --path $Source --bin tiny --root $root --force 2>&1 | ForEach-Object {
+        & cargo install --path $Source --bin tiny --root $Root 2>&1 | ForEach-Object {
             $line = "$_"
             Add-Content -Path $Log -Value $line
             if (-not $moving) { return }
@@ -226,6 +224,9 @@
             if (Test-Path $Log) { Get-Content $Log -Tail 30 | ForEach-Object { Write-Host $_ } }
             throw 'the build failed; the output above says why'
         }
+        $exe = Join-Path $Root 'bin\tiny.exe'
+        if (-not (Test-Path $exe)) { throw 'the build finished without leaving a tiny.exe' }
+        Copy-Item -Path $exe -Destination (Join-Path $Prefix 'tiny.exe') -Force -ErrorAction Stop
     }
 
     function Install-FromSource([string]$Repo, [string]$Ref, [string]$Prefix, [bool]$Checkout) {
@@ -235,6 +236,11 @@
         $source = $null
         $temp = $false
         $log = Join-Path ([IO.Path]::GetTempPath()) ('tiny-build-' + [Guid]::NewGuid().ToString('N') + '.log')
+        # Cargo installs into <root>\bin and keeps its own records in <root>, so
+        # it gets a root of its own, thrown away below, and Build-Tiny copies
+        # tiny.exe out to $Prefix. Handing it the prefix's parent instead only
+        # put the binary in the prefix when the prefix happened to be named bin.
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('tiny-root-' + [Guid]::NewGuid().ToString('N'))
         try {
             if ($Checkout) {
                 $source = (Get-Location).Path
@@ -254,13 +260,14 @@
                 }
                 Write-Host 'done'
             }
-            Build-Tiny -Source $source -Prefix $Prefix -Log $log
+            Build-Tiny -Source $source -Prefix $Prefix -Root $root -Log $log
         }
         finally {
             if ($temp -and $source -and (Test-Path $source)) {
                 Remove-Item -Recurse -Force $source -ErrorAction SilentlyContinue
             }
             if (Test-Path $log) { Remove-Item -Force $log -ErrorAction SilentlyContinue }
+            if (Test-Path $root) { Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue }
         }
     }
 

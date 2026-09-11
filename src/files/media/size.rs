@@ -143,7 +143,7 @@ fn jpeg(file: &mut File) -> Result<Option<(u32, u32)>> {
         let _ = lead;
         pos += 2 + skipped;
         match marker {
-            // Start of frame, in every one of its flavours.
+            // Start of frame, in every one of its flavors.
             0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
                 let seg = at(file, pos, 9)?;
                 // Two bytes of length, a byte of precision, then height —

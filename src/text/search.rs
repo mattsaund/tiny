@@ -10,7 +10,7 @@
 //!
 //! # Why no index
 //!
-//! An index is the obvious optimisation and the wrong one here. It would need
+//! An index is the obvious optimization and the wrong one here. It would need
 //! building on startup, invalidating on every save, and persisting somewhere
 //! on disk — which tiny does not do, since it writes nothing into a project.
 //! It can also go stale, which means search can start lying.
@@ -236,7 +236,7 @@ pub fn replace_all(root: &Path, needle: &str, replacement: &str, opts: &Opts) ->
     Ok(report)
 }
 
-/// Character index of the first match, honouring case folding.
+/// Character index of the first match, honoring case folding.
 ///
 /// Returns a *character* index, not a byte offset, because it ends up as an
 /// `Editor` cursor column — see the note on character indexing in `editor`.

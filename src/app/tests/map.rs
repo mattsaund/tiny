@@ -197,7 +197,7 @@ fn cursor_on(app: &mut App, name: &str) {
 }
 
 #[test]
-fn a_file_this_one_reaches_is_drawn_in_the_outgoing_colour() {
+fn a_file_this_one_reaches_is_drawn_in_the_outgoing_color() {
     let (_td, mut app) = linked_fixture();
     open_map(&mut app);
     // `main.py` calls `utils.load`, and nothing calls `main.py`.
@@ -215,7 +215,7 @@ fn a_file_this_one_reaches_is_drawn_in_the_outgoing_colour() {
 }
 
 #[test]
-fn a_file_that_reaches_this_one_is_drawn_in_the_incoming_colour() {
+fn a_file_that_reaches_this_one_is_drawn_in_the_incoming_color() {
     let (_td, mut app) = linked_fixture();
     open_map(&mut app);
     cursor_on(&mut app, "utils.py");
@@ -235,7 +235,7 @@ fn a_file_that_reaches_this_one_is_drawn_in_the_incoming_colour() {
 }
 
 #[test]
-fn a_file_on_neither_side_of_the_cursor_is_left_uncoloured() {
+fn a_file_on_neither_side_of_the_cursor_is_left_uncolored() {
     let (_td, mut app) = linked_fixture();
     open_map(&mut app);
     cursor_on(&mut app, "main.py");
@@ -249,7 +249,7 @@ fn a_file_on_neither_side_of_the_cursor_is_left_uncoloured() {
 }
 
 #[test]
-fn the_two_directions_can_be_recoloured_from_the_config() {
+fn the_two_directions_can_be_recolored_from_the_config() {
     let (_td, mut app) = linked_fixture();
     command(&mut app, "set theme.map_out #ff00aa");
     command(&mut app, "set theme.map_in #00ccff");

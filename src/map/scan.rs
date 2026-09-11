@@ -133,7 +133,7 @@ pub(super) fn node_kind(path: &Path, prose_exts: &[String]) -> NodeKind {
     }
 }
 
-/// Extensions that are recognisably source without a grammar to parse them.
+/// Extensions that are recognizably source without a grammar to parse them.
 /// These become [`NodeKind::Code`] nodes with no outgoing call edges, so a Go
 /// or C++ project still draws as something rather than as a pile of orphans.
 pub(super) fn is_sourcelike(ext: &str) -> bool {

@@ -189,7 +189,7 @@ fn the_two_columns_show_the_file_before_and_after() {
 }
 
 #[test]
-fn a_block_added_on_one_side_is_a_labelled_gap_on_the_other() {
+fn a_block_added_on_one_side_is_a_labeled_gap_on_the_other() {
     let (td, mut app) = repo();
     let at = td.path();
     let git = |args: &[&str]| {
@@ -380,7 +380,7 @@ fn python_repo() -> (tempfile::TempDir, App) {
 ///
 /// Precise on purpose: counting colored cells anywhere would count the
 /// borders, which are colored whatever else is or is not.
-fn colour_of(app: &mut App, word: &str) -> Color {
+fn color_of(app: &mut App, word: &str) -> Color {
     let (w, h) = (110u16, 20u16);
     let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
     t.draw(|f| crate::ui::draw(f, app)).unwrap();
@@ -408,7 +408,7 @@ fn the_diff_is_syntax_highlighted_on_both_sides() {
     // `def` is a keyword in Python and syntect gives it a color of its own.
     // Unhighlighted text is drawn in the theme's `text`, which names no color
     // at all — so a color here is the grammar talking.
-    let keyword = colour_of(&mut app, "def main");
+    let keyword = color_of(&mut app, "def main");
     assert_ne!(
         keyword,
         Color::Reset,

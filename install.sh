@@ -24,6 +24,17 @@ say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# A yes-or-no question, where Enter means yes. It reads from the terminal
+# rather than stdin, because piped from the web stdin is this script, and a
+# `read` from there would take its next line as the answer. With no terminal to
+# ask, the answer is no.
+ask() {
+    printf '  [Y/n] '
+    if [ -t 0 ]; then reply_src=/dev/stdin; else reply_src=/dev/tty; fi
+    { read -r reply < "$reply_src"; } 2>/dev/null || { reply=n; printf '\n'; }
+    case "${reply:-y}" in [Nn]*) return 1 ;; esac
+}
+
 # A temporary directory, and a temporary file.
 #
 # `mktemp -d` with no template is a GNU extension. BSD's — which is macOS's —
@@ -38,9 +49,11 @@ temp_file() { mktemp 2>/dev/null || mktemp -t tiny; }
 SRC=""
 SRC_IS_TEMP=""
 LOG=""
+ROOT=""
 cleanup() {
     [ -n "$SRC_IS_TEMP" ] && [ -n "$SRC" ] && rm -rf "$SRC"
     [ -n "$LOG" ] && rm -f "$LOG"
+    [ -n "$ROOT" ] && rm -rf "$ROOT"
     return 0
 }
 trap cleanup EXIT INT TERM
@@ -125,6 +138,22 @@ if ! { [ -f "./Cargo.toml" ] && grep -q 'name = "tiny"' ./Cargo.toml 2>/dev/null
     exit 0
 fi
 
+# --- a compiler -------------------------------------------------------------
+#
+# Rust compiles tiny, but it links with the system's C toolchain, which on a
+# Mac is Apple's command line tools. macOS answers to `cc` either way: without
+# the tools it is a stub, and the build fails at the very end, after every
+# crate has compiled, with "invalid active developer path". So ask before
+# building, and install them the way macOS itself offers to.
+if [ "$(uname -s)" = Darwin ] \
+    && ! { dev=$(xcode-select -p 2>/dev/null) && [ -d "$dev" ]; }; then
+    say "Building tiny needs Apple's command line tools: the compiler and linker"
+    say "macOS installs on request. They are a free download from Apple and"
+    say "install in a window of their own. Install them now?"
+    ask || die "the command line tools are needed to build: xcode-select --install"
+    xcode-select --install >/dev/null 2>&1 || true
+    die "finish installing the command line tools in the window that opened, then run this again"
+fi
 
 # --- rust -------------------------------------------------------------------
 
@@ -134,14 +163,10 @@ if ! have cargo; then
     else
         say "tiny is written in Rust, and cargo is not installed."
         say "Install the Rust toolchain now? It goes in ~/.rustup and ~/.cargo,"
-        say "and `rustup self uninstall` removes it again."
-        # Reads from the terminal, not stdin, so this still works when piped.
-        if [ -t 0 ]; then reply_src=/dev/stdin; else reply_src=/dev/tty; fi
-        printf '  [Y/n] '
-        if [ -r "$reply_src" ]; then read -r reply < "$reply_src"; else reply=n; fi
-        case "${reply:-y}" in
-            [Nn]*) die "cargo is required — see https://rustup.rs" ;;
-        esac
+        # Single quotes inside: backquotes in a double-quoted string are a
+        # command substitution, so this line used to *run* the uninstaller.
+        say "and 'rustup self uninstall' removes it again."
+        ask || die "cargo is required — see https://rustup.rs"
         have curl || die "curl is required to fetch rustup"
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain stable
@@ -303,13 +328,17 @@ LOG="$(temp_file)" || die "could not make a temporary file"
 #
 # The sentinel is how a POSIX shell gets the exit status of the first command
 # in a pipeline: `$?` is the last one's, and there is no `PIPESTATUS` here.
+#
+# Cargo installs into `<root>/bin` and keeps its own records in `<root>`, so it
+# is given a root of its own, thrown away afterwards, and the binary is moved to
+# where it was asked for. Handing it the prefix's parent instead only put the
+# binary in the prefix when the prefix happened to be called `bin`.
 build() {
-    # --root puts the binary in $PREFIX/bin, so hand it the parent.
-    { cargo install --path "$SRC" --bin tiny --root "$PREFIX/.." --force 2>&1 \
+    { cargo install --path "$SRC" --bin tiny --root "$ROOT" 2>&1 \
         || echo "tiny-install-failed"; } | tee "$LOG" | watch_build
 }
 
-
+ROOT="$(temp_dir)" || die "could not make a temporary directory"
 if ! build; then
     # The sentinel is ours; showing it to someone whose build just failed would
     # only be one more confusing line among the ones that matter.
@@ -318,5 +347,14 @@ if ! build; then
     die "build failed — the output above says why"
 fi
 
-[ -x "$PREFIX/tiny" ] || die "expected a binary at $PREFIX/tiny"
+[ -x "$ROOT/bin/tiny" ] || die "the build finished without leaving a binary"
+
+# Copied in beside the old one and renamed over it. A rename replaces a program
+# even while it runs, without touching the copy it is running from; writing
+# over it in place would not, and a copy from a temporary directory on another
+# disk is a write.
+cp "$ROOT/bin/tiny" "$PREFIX/.tiny.new" \
+    && chmod +x "$PREFIX/.tiny.new" \
+    && mv -f "$PREFIX/.tiny.new" "$PREFIX/tiny" \
+    || { rm -f "$PREFIX/.tiny.new"; die "could not put tiny in $PREFIX"; }
 finish

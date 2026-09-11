@@ -44,7 +44,7 @@
 //! mapping `.ts` onto JavaScript and hoping, which is worse than it sounds
 //! because a wrong grammar mis-styles a file confidently.
 //!
-//! Grammars carry their own licences, listed by [`acknowledgments`] and shown
+//! Grammars carry their own licenses, listed by [`acknowledgments`] and shown
 //! by `tiny --licenses`.
 
 use std::path::{Path, PathBuf};
@@ -178,7 +178,7 @@ impl Highlighter {
         warning
     }
 
-    /// The no-op syntax, used for unknown file types and unlabelled fences.
+    /// The no-op syntax, used for unknown file types and unlabeled fences.
     fn plain(&self) -> &SyntaxReference {
         self.syntaxes.find_syntax_plain_text()
     }
@@ -386,7 +386,7 @@ fn load_theme(name: &str) -> (Theme, Option<String>) {
     }
 }
 
-/// Licences for the bundled grammars, for `tiny --licenses`.
+/// Licenses for the bundled grammars, for `tiny --licenses`.
 ///
 /// The grammars are third-party files redistributed inside the binary, and a
 /// few of them ask to be acknowledged. Printing the listing is the cheapest
@@ -495,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn files_with_no_extension_are_recognised_by_name() {
+    fn files_with_no_extension_are_recognized_by_name() {
         let h = Highlighter::new();
         // These are the ones an editor looks silly not knowing, and every one
         // of them has an empty `Path::extension`.

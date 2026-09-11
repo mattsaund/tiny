@@ -195,7 +195,7 @@ fn the_bar_shows_the_star_once_not_twice() {
 }
 
 #[test]
-fn the_bar_offers_the_completion_in_grey_before_tab() {
+fn the_bar_offers_the_completion_in_gray_before_tab() {
     let (_td, mut app) = fixture();
     app.on_key(ctrl('p'));
     type_str(&mut app, "cop");

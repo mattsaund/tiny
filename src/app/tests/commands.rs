@@ -475,7 +475,7 @@ fn screenshot() {
                 // trailing newline out of the variable this arrives in.
                 c if arrow(c).is_some() => app.on_key(k(arrow(c).expect("just checked"))),
                 '⇧' => {
-                    // Anything unrecognised is left alone rather than
+                    // Anything unrecognized is left alone rather than
                     // quietly becoming an arrow: a shot that sends the
                     // wrong key is worse than one that sends none.
                     if let Some(code) = chars.next().and_then(arrow) {

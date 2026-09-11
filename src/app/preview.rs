@@ -37,7 +37,7 @@ use super::parts::display_name;
 pub enum TextKind {
     /// Rendered markdown.
     Markdown,
-    /// Wrapped prose — notes, licences, logs.
+    /// Wrapped prose — notes, licenses, logs.
     Prose,
     /// Source. Straight into the editor, with line numbers.
     Code,

@@ -59,7 +59,7 @@ impl Kind {
 ///
 /// Extension-only on purpose: this runs on every cursor move in the tree, and
 /// sniffing file contents would mean a read per keystroke. [`probe`] does look
-/// at the real bytes, so a mislabelled file reports that rather than inventing
+/// at the real bytes, so a mislabeled file reports that rather than inventing
 /// a resolution for it.
 pub fn classify(path: &Path) -> Kind {
     match path

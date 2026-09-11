@@ -312,7 +312,7 @@ fn opening_a_picture_leaves_the_keyboard_on_the_tree() {
 }
 
 #[test]
-fn hovering_a_folder_summarises_it() {
+fn hovering_a_folder_summarizes_it() {
     let (_td, mut app) = fixture();
     select(&mut app, "notes");
     assert!(joined(&mut app).contains("1 entry"));

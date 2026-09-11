@@ -577,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cargo_install_is_recognised_by_its_bookkeeping() {
+    fn a_cargo_install_is_recognized_by_its_bookkeeping() {
         let td = tempfile::tempdir().unwrap();
         let (bin, _) = fake_install(td.path());
         let root = td.path().join("root");

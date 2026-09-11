@@ -348,7 +348,7 @@ pub fn render_block(
 /// Render markdown to styled lines fitted to `width`.
 ///
 /// The enabled extensions are strikethrough, tables, task lists and footnotes
-/// — GitHub-flavoured markdown minus the parts with no sensible terminal
+/// — GitHub-flavored markdown minus the parts with no sensible terminal
 /// representation. `hl` is threaded through only for fenced code blocks.
 ///
 /// Trailing blank lines are trimmed so a note does not open with dead space at
