@@ -16,7 +16,7 @@ pub(super) use crate::app::mode::*;
 pub(super) use crate::app::parts::*;
 pub(super) use crate::app::preview::*;
 pub(super) use crate::config::keys::Action;
-pub(super) use crate::config::{Markers, Position, Side};
+pub(super) use crate::config::{Markers, Side};
 pub(super) use crossterm::event::KeyEventKind;
 pub(super) use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub(super) use ratatui::Terminal;

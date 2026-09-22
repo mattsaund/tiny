@@ -49,7 +49,7 @@ fn the_keybinds_button_opens_the_keybinds_window() {
     assert!(matches!(app.mode, Mode::Keybinds(_)));
     let out = screen(&mut app, 96, 40).join("\n");
     assert!(out.contains("Keybinds"), "{out}");
-    assert!(out.contains("tree.down"), "every action is listed:\n{out}");
+    assert!(out.contains("down"), "every action is listed:\n{out}");
     assert!(
         out.contains("ctrl+s"),
         "with the keys that reach it:\n{out}"
@@ -71,15 +71,12 @@ fn esc_from_the_keybinds_window_goes_back_to_the_settings() {
 #[test]
 fn a_key_can_be_rebound_and_the_tree_answers_to_it() {
     let (_td, mut app) = fixture();
-    keybinds_on(&mut app, Action::TreeDown);
+    keybinds_on(&mut app, Action::Down);
     app.on_key(k(KeyCode::Enter));
     assert!(matches!(&app.mode, Mode::Keybinds(kb) if kb.capturing));
     app.on_key(ch('z'));
 
-    assert_eq!(
-        app.config.keys.get("tree.down").map(String::as_str),
-        Some("z")
-    );
+    assert_eq!(app.config.keys.get("down").map(String::as_str), Some("z"));
     app.on_key(k(KeyCode::Esc));
     app.on_key(k(KeyCode::Esc));
     assert_eq!(app.selected, 0);
@@ -92,7 +89,7 @@ fn a_key_can_be_rebound_and_the_tree_answers_to_it() {
 #[test]
 fn rebinding_takes_the_key_off_whatever_had_it() {
     let (_td, mut app) = fixture();
-    keybinds_on(&mut app, Action::TreeDown);
+    keybinds_on(&mut app, Action::Down);
     app.on_key(k(KeyCode::Enter));
     app.on_key(ch('.')); // . was tree.hidden
 
@@ -111,17 +108,17 @@ fn rebinding_takes_the_key_off_whatever_had_it() {
 #[test]
 fn delete_puts_one_binding_back() {
     let (_td, mut app) = fixture();
-    keybinds_on(&mut app, Action::TreeDown);
+    keybinds_on(&mut app, Action::Down);
     app.on_key(k(KeyCode::Enter));
     app.on_key(ch('z'));
-    assert!(app.config.keys.contains_key("tree.down"));
+    assert!(app.config.keys.contains_key("down"));
 
     app.on_key(k(KeyCode::Delete));
     assert!(
-        !app.config.keys.contains_key("tree.down"),
+        !app.config.keys.contains_key("down"),
         "the override is gone, not set back to the same value"
     );
-    assert_eq!(app.keymap.spec(Action::TreeDown), "down k");
+    assert_eq!(app.keymap.spec(Action::Down), "down k");
 }
 
 #[test]
@@ -139,7 +136,7 @@ fn binding_a_key_back_to_its_default_drops_the_override() {
 #[test]
 fn resetting_the_keybinds_asks_first_and_then_restores_them() {
     let (_td, mut app) = fixture();
-    keybinds_on(&mut app, Action::TreeDown);
+    keybinds_on(&mut app, Action::Down);
     app.on_key(k(KeyCode::Enter));
     app.on_key(ch('z'));
 
@@ -151,7 +148,7 @@ fn resetting_the_keybinds_asks_first_and_then_restores_them() {
         "asks"
     );
     app.on_key(ch('n'));
-    assert!(app.config.keys.contains_key("tree.down"), "n backed out");
+    assert!(app.config.keys.contains_key("down"), "n backed out");
 
     app.on_key(k(KeyCode::Enter));
     app.on_key(ch('y'));
@@ -190,7 +187,7 @@ fn resetting_the_settings_asks_first_and_then_restores_them() {
 fn the_two_resets_do_not_touch_each_other() {
     let (_td, mut app) = fixture();
     command(&mut app, "set tab_width 7");
-    keybinds_on(&mut app, Action::TreeDown);
+    keybinds_on(&mut app, Action::Down);
     app.on_key(k(KeyCode::Enter));
     app.on_key(ch('z'));
 
@@ -202,7 +199,7 @@ fn the_two_resets_do_not_touch_each_other() {
     assert_eq!(app.config.tab_width, 7, "a setting is not a keybinding");
 
     // And the other way round.
-    keybinds_on(&mut app, Action::TreeDown);
+    keybinds_on(&mut app, Action::Down);
     app.on_key(k(KeyCode::Enter));
     app.on_key(ch('z'));
     app.on_key(k(KeyCode::Esc));
@@ -211,7 +208,7 @@ fn the_two_resets_do_not_touch_each_other() {
     app.on_key(ch('y'));
     assert_eq!(app.config.tab_width, 4);
     assert!(
-        app.config.keys.contains_key("tree.down"),
+        app.config.keys.contains_key("down"),
         "a keybinding is not a setting"
     );
 }
@@ -231,7 +228,7 @@ fn a_rebinding_from_the_config_file_is_what_the_keys_do() {
     let td = tempfile::tempdir().unwrap();
     build(td.path());
     let mut cfg = Config::default();
-    cfg.keys.insert("tree.down".into(), "z".into());
+    cfg.keys.insert("down".into(), "z".into());
     let mut app = App::new(target(td.path(), None), cfg, None).unwrap();
 
     app.on_key(ch('z'));

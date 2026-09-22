@@ -785,3 +785,33 @@ fn the_map_is_rebuilt_every_time_it_is_switched_to() {
     let after = app.project_map.as_ref().expect("built").graph.nodes.len();
     assert_eq!(after, before + 1, "the new file is on the map");
 }
+
+#[test]
+fn a_slash_in_a_file_is_a_slash_not_the_search_bar() {
+    // `/` opens the bar from every pane that is not being typed into, which
+    // is only safe because the pane that *is* being typed into gets the
+    // character instead. This is that half.
+    let (td, mut app) = fixture();
+    select(&mut app, "README.md");
+    app.focus_editor();
+    type_str(&mut app, "a/b");
+
+    assert!(matches!(app.mode, Mode::Normal), "no bar opened");
+    let text = app
+        .buffers
+        .get(&td.path().join("README.md"))
+        .unwrap()
+        .to_text();
+    assert!(text.contains("a/b"), "the slash was typed:\n{text}");
+}
+
+#[test]
+fn a_slash_in_front_of_a_picture_opens_the_bar() {
+    // Nothing is being typed into here, so the short key is free again.
+    let (_td, mut app) = fixture();
+    select(&mut app, "logo.png");
+    app.focus_editor();
+    app.on_key(ch('/'));
+
+    assert!(matches!(app.mode, Mode::Bar(_)), "the bar opened");
+}

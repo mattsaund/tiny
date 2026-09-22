@@ -94,11 +94,13 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(format!("  {}", view.summary()), pal.dim),
             Span::raw(" "),
         ]));
-    if view.filtering || !view.filter.is_empty() {
+    // What the filter is, while it is on. Typing it happens in the bar, which
+    // draws its own line; this is the reminder that the map you are looking at
+    // is not all of it.
+    if !view.filter.is_empty() {
         block = block.title_bottom(Line::from(vec![
             Span::styled(" / ", pal.text.add_modifier(Modifier::REVERSED)),
-            Span::styled(view.filter.clone(), pal.text),
-            Span::styled(if view.filtering { "_ " } else { " " }, pal.dim),
+            Span::styled(format!("{} ", view.filter), pal.text),
         ]));
     }
     if placement.offscreen > 0 {

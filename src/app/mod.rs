@@ -135,6 +135,7 @@ use anyhow::{Result, anyhow};
 use crate::config::keys::Keymap;
 use crate::config::{Config, Markers, Palette};
 use crate::files::project;
+use crate::files::size::Size;
 use crate::files::tree::{Row, Tree};
 use crate::map::graph;
 use crate::map::view::ProjectMap;
@@ -164,6 +165,14 @@ pub struct App {
     /// How many lines the preview produced at the current width. Written by
     /// `ui` during a draw, read here to clamp scrolling.
     pub preview_len: usize,
+    /// How much disk the thing under the cursor takes, for the right-hand end
+    /// of the status line. Derived from the cursor by [`App::note_size`],
+    /// never set directly.
+    pub cursor_size: Option<Size>,
+    /// Folder sizes already measured, so arrowing back onto one does not walk
+    /// it again. Emptied by [`App::rebuild_rows`] — every way the tree can
+    /// change goes through it, and any of them can change what a folder holds.
+    size_cache: HashMap<PathBuf, Size>,
     /// Markdown opens rendered; `e` drops into raw editing.
     /// Open files, keyed by path. Outlives the selection so unsaved edits
     /// survive arrowing away and back — see the module docs.
@@ -259,6 +268,8 @@ impl App {
             preview: Preview::Empty,
             preview_scroll: 0,
             preview_len: 0,
+            cursor_size: None,
+            size_cache: HashMap::new(),
             buffers: HashMap::new(),
             config,
             keymap,
@@ -377,7 +388,7 @@ impl App {
             ignore: self.config.search_ignore.clone(),
             show_hidden: self.config.show_hidden,
             prose_extensions: self.config.prose_extensions.clone(),
-            max_ambiguity: self.config.graph_max_ambiguity,
+            max_ambiguity: graph::MAX_AMBIGUITY,
         }
     }
 
@@ -440,7 +451,7 @@ impl App {
 
     fn search_opts(&self) -> search::Opts {
         search::Opts {
-            max_results: self.config.max_search_results,
+            max_results: search::MAX_RESULTS,
             ignore: self.config.search_ignore.clone(),
             show_hidden: self.config.show_hidden,
         }

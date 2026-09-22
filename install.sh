@@ -276,7 +276,7 @@ watch_build() {
                     fi
                     ;;
                 # The end of the build, and the only honest marker of it.
-                # `cargo install` prints `Installing tiny v0.2.1` when it
+                # `cargo install` prints `Installing tiny v0.3.0` when it
                 # *starts* as well as `Installing <path>` when it finishes, so
                 # matching on that drew a full bar before the first crate had
                 # compiled.

@@ -287,3 +287,85 @@ fn the_map_can_be_drawn_without_box_characters() {
     );
     assert!(out.contains('+'), "and corners of plus signs:\n{out}");
 }
+
+// ---- the bar, over the map -------------------------------------------------
+//
+// The map has no search of its own: narrowing it is the same field, in the
+// same place, that searches the project from every other window.
+
+#[test]
+fn slash_over_the_map_opens_the_one_bar() {
+    let (_td, mut app) = linked_fixture();
+    open_map(&mut app);
+    app.on_key(ch('/'));
+
+    assert!(
+        matches!(app.mode, Mode::Bar(_)),
+        "the bar, not a box of its own"
+    );
+    let out = joined(&mut app);
+    assert!(out.contains("narrowing the map"), "and it says so:\n{out}");
+}
+
+#[test]
+fn typing_in_the_bar_narrows_the_map_as_it_goes() {
+    let (_td, mut app) = linked_fixture();
+    open_map(&mut app);
+    app.on_key(ch('/'));
+    type_str(&mut app, "src");
+
+    let view = app.project_map.as_ref().unwrap();
+    assert_eq!(view.filter, "src");
+    let shown: Vec<&str> = view
+        .visible_indices()
+        .iter()
+        .map(|i| view.graph.nodes[*i].rel.as_str())
+        .collect();
+    assert!(!shown.is_empty(), "something is still drawn");
+    assert!(
+        shown.iter().all(|r| r.contains("src")),
+        "only what matches: {shown:?}"
+    );
+}
+
+#[test]
+fn enter_keeps_the_filter_and_escape_takes_it_off() {
+    let (_td, mut app) = linked_fixture();
+    open_map(&mut app);
+    app.on_key(ch('/'));
+    type_str(&mut app, "src");
+    app.on_key(k(KeyCode::Enter));
+
+    assert!(matches!(app.mode, Mode::Normal), "the bar is put away");
+    assert_eq!(
+        app.project_map.as_ref().unwrap().filter,
+        "src",
+        "the filter stays"
+    );
+    assert_eq!(app.window, Window::Map, "and the map is still the window");
+
+    app.on_key(ch('/'));
+    type_str(&mut app, "notes");
+    app.on_key(k(KeyCode::Esc));
+    assert!(
+        app.project_map.as_ref().unwrap().filter.is_empty(),
+        "escape clears it"
+    );
+}
+
+#[test]
+fn a_command_still_runs_from_over_the_map() {
+    let (_td, mut app) = linked_fixture();
+    open_map(&mut app);
+    app.on_key(ch('/'));
+    // A star turns the same field into the command line, whatever window it
+    // is drawn over — the filter is not what a starred line means.
+    type_str(&mut app, "*new fromthemap.md");
+    app.on_key(k(KeyCode::Enter));
+
+    assert!(
+        app.project_map.as_ref().unwrap().filter.is_empty(),
+        "a command never filtered anything"
+    );
+    assert!(joined(&mut app).contains("fromthemap.md") || app.window == Window::Main);
+}

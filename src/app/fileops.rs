@@ -204,6 +204,9 @@ impl App {
             Ok(()) => self.status = format!("saved {name}"),
             Err(e) => self.status = format!("save failed: {e}"),
         }
+        // The file just changed length under a cursor that did not move, and
+        // the readout at the end of the status line is showing what it was.
+        self.note_size();
     }
 
     /// `Ctrl+S` from the tree: save what the cursor is on.

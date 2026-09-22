@@ -31,8 +31,6 @@
 
 use std::path::{Path, PathBuf};
 
-use crossterm::event::{KeyCode, KeyEvent};
-
 use crate::config::keys::Action;
 use crate::map::graph::{self, Edge, EdgeKind, Graph, Node};
 
@@ -74,8 +72,6 @@ pub struct ProjectMap {
     /// Substring matched against each node's relative path, case-insensitively.
     /// Empty means no filtering.
     pub filter: String,
-    /// True while the filter box has the keyboard.
-    pub filtering: bool,
 }
 
 /// Position of an edge kind in [`ProjectMap::kinds`], and in the `1`-`3` key
@@ -103,7 +99,6 @@ impl ProjectMap {
             selected: 0,
             kinds: [true; 3],
             filter: String::new(),
-            filtering: false,
         };
         view.select_busiest();
         // `pos` is written by `place`, which only runs when a frame is drawn.
@@ -122,7 +117,7 @@ impl ProjectMap {
     /// are shown — it must touch at least one edge of a kind still switched
     /// Whether a file is drawn at all.
     ///
-    /// Only the `/` filter can hide one. A file that links to nothing is still
+    /// Only the bar's filter can hide one. A file that links to nothing is still
     /// part of the project — it is filed under its own heading rather than
     /// left out, because a map that quietly omits things is a map you cannot
     /// trust to tell you what is there. See [`ProjectMap::connected`].
@@ -139,7 +134,7 @@ impl ProjectMap {
     /// `call` off in a code project and most files move to the unconnected
     /// heading, because with calls hidden nothing does connect them.
     ///
-    /// Deliberately blind to the `/` filter. A filter narrows what you are
+    /// Deliberately blind to the filter. A filter narrows what you are
     /// looking at; it does not change what a file is joined to, and filing
     /// every file as unconnected the moment you type into the box would be
     /// telling you something untrue about your project.
@@ -296,43 +291,45 @@ impl ProjectMap {
 
     /// Handle one keypress and say what, if anything, `App` should do.
     ///
-    /// Ctrl chords are refused outright and passed back as `None`, so global
-    /// bindings keep their meaning here rather than being eaten as graph keys.
-    /// While the filter box is open every key goes to it instead.
-    pub fn on_key(&mut self, key: KeyEvent, action: Option<Action>) -> Intent {
-        // While the filter box has the keyboard every key is a character, so
-        // whatever the key would otherwise have meant is beside the point.
-        if self.filtering {
-            return self.on_filter_key(key);
-        }
+    /// Takes what the key *meant* rather than the key: `App` resolves it, and
+    /// anything the map has no binding for — every global chord, and the `/`
+    /// that opens the bar — arrives as `None` and is left alone.
+    pub fn on_key(&mut self, action: Option<Action>) -> Intent {
         let Some(action) = action else {
             return Intent::None;
         };
         match action {
-            Action::MapClose => return Intent::Close,
+            Action::Back => return Intent::Close,
             Action::MapOpen => {
                 if let Some(n) = self.selected_node() {
                     return Intent::Open(n.path.clone());
                 }
             }
-            Action::MapLeft => self.move_towards(-1.0, 0.0),
-            Action::MapRight => self.move_towards(1.0, 0.0),
+            Action::Left => self.move_towards(-1.0, 0.0),
+            Action::Right => self.move_towards(1.0, 0.0),
             // Screen coordinates run downwards; the layout runs upwards.
-            Action::MapUp => self.move_towards(0.0, 1.0),
-            Action::MapDown => self.move_towards(0.0, -1.0),
+            Action::Up => self.move_towards(0.0, 1.0),
+            Action::Down => self.move_towards(0.0, -1.0),
             Action::MapNext => self.cycle(true),
             Action::MapPrevious => self.cycle(false),
-            Action::MapFilter => {
-                self.filtering = true;
-                self.filter.clear();
-            }
             Action::MapWikilinks => self.toggle_kind(0),
             Action::MapLinks => self.toggle_kind(1),
             Action::MapCalls => self.toggle_kind(2),
-            Action::MapReload => return Intent::Rebuild,
+            Action::Refresh => return Intent::Rebuild,
             _ => {}
         }
         Intent::None
+    }
+
+    /// Narrow the map to the paths containing `query`, and keep the cursor on
+    /// something that is still drawn.
+    ///
+    /// Called by the bar. The map has no filter box of its own: filtering the
+    /// map and searching the project are the same act, so they are the same
+    /// field in the same place on screen — see `App::open_bar`.
+    pub fn set_filter(&mut self, query: &str) {
+        self.filter = query.trim().to_string();
+        self.ensure_selection();
     }
 
     /// Turn one kind of connection on or off, and make sure the cursor is
@@ -340,25 +337,6 @@ impl ProjectMap {
     fn toggle_kind(&mut self, i: usize) {
         self.kinds[i] = !self.kinds[i];
         self.ensure_selection();
-    }
-
-    /// Keys for the `/` filter box. Esc clears and closes; Enter keeps the
-    /// filter but hands the keyboard back to navigation.
-    fn on_filter_key(&mut self, key: KeyEvent) -> Intent {
-        match key.code {
-            KeyCode::Esc => {
-                self.filter.clear();
-                self.filtering = false;
-            }
-            KeyCode::Enter => self.filtering = false,
-            KeyCode::Backspace => {
-                self.filter.pop();
-            }
-            KeyCode::Char(c) => self.filter.push(c),
-            _ => {}
-        }
-        self.ensure_selection();
-        Intent::None
     }
 
     /// Keep the cursor on something that is actually drawn.
@@ -388,7 +366,7 @@ impl ProjectMap {
 mod tests {
     use super::*;
     use crate::map::testing::*;
-    use crossterm::event::KeyModifiers;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     // ---- what is shown ----------------------------------------------------
 
@@ -462,16 +440,16 @@ mod tests {
         view.pos[3] = (0.0, 100.0);
         view.pos[4] = (0.0, -100.0);
 
-        view.on_key(k(KeyCode::Right), act(k(KeyCode::Right)));
+        view.on_key(act(k(KeyCode::Right)));
         assert_eq!(view.selected, 1);
         view.selected = 0;
-        view.on_key(k(KeyCode::Left), act(k(KeyCode::Left)));
+        view.on_key(act(k(KeyCode::Left)));
         assert_eq!(view.selected, 2);
         view.selected = 0;
-        view.on_key(k(KeyCode::Up), act(k(KeyCode::Up)));
+        view.on_key(act(k(KeyCode::Up)));
         assert_eq!(view.selected, 3, "up is up on screen");
         view.selected = 0;
-        view.on_key(k(KeyCode::Down), act(k(KeyCode::Down)));
+        view.on_key(act(k(KeyCode::Down)));
         assert_eq!(view.selected, 4);
     }
 
@@ -486,7 +464,7 @@ mod tests {
             (-70.0, 0.0),
             (-80.0, 0.0),
         ];
-        view.on_key(k(KeyCode::Right), act(k(KeyCode::Right)));
+        view.on_key(act(k(KeyCode::Right)));
         assert_eq!(view.selected, 0, "everything is to the left");
     }
 
@@ -496,7 +474,7 @@ mod tests {
         let visible = view.visible_indices();
         view.selected = visible[0];
         for _ in 0..visible.len() {
-            view.on_key(k(KeyCode::Tab), act(k(KeyCode::Tab)));
+            view.on_key(act(k(KeyCode::Tab)));
         }
         assert_eq!(view.selected, visible[0], "a full lap comes back round");
     }
@@ -513,10 +491,7 @@ mod tests {
         view.selected = alone;
 
         // The filter is the only thing that can take a file off the map now.
-        view.filtering = true;
-        for c in "utils".chars() {
-            view.on_key(ch(c), None);
-        }
+        view.set_filter("utils");
         assert!(
             view.node_visible(view.selected),
             "the cursor should have moved to something still drawn"
@@ -592,17 +567,11 @@ mod tests {
     #[test]
     fn escape_closes_the_graph_and_nothing_else_does() {
         let (_td, mut view) = fixture();
-        assert!(matches!(
-            view.on_key(k(KeyCode::Esc), act(k(KeyCode::Esc))),
-            Intent::Close
-        ));
+        assert!(matches!(view.on_key(act(k(KeyCode::Esc))), Intent::Close));
         // `m` and `q` used to close it too. One window, one way out.
         for key in [ch('m'), ch('q')] {
             let (_td, mut view) = fixture();
-            assert!(
-                !matches!(view.on_key(key, act(key)), Intent::Close),
-                "{key:?}"
-            );
+            assert!(!matches!(view.on_key(act(key)), Intent::Close), "{key:?}");
         }
     }
 
@@ -611,7 +580,7 @@ mod tests {
         let (td, mut view) = fixture();
         view.selected = view.visible_indices()[0];
         let want = view.graph.nodes[view.selected].path.clone();
-        match view.on_key(k(KeyCode::Enter), act(k(KeyCode::Enter))) {
+        match view.on_key(act(k(KeyCode::Enter))) {
             Intent::Open(p) => {
                 assert_eq!(p, want);
                 assert!(p.starts_with(td.path()));
@@ -624,37 +593,33 @@ mod tests {
     fn the_number_keys_toggle_edge_kinds() {
         let (_td, mut view) = fixture();
         assert!(view.kinds.iter().all(|k| *k));
-        view.on_key(ch('3'), act(ch('3')));
+        view.on_key(act(ch('3')));
         assert!(!view.kinds[kind_index(EdgeKind::Call)]);
-        view.on_key(ch('3'), act(ch('3')));
+        view.on_key(act(ch('3')));
         assert!(view.kinds[kind_index(EdgeKind::Call)]);
     }
 
     #[test]
-    fn slash_opens_a_filter_that_takes_typing_and_escape_clears_it() {
+    fn a_filter_narrows_the_map_and_clearing_it_brings_everything_back() {
         let (_td, mut view) = fixture();
-        view.on_key(ch('/'), act(ch('/')));
-        assert!(view.filtering);
-        for c in "src".chars() {
-            view.on_key(ch(c), act(ch(c)));
-        }
-        assert_eq!(view.filter, "src");
-        assert!(visible_names(&view).iter().all(|r| r.contains("src")));
+        let all = visible_names(&view).len();
 
-        view.on_key(k(KeyCode::Backspace), act(k(KeyCode::Backspace)));
-        assert_eq!(view.filter, "sr");
-        view.on_key(k(KeyCode::Esc), act(k(KeyCode::Esc)));
-        assert!(!view.filtering);
-        assert!(view.filter.is_empty(), "escape clears the filter");
+        view.set_filter("src");
+        assert!(visible_names(&view).iter().all(|r| r.contains("src")));
+        assert!(visible_names(&view).len() < all, "something was hidden");
+
+        view.set_filter("");
+        assert_eq!(visible_names(&view).len(), all, "and comes back");
     }
 
     #[test]
-    fn keys_that_mean_something_elsewhere_do_not_close_the_graph() {
+    fn a_key_the_map_does_not_use_does_nothing_at_all() {
         let (_td, mut view) = fixture();
-        // `q` closes, but only when it is not being typed into the filter.
-        view.on_key(ch('/'), act(ch('/')));
-        assert!(matches!(view.on_key(ch('q'), act(ch('q'))), Intent::None));
-        assert_eq!(view.filter, "q");
+        // `/` is the bar's, and the bar is opened by `App` before the map is
+        // ever asked — so as far as the map is concerned it means nothing.
+        assert!(matches!(view.on_key(None), Intent::None));
+        assert!(matches!(view.on_key(act(ch('q'))), Intent::None));
+        assert!(view.filter.is_empty());
     }
 
     #[test]
@@ -664,14 +629,14 @@ mod tests {
             modifiers: KeyModifiers::CONTROL,
             ..ch('c')
         };
-        assert!(matches!(view.on_key(ctrl_c, act(ctrl_c)), Intent::None));
+        assert!(matches!(view.on_key(act(ctrl_c)), Intent::None));
     }
 
     #[test]
     fn r_lays_the_graph_out_again_to_the_same_place() {
         let (_td, mut view) = fixture();
         let before = view.pos.clone();
-        view.on_key(ch('r'), act(ch('r')));
+        view.on_key(act(ch('r')));
         for (a, b) in before.iter().zip(view.pos.iter()) {
             assert!((a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9);
         }

@@ -7,7 +7,7 @@
 # same reason. The installers download one of these instead, and only fall back
 # to building when there is no release to download.
 #
-#   git tag v0.2.1 && git push matt v0.2.1
+#   git tag v0.3.0 && git push matt v0.3.0
 #
 # builds every target below and publishes them as the release for that tag.
 name: release

@@ -61,14 +61,6 @@ pub enum Side {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-/// Vertical placement for the bar and the status line, independently settable.
-#[serde(rename_all = "lowercase")]
-pub enum Position {
-    Top,
-    Bottom,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 /// Glyph set for the tree's expand/collapse indicators.
 #[serde(rename_all = "lowercase")]
 pub enum Markers {
@@ -105,10 +97,7 @@ pub struct Config {
     /// Share of the window given to the tree, 0.1 - 0.6.
     pub tree_width: f32,
     /// Where the search bar appears when open.
-    pub search_position: Position,
     /// Where the status line sits.
-    pub status_position: Position,
-
     pub line_numbers: bool,
     pub markers: Markers,
     /// Draw boxes around the panes. Off gives a plainer, quieter screen.
@@ -117,7 +106,6 @@ pub struct Config {
     /// syntect theme used for code. Chrome stays monochrome regardless.
     pub syntax_theme: String,
     /// Cap on hits collected by one search.
-    pub max_search_results: usize,
     /// Directories never walked by search, by exact name.
     pub search_ignore: Vec<String>,
 
@@ -127,8 +115,6 @@ pub struct Config {
 
     /// A symbol defined in more files than this is too ambiguous to draw a
     /// call edge for. Names like `new` and `main` are everywhere.
-    pub graph_max_ambiguity: usize,
-
     pub theme: Theme,
 }
 
@@ -142,13 +128,10 @@ impl Default for Config {
             auto_reload: true,
             tree_side: Side::Left,
             tree_width: 0.30,
-            search_position: Position::Top,
-            status_position: Position::Bottom,
             line_numbers: true,
             markers: Markers::Arrows,
             borders: true,
             syntax_theme: "base16-ocean.dark".into(),
-            max_search_results: 500,
             search_ignore: [".git", "target", "node_modules", ".venv", "__pycache__"]
                 .iter()
                 .map(|s| s.to_string())
@@ -160,7 +143,6 @@ impl Default for Config {
             .iter()
             .map(|s| s.to_string())
             .collect(),
-            graph_max_ambiguity: 3,
             theme: Theme::default(),
         }
     }
@@ -243,8 +225,6 @@ impl Config {
     fn sanitized(mut self) -> Self {
         self.tree_width = self.tree_width.clamp(0.10, 0.60);
         self.tab_width = self.tab_width.clamp(1, 16);
-        self.graph_max_ambiguity = self.graph_max_ambiguity.clamp(1, 100);
-        self.max_search_results = self.max_search_results.clamp(1, 100_000);
         self
     }
 
@@ -257,19 +237,12 @@ impl Config {
             ("auto_reload", "pick up changes made by other programs"),
             ("tree_side", "tree side: left, right"),
             ("tree_width", "share of width for the tree"),
-            ("search_position", "search bar: top, bottom"),
-            ("status_position", "status line: top, bottom"),
             ("line_numbers", "line numbers while editing"),
             ("markers", "tree glyphs: arrows, ascii"),
             ("borders", "draw boxes around the panes"),
             ("syntax_theme", "syntect theme used for code"),
-            ("max_search_results", "cap on hits from one search"),
             ("prose_extensions", "wrapped, read-first file types"),
             ("search_ignore", "folders search never walks"),
-            (
-                "graph_max_ambiguity",
-                "max definitions before a name is ignored",
-            ),
             ("theme.text", "body text style"),
             ("theme.dim", "secondary text style"),
             ("theme.border", "pane border style"),
@@ -301,8 +274,6 @@ impl Config {
             "auto_reload" => self.auto_reload.to_string(),
             "tree_side" => side_name(self.tree_side).into(),
             "tree_width" => format!("{:.2}", self.tree_width),
-            "search_position" => pos_name(self.search_position).into(),
-            "status_position" => pos_name(self.status_position).into(),
             "line_numbers" => self.line_numbers.to_string(),
             "markers" => match self.markers {
                 Markers::Arrows => "arrows".into(),
@@ -310,10 +281,8 @@ impl Config {
             },
             "borders" => self.borders.to_string(),
             "syntax_theme" => self.syntax_theme.clone(),
-            "max_search_results" => self.max_search_results.to_string(),
             "prose_extensions" => self.prose_extensions.join(" "),
             "search_ignore" => self.search_ignore.join(" "),
-            "graph_max_ambiguity" => self.graph_max_ambiguity.to_string(),
             "theme.text" => self.theme.text.clone(),
             "theme.dim" => self.theme.dim.clone(),
             "theme.border" => self.theme.border.clone(),
@@ -356,8 +325,6 @@ impl Config {
                     .parse::<f32>()
                     .map_err(|_| anyhow!("tree_width must be a number like 0.3"))?
             }
-            "search_position" => self.search_position = parse_pos(v)?,
-            "status_position" => self.status_position = parse_pos(v)?,
             "line_numbers" => self.line_numbers = parse_bool(v)?,
             "markers" => {
                 self.markers = match v.to_ascii_lowercase().as_str() {
@@ -368,10 +335,8 @@ impl Config {
             }
             "borders" => self.borders = parse_bool(v)?,
             "syntax_theme" => self.syntax_theme = v.to_string(),
-            "max_search_results" => self.max_search_results = parse_num(v)?,
             "prose_extensions" => self.prose_extensions = parse_list(v),
             "search_ignore" => self.search_ignore = parse_list(v),
-            "graph_max_ambiguity" => self.graph_max_ambiguity = parse_num(v)?,
             "theme.text" => self.theme.text = v.to_string(),
             "theme.dim" => self.theme.dim = v.to_string(),
             "theme.border" => self.theme.border = v.to_string(),
@@ -418,25 +383,10 @@ fn parse_num(v: &str) -> Result<usize> {
         .map_err(|_| anyhow!("expected a number, got `{v}`"))
 }
 
-fn parse_pos(v: &str) -> Result<Position> {
-    match v.to_ascii_lowercase().as_str() {
-        "top" => Ok(Position::Top),
-        "bottom" => Ok(Position::Bottom),
-        _ => Err(anyhow!("expected top or bottom")),
-    }
-}
-
 fn side_name(s: Side) -> &'static str {
     match s {
         Side::Left => "left",
         Side::Right => "right",
-    }
-}
-
-fn pos_name(p: Position) -> &'static str {
-    match p {
-        Position::Top => "top",
-        Position::Bottom => "bottom",
     }
 }
 

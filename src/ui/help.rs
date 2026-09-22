@@ -55,20 +55,15 @@ use KeyRow::{Blank, Bound, Fixed, Heading, Merged};
 /// to leave. Every command in the second half is a chord, which is the point
 /// of them — see [`crate::config::keys::Context::Global`].
 const KEYS: &[KeyRow] = &[
-    Heading("MOVING"),
+    Heading("MOVING — THE SAME IN EVERY PANE"),
     Merged(
-        &[
-            Action::TreeUp,
-            Action::TreeDown,
-            Action::TreeOut,
-            Action::TreeInto,
-        ],
+        &[Action::Up, Action::Down, Action::Left, Action::Right],
         "move",
     ),
     Merged(
         &[
-            Action::TreeJumpUp,
-            Action::TreeJumpDown,
+            Action::JumpUp,
+            Action::JumpDown,
             Action::EditorWordLeft,
             Action::EditorWordRight,
         ],
@@ -76,16 +71,17 @@ const KEYS: &[KeyRow] = &[
     ),
     Merged(
         &[
-            Action::TreeFirst,
-            Action::TreeLast,
+            Action::First,
+            Action::Last,
             Action::EditorLineStart,
             Action::EditorLineEnd,
         ],
         "to the ends",
     ),
+    Bound(&[Action::PageUp, Action::PageDown], "a screen at a time"),
     Bound(&[Action::TreeOpen], "open or close, or edit"),
     Bound(&[Action::TreePreview], "hand the keyboard over"),
-    Bound(&[Action::EditorBack], "back — or quit, from the browser"),
+    Bound(&[Action::Back], "back — or quit, from the browser"),
     Blank,
     Heading("FILES"),
     Bound(&[Action::Save], "save — on a folder, all of it"),
@@ -98,30 +94,25 @@ const KEYS: &[KeyRow] = &[
     Blank,
     Heading("WINDOWS — CTRL AND A NUMBER"),
     Bound(&[Action::WindowMain], "the browser and the file"),
-    Bound(&[Action::WindowSource], "git — not built yet"),
+    Bound(&[Action::WindowSource], "git: what has changed"),
     Bound(&[Action::WindowMap], "the project map"),
     Blank,
-    Heading("SOURCE CONTROL"),
+    // Git and the map share this section because they share their keys: the
+    // arrows, Enter and Esc are already above, and what is left is four rows.
+    Heading("GIT AND THE MAP"),
+    Bound(&[Action::Refresh], "read it again"),
     Bound(
         &[Action::SourceEnter],
         "stage | unstage — a file or a section",
     ),
-    Bound(
-        &[Action::SourceLeft, Action::SourceRight],
-        "into the diff | back to the changes",
-    ),
-    Bound(
-        &[Action::SourceJumpUp, Action::SourceJumpDown],
-        "five at a time, in either half",
-    ),
     Bound(&[Action::SourceOpen], "open this file"),
-    Bound(&[Action::SourceRefresh], "ask git again"),
+    Bound(
+        &[Action::MapWikilinks, Action::MapLinks, Action::MapCalls],
+        "wikilinks | links | calls",
+    ),
     Blank,
     Heading("THE BROWSER"),
-    Bound(
-        &[Action::TreeNarrower, Action::TreeWider],
-        "narrower | wider",
-    ),
+    Bound(&[Action::Narrower, Action::Wider], "narrower | wider"),
     Bound(&[Action::ToggleTreePane], "fold it away, and back"),
     Fixed("wheel", "one line a notch"),
     Blank,

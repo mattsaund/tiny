@@ -63,18 +63,6 @@ fn tree_markers_can_be_plain_ascii() {
 }
 
 #[test]
-fn the_status_line_can_move_to_the_top() {
-    let cfg = Config {
-        status_position: Position::Top,
-        ..Config::default()
-    };
-    let (_td, mut app) = fixture_with(cfg);
-    let rows = screen(&mut app, 90, 24);
-    assert!(rows[0].contains("help"), "status is on row 0:\n{}", rows[0]);
-    assert!(rows[1].contains("BROWSER"));
-}
-
-#[test]
 fn a_narrow_terminal_still_renders() {
     let (_td, mut app) = fixture();
     select(&mut app, "design.md");

@@ -23,9 +23,15 @@
 //!
 //! The same key means different things in different panes: `k` is *down* in the
 //! tree and the letter k in the editor. [`Context`] says which set of actions a
-//! keypress is being read against, and every action belongs to exactly one. The
-//! chords in [`Context::Global`] are checked first everywhere, which is why
-//! `Ctrl+S` saves from wherever you are.
+//! keypress is being read against. The chords in [`Context::Global`] are
+//! checked first everywhere, which is why `Ctrl+S` saves from wherever you are.
+//!
+//! An action lists the panes it works in, and most movements work in several.
+//! Moving up is one action, `up`, bound to one key; the browser, a note being
+//! read, the map and the change list each answer it in their own way. It was
+//! four actions with four names and four identical bindings, which is four
+//! rows to find and change to rebind one key, and three more chances for them
+//! to drift apart.
 //!
 //! Everything in `Global` is a chord. That is not a style choice: in the editor
 //! a letter is a letter being typed, so a control that has to work while you
@@ -117,9 +123,9 @@
 //! for the four arrows on a keyboard that has none, and `I` / `K` beside `Home`
 //! / `End` for the same reason.
 //!
-//! The width pair is why [`Action::TreeNarrower`] lives in [`Context::Tree`]
-//! rather than in `Global`: `Ctrl` with an arrow is a word motion in the
-//! editor, and a global binding would take it from there.
+//! The width pair is why [`Action::Narrower`] belongs to the panes that have a
+//! left column rather than to `Global`: `Ctrl` with an arrow is a word motion
+//! in the editor, and a global binding would take it from there.
 //!
 //! # Defaults and overrides
 //!
@@ -172,7 +178,7 @@ impl Context {
 /// [`Action::name`]. The `every_action_is_complete` test checks both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    // Global — every one of these is a chord, so it works while you are
+    // Everywhere. Every one of these is a chord, so it works while you are
     // typing into a file as well as from the tree.
     Save,
     Quit,
@@ -185,603 +191,389 @@ pub enum Action {
     WindowSource,
     WindowMap,
     Help,
-    // Tree
-    TreeUp,
-    TreeDown,
-    TreeFirst,
-    TreeLast,
-    TreeJumpUp,
-    TreeJumpDown,
-    TreePageUp,
-    TreePageDown,
+    // In every pane that has them. One name for one movement, however many
+    // panes can make that movement — see the module docs.
+    Up,
+    Down,
+    Left,
+    Right,
+    First,
+    Last,
+    JumpUp,
+    JumpDown,
+    PageUp,
+    PageDown,
+    Back,
+    Refresh,
+    Narrower,
+    Wider,
+    // The browser alone
     TreeOpen,
-    TreeInto,
-    TreeOut,
     TreePreview,
     TreeHidden,
-    TreeNarrower,
-    TreeWider,
-    TreeBar,
     TreeQuit,
-    // Reading
-    ViewUp,
-    ViewDown,
-    ViewTop,
-    ViewBottom,
-    ViewPageUp,
-    ViewPageDown,
-    ViewBar,
-    // Editor
-    EditorBack,
+    // A file being edited
     EditorUndo,
     EditorRedo,
     EditorDeleteLine,
     EditorWordLeft,
     EditorWordRight,
-    EditorJumpUp,
-    EditorJumpDown,
     EditorLineStart,
     EditorLineEnd,
     EditorDocStart,
     EditorDocEnd,
-    // Map
-    MapClose,
+    // The project map
     MapOpen,
-    MapUp,
-    MapDown,
-    MapLeft,
-    MapRight,
     MapNext,
     MapPrevious,
-    MapFilter,
-    MapReload,
     MapWikilinks,
     MapLinks,
     MapCalls,
     // Source control
-    SourceUp,
-    SourceDown,
-    SourceJumpUp,
-    SourceJumpDown,
-    SourceLeft,
-    SourceRight,
     SourceEnter,
     SourceOpen,
-    SourceRefresh,
-    SourcePageUp,
-    SourcePageDown,
-    SourceNarrower,
-    SourceWider,
-    SourceClose,
 }
 
-/// Every action, its context, its name in the config file, what it does, and
-/// the keys it ships with.
+/// Every action, the panes it works in, its name in the config file, what it
+/// does, and the keys it ships with.
 ///
 /// One table rather than five methods: a row that goes missing is a row that
 /// goes missing everywhere at once, which is far easier to notice.
-type Row = (Action, Context, &'static str, &'static str, &'static str);
+///
+/// The contexts are a list because most movements are the same movement in
+/// several panes. `up` is one action bound to one key that four panes each
+/// answer in their own way, rather than four actions, four rows in the
+/// keybinds window, and four lines to change to rebind one key.
+type Row = (
+    Action,
+    &'static [Context],
+    &'static str,
+    &'static str,
+    &'static str,
+);
 
 const TABLE: &[Row] = &[
     (
         Action::Save,
-        Context::Global,
+        &[Context::Global],
         "save",
         "save the open file",
         "ctrl+s",
     ),
     (
         Action::Quit,
-        Context::Global,
+        &[Context::Global],
         "quit",
         "leave tiny",
         "ctrl+q",
     ),
     (
         Action::Bar,
-        Context::Global,
+        &[Context::Global],
         "bar",
         "search — type a star first for a command",
-        "ctrl+/",
+        "ctrl+/ /",
     ),
     (
         Action::CommandBar,
-        Context::Global,
+        &[Context::Global],
         "command",
         "the bar, already starred",
         "ctrl+p",
     ),
     (
         Action::ToggleTreePane,
-        Context::Global,
+        &[Context::Global],
         "fold_tree",
         "fold the browser away, and back",
         "ctrl+space",
     ),
-    (Action::Copy, Context::Global, "copy", "copy", "ctrl+c"),
+    (
+        Action::Copy,
+        &[Context::Global],
+        "copy",
+        "copy what the cursor is on",
+        "ctrl+c",
+    ),
     (
         Action::Paste,
-        Context::Global,
+        &[Context::Global],
         "paste",
         "paste into this folder",
         "ctrl+v",
     ),
     (
         Action::WindowMain,
-        Context::Global,
+        &[Context::Global],
         "window_main",
         "the browser and the file",
-        // The three windows are `Ctrl` with their number. Nothing else
-        // switches between them, so the number *is* the window.
         "ctrl+1",
     ),
     (
         Action::WindowSource,
-        Context::Global,
+        &[Context::Global],
         "window_source",
         "git and what has changed",
         "ctrl+2",
     ),
     (
         Action::WindowMap,
-        Context::Global,
+        &[Context::Global],
         "window_map",
         "the project map",
         "ctrl+3",
     ),
     (
         Action::Help,
-        Context::Global,
+        &[Context::Global],
         "help",
         "keys and commands",
         "f1",
     ),
-    (Action::TreeUp, Context::Tree, "tree.up", "move up", "up i"),
     (
-        Action::TreeDown,
-        Context::Tree,
-        "tree.down",
+        Action::Up,
+        &[Context::Tree, Context::View, Context::Map, Context::Source],
+        "up",
+        "move up",
+        "up i",
+    ),
+    (
+        Action::Down,
+        &[Context::Tree, Context::View, Context::Map, Context::Source],
+        "down",
         "move down",
         "down k",
     ),
     (
-        Action::TreeFirst,
-        Context::Tree,
-        "tree.first",
-        "first entry",
+        Action::Left,
+        &[Context::Tree, Context::Map, Context::Source],
+        "left",
+        "out of a folder, or one to the left",
+        "left j",
+    ),
+    (
+        Action::Right,
+        &[Context::Tree, Context::Map, Context::Source],
+        "right",
+        "into a folder, or one to the right",
+        "right l",
+    ),
+    (
+        Action::First,
+        &[Context::Tree, Context::View],
+        "first",
+        "to the first row, or the top",
         "home I",
     ),
     (
-        Action::TreeLast,
-        Context::Tree,
-        "tree.last",
-        "last entry",
+        Action::Last,
+        &[Context::Tree, Context::View],
+        "last",
+        "to the last row, or the bottom",
         "end K",
     ),
     (
-        Action::TreeJumpUp,
-        Context::Tree,
-        "tree.jump_up",
-        "five entries up",
+        Action::JumpUp,
+        &[Context::Tree, Context::Editor, Context::Source],
+        "jump_up",
+        "five at a time, up",
         "ctrl+up",
     ),
     (
-        Action::TreeJumpDown,
-        Context::Tree,
-        "tree.jump_down",
-        "five entries down",
+        Action::JumpDown,
+        &[Context::Tree, Context::Editor, Context::Source],
+        "jump_down",
+        "five at a time, down",
         "ctrl+down",
     ),
     (
-        Action::TreePageUp,
-        Context::Tree,
-        "tree.page_up",
+        Action::PageUp,
+        &[Context::Tree, Context::View, Context::Source],
+        "page_up",
         "a screen up",
         "pageup",
     ),
     (
-        Action::TreePageDown,
-        Context::Tree,
-        "tree.page_down",
+        Action::PageDown,
+        &[Context::Tree, Context::View, Context::Source],
+        "page_down",
         "a screen down",
         "pagedown",
     ),
     (
+        Action::Back,
+        &[Context::Editor, Context::Map, Context::Source],
+        "back",
+        "back to the browser",
+        "esc",
+    ),
+    (
+        Action::Refresh,
+        &[Context::Map, Context::Source],
+        "refresh",
+        "read it from disk again",
+        "r",
+    ),
+    (
+        Action::Narrower,
+        &[Context::Tree, Context::Source],
+        "narrower",
+        "a narrower left column",
+        "ctrl+left",
+    ),
+    (
+        Action::Wider,
+        &[Context::Tree, Context::Source],
+        "wider",
+        "a wider left column",
+        "ctrl+right",
+    ),
+    (
         Action::TreeOpen,
-        Context::Tree,
+        &[Context::Tree],
         "tree.open",
         "open or close a folder, or edit a file",
         "enter",
     ),
     (
-        Action::TreeInto,
-        Context::Tree,
-        "tree.into",
-        "open a folder, or step inside it",
-        "right l",
-    ),
-    (
-        Action::TreeOut,
-        Context::Tree,
-        "tree.out",
-        "close a folder, or go to its parent",
-        "left j",
-    ),
-    (
         Action::TreePreview,
-        Context::Tree,
+        &[Context::Tree],
         "tree.preview",
         "hand the keyboard to the file",
         "tab",
     ),
     (
         Action::TreeHidden,
-        Context::Tree,
+        &[Context::Tree],
         "tree.hidden",
         "show or hide dotfiles",
         ".",
     ),
     (
-        Action::TreeNarrower,
-        Context::Tree,
-        "tree.narrower",
-        "a narrower browser",
-        // The pane's own resize keys, and the reason they live here rather
-        // than in `Global`: `Ctrl` with an arrow is a word motion in the
-        // editor, and a global binding would take it there too. In the
-        // browser nothing is being typed and both are free.
-        //
-        // Every terminal sends these, which the `Alt` pair beside them cannot
-        // claim — see the module docs on Option.
-        "ctrl+left",
-    ),
-    (
-        Action::TreeWider,
-        Context::Tree,
-        "tree.wider",
-        "a wider browser",
-        "ctrl+right",
-    ),
-    (
-        Action::TreeBar,
-        Context::Tree,
-        "tree.bar",
-        "the search bar",
-        "/",
-    ),
-    (
         Action::TreeQuit,
-        Context::Tree,
+        &[Context::Tree],
         "tree.quit",
         "leave tiny",
         "esc",
     ),
     (
-        Action::ViewUp,
-        Context::View,
-        "view.up",
-        "scroll up",
-        "up i",
-    ),
-    (
-        Action::ViewDown,
-        Context::View,
-        "view.down",
-        "scroll down",
-        "down k",
-    ),
-    (
-        Action::ViewTop,
-        Context::View,
-        "view.top",
-        "to the top",
-        "home I",
-    ),
-    (
-        Action::ViewBottom,
-        Context::View,
-        "view.bottom",
-        "to the bottom",
-        "end K",
-    ),
-    (
-        Action::ViewPageUp,
-        Context::View,
-        "view.page_up",
-        "a screen up",
-        "pageup",
-    ),
-    (
-        Action::ViewPageDown,
-        Context::View,
-        "view.page_down",
-        "a screen down",
-        "pagedown",
-    ),
-    (
-        Action::ViewBar,
-        Context::View,
-        "view.bar",
-        "the search bar",
-        "/",
-    ),
-    (
-        Action::EditorBack,
-        Context::Editor,
-        "editor.back",
-        "back to the tree",
-        "esc",
-    ),
-    (
         Action::EditorUndo,
-        Context::Editor,
+        &[Context::Editor],
         "editor.undo",
         "undo",
         "ctrl+z",
     ),
     (
         Action::EditorRedo,
-        Context::Editor,
+        &[Context::Editor],
         "editor.redo",
         "redo",
         "ctrl+y",
     ),
     (
         Action::EditorDeleteLine,
-        Context::Editor,
+        &[Context::Editor],
         "editor.delete_line",
         "delete this line",
         "ctrl+k",
     ),
     (
         Action::EditorWordLeft,
-        Context::Editor,
+        &[Context::Editor],
         "editor.word_left",
         "a word left",
         "ctrl+left",
     ),
     (
         Action::EditorWordRight,
-        Context::Editor,
+        &[Context::Editor],
         "editor.word_right",
         "a word right",
         "ctrl+right",
     ),
     (
-        Action::EditorJumpUp,
-        Context::Editor,
-        "editor.jump_up",
-        "five lines up",
-        "ctrl+up",
-    ),
-    (
-        Action::EditorJumpDown,
-        Context::Editor,
-        "editor.jump_down",
-        "five lines down",
-        "ctrl+down",
-    ),
-    (
         Action::EditorLineStart,
-        Context::Editor,
+        &[Context::Editor],
         "editor.line_start",
         "to the start of the line",
         "home",
     ),
     (
         Action::EditorLineEnd,
-        Context::Editor,
+        &[Context::Editor],
         "editor.line_end",
         "to the end of the line",
         "end",
     ),
     (
         Action::EditorDocStart,
-        Context::Editor,
+        &[Context::Editor],
         "editor.start",
         "to the first line",
         "ctrl+home",
     ),
     (
         Action::EditorDocEnd,
-        Context::Editor,
+        &[Context::Editor],
         "editor.end",
         "to the last line",
         "ctrl+end",
     ),
     (
-        Action::MapClose,
-        Context::Map,
-        "map.close",
-        "back to the browser",
-        "esc",
-    ),
-    (
         Action::MapOpen,
-        Context::Map,
+        &[Context::Map],
         "map.open",
         "open this file",
         "enter",
     ),
     (
-        Action::MapUp,
-        Context::Map,
-        "map.up",
-        "the nearest file up",
-        "up i",
-    ),
-    (
-        Action::MapDown,
-        Context::Map,
-        "map.down",
-        "the nearest file down",
-        "down k",
-    ),
-    (
-        Action::MapLeft,
-        Context::Map,
-        "map.left",
-        "the nearest file left",
-        "left j",
-    ),
-    (
-        Action::MapRight,
-        Context::Map,
-        "map.right",
-        "the nearest file right",
-        "right l",
-    ),
-    (
         Action::MapNext,
-        Context::Map,
+        &[Context::Map],
         "map.next",
         "step through the files",
         "tab",
     ),
     (
         Action::MapPrevious,
-        Context::Map,
+        &[Context::Map],
         "map.previous",
         "step back through them",
         "backtab",
     ),
     (
-        Action::MapFilter,
-        Context::Map,
-        "map.filter",
-        "filter by path",
-        "/",
-    ),
-    (
-        Action::MapReload,
-        Context::Map,
-        "map.reload",
-        "build the map again",
-        "r",
-    ),
-    (
         Action::MapWikilinks,
-        Context::Map,
+        &[Context::Map],
         "map.wikilinks",
         "draw wikilinks",
         "1",
     ),
     (
         Action::MapLinks,
-        Context::Map,
+        &[Context::Map],
         "map.links",
         "draw markdown links",
         "2",
     ),
     (
         Action::MapCalls,
-        Context::Map,
+        &[Context::Map],
         "map.calls",
         "draw calls",
         "3",
     ),
     (
-        Action::SourceUp,
-        Context::Source,
-        "source.up",
-        "move up",
-        "up i",
-    ),
-    (
-        Action::SourceDown,
-        Context::Source,
-        "source.down",
-        "move down",
-        "down k",
-    ),
-    (
-        Action::SourceJumpUp,
-        Context::Source,
-        "source.jump_up",
-        "five at a time",
-        // The same two keys that move five at a time in the browser and in a
-        // file, doing the same thing to whichever half of this window has the
-        // arrows.
-        "ctrl+up",
-    ),
-    (
-        Action::SourceJumpDown,
-        Context::Source,
-        "source.jump_down",
-        "five at a time",
-        "ctrl+down",
-    ),
-    (
-        Action::SourceLeft,
-        Context::Source,
-        "source.left",
-        "the button to the left",
-        "left j",
-    ),
-    (
-        Action::SourceRight,
-        Context::Source,
-        "source.right",
-        "the button to the right",
-        "right l",
-    ),
-    (
         Action::SourceEnter,
-        Context::Source,
+        &[Context::Source],
         "source.stage",
         "stage or unstage — a file, or a whole section",
         "enter",
     ),
     (
         Action::SourceOpen,
-        Context::Source,
+        &[Context::Source],
         "source.open",
         "open this file in the editor",
         "tab",
-    ),
-    (
-        Action::SourceRefresh,
-        Context::Source,
-        "source.refresh",
-        "ask git again",
-        "r",
-    ),
-    (
-        Action::SourcePageUp,
-        Context::Source,
-        "source.page_up",
-        "the diff, a screen up",
-        "pageup",
-    ),
-    (
-        Action::SourcePageDown,
-        Context::Source,
-        "source.page_down",
-        "the diff, a screen down",
-        "pagedown",
-    ),
-    (
-        Action::SourceNarrower,
-        Context::Source,
-        "source.narrower",
-        "a narrower change list",
-        // The same two keys that size the browser, because it is the same
-        // column in the same place doing the same job.
-        "ctrl+left",
-    ),
-    (
-        Action::SourceWider,
-        Context::Source,
-        "source.wider",
-        "a wider change list",
-        "ctrl+right",
-    ),
-    (
-        Action::SourceClose,
-        Context::Source,
-        "source.close",
-        "back to the browser",
-        "esc",
     ),
 ];
 
@@ -804,8 +596,21 @@ impl Action {
         &TABLE[self.index()]
     }
 
-    pub fn context(self) -> Context {
+    /// Every pane this action works in. Most movements work in several.
+    pub fn contexts(self) -> &'static [Context] {
         self.row().1
+    }
+
+    /// The heading the keybinds window files this action under.
+    ///
+    /// An action that works in more than one pane belongs to none of them, so
+    /// it gets a heading of its own rather than being filed under whichever
+    /// pane happened to be listed first.
+    pub fn group(self) -> &'static str {
+        match self.contexts() {
+            [one] => one.title(),
+            _ => "IN MORE THAN ONE PANE",
+        }
     }
 
     /// The name in the config file, e.g. `tree.down`.
@@ -881,13 +686,39 @@ impl Keymap {
             .or_else(|| self.find(ctx, ev))
     }
 
+    /// [`resolve`](Self::resolve), for a pane that is typing.
+    ///
+    /// A global bound to a bare character does not fire here: in a file, or a
+    /// commit message, that character is the character. Chords still do, which
+    /// is what they are for — `Ctrl+S` saves from inside a file and `s` is an
+    /// s.
+    ///
+    /// This is what lets one `bar` action carry both `ctrl+/` and `/`, instead
+    /// of one action per pane that wanted the short key.
+    pub fn resolve_while_typing(&self, ctx: Context, ev: &KeyEvent) -> Option<Action> {
+        self.find_chord(Context::Global, ev)
+            .or_else(|| self.find(ctx, ev))
+    }
+
+    /// Like [`find`](Self::find), skipping any binding that is a plain
+    /// character.
+    fn find_chord(&self, ctx: Context, ev: &KeyEvent) -> Option<Action> {
+        TABLE
+            .iter()
+            .zip(&self.binds)
+            .find(|((_, cs, ..), keys)| {
+                cs.contains(&ctx) && keys.iter().any(|k| !k.is_typing() && k.matches(ev))
+            })
+            .map(|((a, ..), _)| *a)
+    }
+
     /// What this keypress means in `ctx` alone. For the panes that do their own
     /// global handling.
     pub fn find(&self, ctx: Context, ev: &KeyEvent) -> Option<Action> {
         TABLE
             .iter()
             .zip(&self.binds)
-            .find(|((_, c, ..), keys)| *c == ctx && keys.iter().any(|k| k.matches(ev)))
+            .find(|((_, cs, ..), keys)| cs.contains(&ctx) && keys.iter().any(|k| k.matches(ev)))
             .map(|((a, ..), _)| *a)
     }
 
@@ -910,12 +741,18 @@ impl Keymap {
 
     /// Every other action already using `key`, so a rebinding can say what it
     /// is about to shadow.
+    ///
+    /// Two actions clash when they share a key *and* a pane. Sharing only a
+    /// key is how `esc` leaves the editor and quits from the browser, and how
+    /// `ctrl+left` is a word in a file and a narrower column beside it.
     pub fn clashes(&self, action: Action, key: &Key) -> Vec<Action> {
-        let context = action.context();
+        let contexts = action.contexts();
         TABLE
             .iter()
             .zip(&self.binds)
-            .filter(|((a, c, ..), keys)| *a != action && *c == context && keys.contains(key))
+            .filter(|((a, cs, ..), keys)| {
+                *a != action && cs.iter().any(|c| contexts.contains(c)) && keys.contains(key)
+            })
             .map(|((a, ..), _)| *a)
             .collect()
     }
@@ -1045,10 +882,50 @@ mod tests {
     fn resolving_reads_a_key_against_one_context() {
         let map = Keymap::default();
         let k = ev(KeyCode::Char('k'), KeyModifiers::NONE);
-        assert_eq!(map.resolve(Context::Tree, &k), Some(Action::TreeDown));
-        assert_eq!(map.resolve(Context::View, &k), Some(Action::ViewDown));
+        // One action, answered by each pane in its own way.
+        assert_eq!(map.resolve(Context::Tree, &k), Some(Action::Down));
+        assert_eq!(map.resolve(Context::View, &k), Some(Action::Down));
         // The editor has no bare-letter bindings: there, k is the letter k.
         assert_eq!(map.resolve(Context::Editor, &k), None);
+    }
+
+    #[test]
+    fn a_key_can_mean_different_things_in_different_panes() {
+        let map = Keymap::default();
+        // What the contexts are actually for: `esc` leaves the file, and
+        // quits from the browser. `ctrl+left` is a word in a file, and a
+        // narrower column beside it.
+        let esc = ev(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(map.resolve(Context::Editor, &esc), Some(Action::Back));
+        assert_eq!(map.resolve(Context::Tree, &esc), Some(Action::TreeQuit));
+        let left = ev(KeyCode::Left, KeyModifiers::CONTROL);
+        assert_eq!(
+            map.resolve(Context::Editor, &left),
+            Some(Action::EditorWordLeft)
+        );
+        assert_eq!(map.resolve(Context::Tree, &left), Some(Action::Narrower));
+    }
+
+    #[test]
+    fn one_movement_is_one_action_in_every_pane_that_has_it() {
+        let map = Keymap::default();
+        let down = ev(KeyCode::Down, KeyModifiers::NONE);
+        for ctx in [Context::Tree, Context::View, Context::Map, Context::Source] {
+            assert_eq!(
+                map.resolve(ctx, &down),
+                Some(Action::Down),
+                "{ctx:?} answers the same action"
+            );
+        }
+        // So rebinding it is one line, not four.
+        let mut over = BTreeMap::new();
+        over.insert("down".to_string(), "n".to_string());
+        let (map, warning) = Keymap::new(&over);
+        assert!(warning.is_none());
+        let n = ev(KeyCode::Char('n'), KeyModifiers::NONE);
+        for ctx in [Context::Tree, Context::View, Context::Map, Context::Source] {
+            assert_eq!(map.resolve(ctx, &n), Some(Action::Down), "{ctx:?}");
+        }
     }
 
     #[test]
@@ -1063,36 +940,29 @@ mod tests {
     #[test]
     fn an_override_replaces_the_shipped_keys_for_that_action_only() {
         let mut over = BTreeMap::new();
-        over.insert("tree.down".to_string(), "n".to_string());
+        over.insert("down".to_string(), "n".to_string());
         let (map, warning) = Keymap::new(&over);
         assert!(warning.is_none());
         assert_eq!(
             map.resolve(Context::Tree, &ev(KeyCode::Char('n'), KeyModifiers::NONE)),
-            Some(Action::TreeDown)
+            Some(Action::Down)
         );
         assert_eq!(
             map.resolve(Context::Tree, &ev(KeyCode::Char('k'), KeyModifiers::NONE)),
             None,
             "the old key is no longer bound to it"
         );
-        assert_eq!(
-            map.spec(Action::TreeUp),
-            "up i",
-            "everything else is untouched"
-        );
+        assert_eq!(map.spec(Action::Up), "up i", "everything else is untouched");
     }
 
     #[test]
     fn an_action_that_does_not_exist_warns() {
         let mut over = BTreeMap::new();
-        over.insert("tree.dowm".to_string(), "n".to_string());
+        over.insert("dowm".to_string(), "n".to_string());
         let (map, warning) = Keymap::new(&over);
-        assert!(
-            warning.is_some_and(|w| w.contains("tree.dowm")),
-            "it says so"
-        );
+        assert!(warning.is_some_and(|w| w.contains("dowm")), "it says so");
         assert_eq!(
-            map.spec(Action::TreeDown),
+            map.spec(Action::Down),
             "down k",
             "and the real binding is untouched"
         );
@@ -1101,12 +971,12 @@ mod tests {
     #[test]
     fn a_line_that_is_not_a_key_warns_and_keeps_the_rest() {
         let mut over = BTreeMap::new();
-        over.insert("tree.down".to_string(), "wibble k".to_string());
+        over.insert("down".to_string(), "wibble k".to_string());
         let (map, warning) = Keymap::new(&over);
         assert!(warning.is_some_and(|w| w.contains("wibble")), "it says so");
         assert_eq!(
             map.resolve(Context::Tree, &ev(KeyCode::Char('k'), KeyModifiers::NONE)),
-            Some(Action::TreeDown),
+            Some(Action::Down),
             "the half that parsed still works"
         );
     }

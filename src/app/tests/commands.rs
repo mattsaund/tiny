@@ -248,7 +248,7 @@ fn a_key_two_actions_share_is_listed_once() {
 #[test]
 fn the_help_window_shows_a_rebinding_not_the_shipped_key() {
     let (_td, mut app) = fixture();
-    keybinds_on(&mut app, Action::TreeDown);
+    keybinds_on(&mut app, Action::Down);
     app.on_key(k(KeyCode::Enter));
     app.on_key(ch('z'));
     app.on_key(k(KeyCode::Esc));

@@ -27,6 +27,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::files::media;
+use crate::files::size;
 use crate::text::editor::Editor;
 
 use super::App;
@@ -171,6 +172,9 @@ impl App {
     /// again afterwards. Only when the file is genuinely gone does the index
     /// get clamped instead.
     pub(super) fn rebuild_rows(&mut self) {
+        // Anything that rebuilds the rows can have changed what a folder
+        // holds, and a remembered size is only worth having while it is true.
+        self.size_cache.clear();
         let want = self.selected_path().map(Path::to_path_buf);
         self.rows = self.tree.flatten();
         if let Some(want) = want {
@@ -243,11 +247,40 @@ impl App {
     /// Point the preview at whatever the cursor is now on, and reset its
     /// scroll.
     ///
+    /// Measure what the cursor is on, for the end of the status line.
+    ///
+    /// A file is one `stat` and is measured every time, so saving one shows
+    /// the new size immediately. A folder is a walk of everything under it,
+    /// so it is measured once and remembered — see [`size`] for the budget
+    /// that keeps the walk from being felt, and `size_cache` for how long the
+    /// answer is kept.
+    pub(super) fn note_size(&mut self) {
+        let Some(row) = self.selected_row() else {
+            self.cursor_size = None;
+            return;
+        };
+        if !row.is_dir {
+            self.cursor_size = size::of(&row.path);
+            return;
+        }
+        let path = row.path.clone();
+        if let Some(known) = self.size_cache.get(&path) {
+            self.cursor_size = Some(*known);
+            return;
+        }
+        let measured = size::of(&path);
+        if let Some(size) = measured {
+            self.size_cache.insert(path, size);
+        }
+        self.cursor_size = measured;
+    }
+
     /// Called after every cursor move. This is the single seam between the two
     /// panes — the tree does not know about the preview and vice versa; they
     /// are coupled only here.
     pub(super) fn sync_preview(&mut self) {
         self.preview_scroll = 0;
+        self.note_size();
         let Some(row) = self.selected_row().cloned() else {
             self.preview = Preview::Empty;
             return;

@@ -26,20 +26,24 @@ use crate::config::keys::Action;
 
 /// The keybinds window: every action, what it does, and the keys that reach it.
 ///
-/// Grouped by context with a heading for each, because the same key means
-/// different things in different panes and a flat list of sixty rows would
-/// hide that. A binding that has been changed is drawn brightly, so what you
-/// have done to the shipped keyboard is visible at a glance.
+/// Grouped with a heading for each pane, because the same key means different
+/// things in different panes and a flat list would hide that. The movements
+/// that work in several panes are one group of their own at the top — they
+/// belong to no single pane, and listing them under the first one that happens
+/// to have them would be a lie about where they work.
+///
+/// A binding that has been changed is drawn brightly, so what you have done to
+/// the shipped keyboard is visible at a glance.
 pub(super) fn draw_keybinds(f: &mut Frame, app: &App, area: Rect, kb: &Keybinds) {
     let pal = app.palette;
     let actions: Vec<Action> = Action::all().collect();
-    // A heading appears wherever the context changes.
+    // A heading appears wherever the group changes.
     let mut rows: Vec<BindRow> = KEYBIND_BUTTONS.iter().map(|l| BindRow::Button(l)).collect();
-    let mut context = None;
+    let mut group = None;
     for (i, action) in actions.iter().enumerate() {
-        if context != Some(action.context()) {
-            context = Some(action.context());
-            rows.push(BindRow::Heading(action.context().title()));
+        if group != Some(action.group()) {
+            group = Some(action.group());
+            rows.push(BindRow::Heading(action.group()));
         }
         rows.push(BindRow::Action(i, *action));
     }

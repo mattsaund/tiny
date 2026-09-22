@@ -81,7 +81,7 @@ use self::source::draw_source;
 use self::tree::{draw_results, draw_tree, results_height};
 
 use crate::app::{App, Mode, Window};
-use crate::config::{Position, Side};
+use crate::config::Side;
 
 /// Paint one frame. Called once per keypress by the event loop in `main`.
 ///
@@ -96,24 +96,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let pal = app.palette;
 
-    // Rows: the bar when open, the panes, and the status line. Both the bar
-    // and the status line can sit at either end.
+    // Rows: the bar at the top when it is open, the panes, the status line at
+    // the bottom. Both used to be settable at either end, which was two
+    // settings to describe a window everyone left alone — and a bar that could
+    // be anywhere is a bar you have to look for.
     let bar_open = matches!(app.mode, Mode::Bar(_));
-    let bar_h = if bar_open { 1 } else { 0 };
     let mut order: Vec<(Slot, u16)> = Vec::new();
-    if bar_open && app.config.search_position == Position::Top {
-        order.push((Slot::Bar, bar_h));
-    }
-    if app.config.status_position == Position::Top {
-        order.push((Slot::Status, 1));
+    if bar_open {
+        order.push((Slot::Bar, 1));
     }
     order.push((Slot::Main, 0));
-    if bar_open && app.config.search_position == Position::Bottom {
-        order.push((Slot::Bar, bar_h));
-    }
-    if app.config.status_position == Position::Bottom {
-        order.push((Slot::Status, 1));
-    }
+    order.push((Slot::Status, 1));
 
     let constraints: Vec<Constraint> = order
         .iter()

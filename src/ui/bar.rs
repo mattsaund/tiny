@@ -1,13 +1,13 @@
 //! The two single-row strips: the bar, and the status line.
 //!
-//! Both can sit at the top or the bottom independently — see
-//! [`crate::config::Position`] — so neither knows where it is; [`super::draw`]
-//! hands each one a row and they fill it.
+//! Neither knows where it is. [`super::draw`] hands each one a row — the bar
+//! at the top, the status line at the bottom — and they fill it.
 //!
-//! The bar is one field that is two things: a search when it starts with
-//! anything, a command when it starts with the sigil. It decides which
-//! keystroke by keystroke rather than being opened in a mode, which is why
-//! there is only one of it.
+//! The bar is one field that is three things: a search when it starts with
+//! anything, a command when it starts with the sigil, and the map's filter
+//! when the map is the window behind it. It decides which keystroke by
+//! keystroke rather than being opened in a mode, which is why there is only
+//! one of it — and why there is no separate filter box on the map.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -19,6 +19,7 @@ use unicode_width::UnicodeWidthStr;
 use super::parts::split_at_char;
 
 use crate::app::{App, Focus, GitFocus, Mode, Window};
+use crate::files::size;
 
 /// The search (`/`) or command (`:`) line.
 ///
@@ -53,6 +54,8 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
 
     let hint = if command {
         "  Tab or → complete · Enter run · Esc close"
+    } else if app.window == Window::Map {
+        "  narrowing the map · Enter keep · Esc clear"
     } else if b.results.is_empty() {
         "  names and contents · * for a command · Esc close"
     } else {
@@ -83,9 +86,9 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
 /// The status line: prompts, confirmations, or the ordinary message plus
 /// context-sensitive hints.
 ///
-/// Hints are dropped before the position readout when the window is too narrow
-/// for both, so the line degrades gracefully instead of wrapping or being
-/// clipped mid-word.
+/// Hints are dropped before the readout at the end when the window is too
+/// narrow for both, so the line degrades gracefully instead of wrapping or
+/// being clipped mid-word.
 pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette;
     let line = match &app.mode {
@@ -152,8 +155,14 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(line).style(app.palette.text), area);
 }
 
-/// The right-hand end of the status line: `line:col` while editing, otherwise
-/// the tree cursor's position in the row list.
+/// The right-hand end of the status line: how much disk the thing under the
+/// cursor takes, and — while editing — where in the file the cursor is.
+///
+/// The size is there for every file and every folder, because "how big is
+/// this" is a question you ask of anything you are looking at. What used to be
+/// here was the cursor's number in the row list, which answered a question
+/// nobody had: the cursor is already visible, and the rows are already
+/// counted by the browser it sits in.
 fn position_readout(app: &App) -> String {
     // Each window counts something different, and counting the browser's rows
     // while looking at another one is a number that means nothing.
@@ -163,12 +172,19 @@ fn position_readout(app: &App) -> String {
             None => String::new(),
         },
         Window::Map => String::new(),
-        Window::Main => match app.active_buffer() {
-            Some(ed) if app.focus == Focus::Editor => {
-                format!("{}:{} ", ed.cursor_line + 1, ed.cursor_col + 1)
+        Window::Main => {
+            let size = app.cursor_size.map(size::human).unwrap_or_default();
+            match app.active_buffer() {
+                // While editing, both: the line and column move with every
+                // keypress and the size hardly ever, so the steady number goes
+                // on the outside where it will not be read as part of the one
+                // that is moving.
+                Some(ed) if app.focus == Focus::Editor => {
+                    format!("{}:{}  {size} ", ed.cursor_line + 1, ed.cursor_col + 1)
+                }
+                _ => format!("{size} "),
             }
-            _ => format!("{}/{} ", app.selected + 1, app.rows.len()),
-        },
+        }
     }
 }
 

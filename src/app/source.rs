@@ -422,10 +422,10 @@ impl App {
     /// Esc puts the box down without throwing away what is in it.
     pub(super) fn on_message_key(&mut self, key: crossterm::event::KeyEvent) {
         use crate::config::keys::{Action, Context as KeyContext};
-        let action = self.keymap.resolve(KeyContext::Editor, &key);
+        let action = self.keymap.resolve_while_typing(KeyContext::Editor, &key);
         match action {
             Some(Action::Save) => return self.commit_message(),
-            Some(Action::EditorBack) => {
+            Some(Action::Back) => {
                 self.git.focus = GitFocus::List;
                 self.status = "message kept — commit to send it".into();
                 return;

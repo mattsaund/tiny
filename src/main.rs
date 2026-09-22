@@ -51,6 +51,7 @@ mod app;
 mod config;
 mod files;
 mod git;
+mod licenses;
 mod map;
 mod text;
 mod ui;
@@ -155,7 +156,7 @@ fn real_main() -> Result<()> {
             return Ok(());
         }
         Some("--licenses") => {
-            emit(&text::highlight::acknowledgments());
+            emit(&licenses::notice());
             return Ok(());
         }
         Some("--uninstall") => return uninstall(),

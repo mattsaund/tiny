@@ -385,3 +385,66 @@ fn a_note_too_long_to_format_still_scrolls_to_the_end() {
         "the last section is reachable:\n{out}"
     );
 }
+
+#[test]
+fn the_status_line_says_how_big_the_file_under_the_cursor_is() {
+    let (td, mut app) = fixture();
+    let bytes = fs::metadata(td.path().join("README.md")).unwrap().len();
+    select(&mut app, "README.md");
+
+    let out = joined(&mut app);
+    assert!(
+        out.contains(&format!("{bytes} B")),
+        "the size of the file is on the status line:\n{out}"
+    );
+    assert!(
+        !out.contains(&format!("{}/{}", app.selected + 1, app.rows.len())),
+        "and the row count it replaced is not:\n{out}"
+    );
+}
+
+#[test]
+fn a_folder_is_measured_by_everything_inside_it() {
+    let (td, mut app) = fixture();
+    fs::create_dir(td.path().join("blobs")).unwrap();
+    fs::write(td.path().join("blobs/one.bin"), vec![0u8; 4096]).unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "blobs");
+
+    let out = joined(&mut app);
+    assert!(
+        out.contains("4.0 KB"),
+        "a folder reads as the sum of what is under it:\n{out}"
+    );
+}
+
+#[test]
+fn editing_shows_the_place_in_the_file_and_the_size_of_it() {
+    let (td, mut app) = fixture();
+    let bytes = fs::metadata(td.path().join("README.md")).unwrap().len();
+    select(&mut app, "README.md");
+    app.focus_editor();
+
+    let out = joined(&mut app);
+    assert!(out.contains("1:1"), "where the cursor is:\n{out}");
+    assert!(
+        out.contains(&format!("{bytes} B")),
+        "and how big it is:\n{out}"
+    );
+}
+
+#[test]
+fn saving_a_file_moves_the_size_with_it() {
+    let (_td, mut app) = fixture();
+    select(&mut app, "README.md");
+    let before = app.cursor_size.unwrap().bytes;
+    app.focus_editor();
+    type_str(&mut app, "more text");
+    app.save_active();
+
+    assert_eq!(
+        app.cursor_size.unwrap().bytes,
+        before + 9,
+        "the file is nine characters longer than it was"
+    );
+}

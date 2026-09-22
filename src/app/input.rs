@@ -71,11 +71,11 @@ pub(super) fn edit_with_key(
             ed.move_word_right();
             return None;
         }
-        Some(Action::EditorJumpUp) => {
+        Some(Action::JumpUp) => {
             ed.page_up(JUMP_LINES);
             return None;
         }
-        Some(Action::EditorJumpDown) => {
+        Some(Action::JumpDown) => {
             ed.page_down(JUMP_LINES);
             return None;
         }
@@ -178,23 +178,23 @@ impl App {
             return;
         }
         match action {
-            Action::SourceUp => self.move_git_cursor(-1),
-            Action::SourceDown => self.move_git_cursor(1),
-            Action::SourceJumpUp => self.move_git_cursor(-(JUMP_LINES as isize)),
-            Action::SourceJumpDown => self.move_git_cursor(JUMP_LINES as isize),
-            Action::SourceLeft => self.move_git_button(-1),
-            Action::SourceRight => self.move_git_button(1),
+            Action::Up => self.move_git_cursor(-1),
+            Action::Down => self.move_git_cursor(1),
+            Action::JumpUp => self.move_git_cursor(-(JUMP_LINES as isize)),
+            Action::JumpDown => self.move_git_cursor(JUMP_LINES as isize),
+            Action::Left => self.move_git_button(-1),
+            Action::Right => self.move_git_button(1),
             Action::SourceEnter => self.activate_git(),
             Action::SourceOpen => self.open_from_git(),
-            Action::SourceRefresh => {
+            Action::Refresh => {
                 self.refresh_git();
                 self.status = "asked git again".into();
             }
-            Action::SourcePageUp => self.page_git_diff(-1),
-            Action::SourcePageDown => self.page_git_diff(1),
-            Action::SourceNarrower => self.resize_tree_pane(-1),
-            Action::SourceWider => self.resize_tree_pane(1),
-            Action::SourceClose => self.show_window(Window::Main),
+            Action::PageUp => self.page_git_diff(-1),
+            Action::PageDown => self.page_git_diff(1),
+            Action::Narrower => self.resize_tree_pane(-1),
+            Action::Wider => self.resize_tree_pane(1),
+            Action::Back => self.show_window(Window::Main),
             _ => {}
         }
     }
@@ -224,11 +224,19 @@ impl App {
     /// handles its own navigation; only opening a file and closing the map
     /// need application state.
     fn on_map_key(&mut self, key: KeyEvent) {
+        // The global chords work here too, and so does the bare `/` that
+        // opens the bar: the map's filter is the bar, drawn where it always
+        // is. Checked before the map's own keys, like everywhere else.
+        if let Some(action) = self.keymap.find(KeyContext::Global, &key)
+            && self.on_global_action(action)
+        {
+            return;
+        }
         // Resolved here rather than inside the view: the map does not need to
         // know how a key becomes an action, only which one it was.
         let action = self.keymap.find(KeyContext::Map, &key);
         let intent = match self.project_map.as_mut() {
-            Some(view) => view.on_key(key, action),
+            Some(view) => view.on_key(action),
             None => return,
         };
         match intent {
@@ -306,22 +314,21 @@ impl App {
         match action {
             Action::Save => self.save_from_tree(),
             Action::TreeQuit => self.request_quit(),
-            Action::TreeBar => self.open_bar(false),
-            Action::TreeUp => self.move_selection(-1),
-            Action::TreeDown => self.move_selection(1),
-            Action::TreeFirst => self.select_index(0),
-            Action::TreeLast => self.select_index(usize::MAX),
-            Action::TreeJumpUp => self.move_selection(-(JUMP_LINES as isize)),
-            Action::TreeJumpDown => self.move_selection(JUMP_LINES as isize),
-            Action::TreePageUp => self.move_selection(-page),
-            Action::TreePageDown => self.move_selection(page),
+            Action::Up => self.move_selection(-1),
+            Action::Down => self.move_selection(1),
+            Action::First => self.select_index(0),
+            Action::Last => self.select_index(usize::MAX),
+            Action::JumpUp => self.move_selection(-(JUMP_LINES as isize)),
+            Action::JumpDown => self.move_selection(JUMP_LINES as isize),
+            Action::PageUp => self.move_selection(-page),
+            Action::PageDown => self.move_selection(page),
             Action::TreeOpen => self.toggle_or_open(),
-            Action::TreeInto => self.activate(),
-            Action::TreeOut => self.collapse_or_parent(),
+            Action::Right => self.activate(),
+            Action::Left => self.collapse_or_parent(),
             Action::TreePreview => self.focus_editor(),
             Action::TreeHidden => self.toggle_hidden(),
-            Action::TreeNarrower => self.resize_tree_pane(-1),
-            Action::TreeWider => self.resize_tree_pane(1),
+            Action::Narrower => self.resize_tree_pane(-1),
+            Action::Wider => self.resize_tree_pane(1),
             _ => {}
         }
     }
@@ -343,12 +350,19 @@ impl App {
         // never be swallowed as text input. Everything global reaches here,
         // which is the point of the chords: `Ctrl+N` makes a file from inside
         // the editor, where a bare `n` is the letter n and always will be.
-        match self.keymap.resolve(KeyContext::Editor, &key) {
+        // A buffer is being typed into; a picture or a folder listing is not,
+        // and in front of one a bare `/` should still open the bar.
+        let resolved = if matches!(self.preview, Preview::Buffer { .. }) {
+            self.keymap.resolve_while_typing(KeyContext::Editor, &key)
+        } else {
+            self.keymap.resolve(KeyContext::Editor, &key)
+        };
+        match resolved {
             Some(Action::Save) => return self.save_active(),
             // "Back to the tree" means the tree, even when it is folded away,
             // so it brings the pane back rather than handing the keyboard to
             // something that is not on screen.
-            Some(Action::EditorBack) => {
+            Some(Action::Back) => {
                 self.focus_tree();
                 self.status = "back to tree".into();
                 return;
@@ -389,13 +403,12 @@ impl App {
             return;
         };
         match action {
-            Action::ViewUp => self.preview_scroll = self.preview_scroll.saturating_sub(1),
-            Action::ViewDown => self.preview_scroll = (self.preview_scroll + 1).min(max),
-            Action::ViewTop => self.preview_scroll = 0,
-            Action::ViewBottom => self.preview_scroll = max,
-            Action::ViewPageUp => self.preview_scroll = self.preview_scroll.saturating_sub(page),
-            Action::ViewPageDown => self.preview_scroll = (self.preview_scroll + page).min(max),
-            Action::ViewBar => self.open_bar(false),
+            Action::Up => self.preview_scroll = self.preview_scroll.saturating_sub(1),
+            Action::Down => self.preview_scroll = (self.preview_scroll + 1).min(max),
+            Action::First => self.preview_scroll = 0,
+            Action::Last => self.preview_scroll = max,
+            Action::PageUp => self.preview_scroll = self.preview_scroll.saturating_sub(page),
+            Action::PageDown => self.preview_scroll = (self.preview_scroll + page).min(max),
             _ => {}
         }
     }

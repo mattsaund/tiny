@@ -144,6 +144,14 @@ pub struct Graph {
 
 /// Build settings, derived from the live config by `App::graph_options` so a
 /// `:set` is reflected the next time the graph is opened.
+/// How many files may define a name before a call to it links to nothing.
+///
+/// Three. It was a setting, and a setting is a question — this one asked the
+/// reader to tune a heuristic they cannot see the workings of, and every
+/// answer but a small number makes the map worse. A name defined in four
+/// places is not evidence about any of them.
+pub const MAX_AMBIGUITY: usize = 3;
+
 #[derive(Debug, Clone)]
 pub struct Options {
     /// Directory names never walked into. Shared with search.
@@ -167,7 +175,7 @@ impl Default for Options {
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
-            max_ambiguity: 3,
+            max_ambiguity: MAX_AMBIGUITY,
         }
     }
 }

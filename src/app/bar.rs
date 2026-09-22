@@ -27,7 +27,7 @@ use crate::config::Config;
 use crate::text::search::{self, Hit, HitKind};
 
 use super::App;
-use super::mode::{Bar, COMMAND_SIGIL, Focus, Mode};
+use super::mode::{Bar, COMMAND_SIGIL, Focus, Mode, Window};
 use super::parts::{char_byte, display_name, safe_join, split_args};
 use super::preview::Preview;
 
@@ -190,12 +190,36 @@ impl App {
             (Preview::Buffer { path, .. }, Focus::Editor) => Some(path.clone()),
             _ => None,
         };
+        // Over the map the bar is the map's filter, and opening it starts a
+        // new one: the last filter is not something to carry into this search
+        // without being asked for again.
+        let filtering = !as_command && self.window == Window::Map;
+        if filtering {
+            self.filter_map("");
+        }
         self.mode = Mode::Bar(Bar::new(input, home));
         self.status = if as_command {
             "command — Tab completes | Enter runs | Esc closes".into()
+        } else if filtering {
+            "filter the map — Enter keeps it | Esc clears it".into()
         } else {
             format!("search — or {COMMAND_SIGIL} for a command, like {COMMAND_SIGIL}copy a to b")
         };
+    }
+
+    /// Narrow the map to what has been typed, and say what is left of it.
+    ///
+    /// The map's half of the bar. Filtering the map and searching the project
+    /// are the same question asked about two pictures of the same files, so
+    /// they are one field in one place; which one the typing reaches is
+    /// decided by the window the bar is drawn over, not by a second key.
+    fn filter_map(&mut self, query: &str) {
+        let Some(view) = self.project_map.as_mut() else {
+            return;
+        };
+        view.set_filter(query);
+        let summary = view.summary();
+        self.status = format!("project map — {summary}");
     }
 
     /// Keys for the search and command bar.
@@ -224,12 +248,22 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => {
-                self.status = "closed".into();
+                // Putting the bar away over the map puts its filter away too,
+                // so what you come back to is the whole map.
+                if self.filtering_map(&b) {
+                    self.filter_map("");
+                } else {
+                    self.status = "closed".into();
+                }
                 return;
             }
             KeyCode::Enter => {
                 if b.is_command() {
                     self.run_command(b.command());
+                } else if self.filtering_map(&b) {
+                    // The filter stays and the keyboard goes back to the map,
+                    // which is what Enter meant when the map had its own box.
+                    self.filter_map(&b.input);
                 } else if let Some(hit) = b.results.get(b.selected).cloned() {
                     self.jump_to(&hit);
                     self.status = display_name(&hit.path);
@@ -305,11 +339,19 @@ impl App {
             b.results.clear();
             b.searched = false;
             b.selected = 0;
+        } else if self.window == Window::Map {
+            self.filter_map(&b.input);
         } else {
             self.run_search(&mut b);
             self.preview_hit(&b);
         }
         self.mode = Mode::Bar(b);
+    }
+
+    /// Whether what is being typed is narrowing the map rather than searching
+    /// the project. A command is neither, whatever window it was typed in.
+    fn filtering_map(&self, b: &Bar) -> bool {
+        self.window == Window::Map && !b.is_command()
     }
 
     /// The query the bar is currently searching for, if it is searching.

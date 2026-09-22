@@ -23,6 +23,18 @@ pub struct Key {
 }
 
 impl Key {
+    /// Whether this key is a character someone could be typing.
+    ///
+    /// Shift counts as typing: `I` is a capital I, not a chord. Ctrl and Alt
+    /// do not, which is what makes them safe to bind globally — see
+    /// [`Keymap::resolve_while_typing`](super::keys::Keymap::resolve_while_typing).
+    pub fn is_typing(&self) -> bool {
+        matches!(self.code, KeyCode::Char(_))
+            && !self
+                .mods
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    }
+
     /// Read a key out of a config file or a keybinds window: `ctrl+s`,
     /// `shift+up`, `f5`, `enter`, `.`, `?`.
     ///

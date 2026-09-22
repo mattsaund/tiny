@@ -68,6 +68,14 @@ pub struct Hit {
     pub text: String,
 }
 
+/// Hits one search will collect before it stops looking.
+///
+/// Five hundred is far more than anyone reads and little enough to gather
+/// between keystrokes. It was a setting; nobody wants to be asked how much of
+/// their own project to search, and the two answers that differ from this one
+/// are "slower" and "less".
+pub const MAX_RESULTS: usize = 500;
+
 /// Traversal limits, built from the live config by `App::search_opts` so
 /// `:set search_ignore ...` takes effect on the next keystroke.
 #[derive(Debug, Clone)]
@@ -86,7 +94,7 @@ pub struct Opts {
 impl Default for Opts {
     fn default() -> Self {
         Self {
-            max_results: 500,
+            max_results: MAX_RESULTS,
             ignore: [".git", "target", "node_modules", ".venv", "__pycache__"]
                 .iter()
                 .map(|s| s.to_string())

@@ -1,12 +1,13 @@
 //! The filesystem, as tiny sees it.
 //!
-//! Three separate questions about things on disk:
+//! Four separate questions about things on disk:
 //!
 //! - [`project`] — what `tiny <thing>` meant, answered once at startup.
 //! - [`tree`] — the directory model the left pane walks, loaded lazily and
 //!   refreshed on demand rather than watched.
 //! - [`media`] — what a picture or a video is, and how to hand it to the
 //!   desktop's own viewer.
+//! - [`size`] — how much disk one of them takes, for the status line.
 //!
 //! Nothing here writes to disk except [`project`], and only on the one path
 //! where it creates the folder you asked for. File operations the user
@@ -16,4 +17,5 @@
 
 pub mod media;
 pub mod project;
+pub mod size;
 pub mod tree;
