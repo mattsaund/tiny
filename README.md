@@ -9,6 +9,8 @@ nothing is stored anywhere you cannot open with something else. It reads your
 project, edits it, searches it, draws the links between its files, and does
 your git — in one window, from the keyboard, in about 7 MB.
 
+see it here: https://msaunders.dev/tiny/
+
 ## Install
 
 **One liner** (Linux, macOS):
