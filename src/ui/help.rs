@@ -92,7 +92,7 @@ const KEYS: &[KeyRow] = &[
     Bound(&[Action::Bar], "search — star first, a command"),
     Bound(&[Action::Help], "this window"),
     Blank,
-    Heading("WINDOWS — CTRL AND A NUMBER"),
+    Heading("WINDOWS"),
     Bound(&[Action::WindowMain], "the browser and the file"),
     Bound(&[Action::WindowSource], "git: what has changed"),
     Bound(&[Action::WindowMap], "the project map"),

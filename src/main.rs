@@ -67,6 +67,7 @@ use crossterm::event::{
 use crossterm::execute;
 
 use app::App;
+use config::keys::Keyboard;
 use config::{CONF_NAME, Config};
 
 /// `--help` output. Kept here as one literal rather than assembled from an
@@ -311,9 +312,18 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             return Ok(());
         }
         // After the first frame, once, and held for the rest of the run — see
-        // [`RealChords`] for both halves of why.
+        // [`RealChords`] for both halves of why. What comes back decides which
+        // keyboard tiny has: a terminal that cannot send `Ctrl` with a digit
+        // gets the function keys instead, rather than three bindings that
+        // arrive as other keys.
         if chords.is_none() {
-            chords = Some(RealChords::ask());
+            let asked = RealChords::ask();
+            app.set_keyboard(if asked.0 {
+                Keyboard::Full
+            } else {
+                Keyboard::Legacy
+            });
+            chords = Some(asked);
         }
         loop {
             if !event::poll(IDLE)? {

@@ -13,6 +13,15 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Nothing here writes anything back; only the release workflow needs to.
+permissions:
+  contents: read
+
+# A second push while the first is still building makes the first answer moot.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -27,7 +36,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install the toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -44,10 +53,49 @@ jobs:
           git config --global user.email ci@example.com
           git config --global user.name CI
 
+      # `--locked` everywhere: without it cargo quietly re-resolves, so a
+      # Cargo.lock that has fallen behind Cargo.toml passes every check here
+      # and then fails the tagged release build, which is the one build that
+      # cannot simply be run again.
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --all-targets
-      - run: cargo build --release
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+      - run: cargo build --locked --release
+
+      # The docs are half this codebase and they can break: an intra-doc link
+      # to something that has been renamed is a warning, and warnings are easy
+      # to walk past locally. Not on the matrix by accident — some items are
+      # behind `cfg(windows)`, and their links only resolve where they compile.
+      - name: Check the documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps --document-private-items
+
+  # `rust-version` in Cargo.toml is a promise, and `install.sh` will build with
+  # whatever `cargo` it finds — including the older one a distribution ships.
+  # This is the job that keeps the promise true.
+  msrv:
+    name: build on the oldest Rust we claim
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Read from the manifest rather than written down again here, so the
+      # version cannot be raised in one place and not the other.
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: |
+          version=$(grep -m1 '^rust-version' Cargo.toml | tr -d '"[:space:]' | cut -d= -f2)
+          echo "claimed: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo check --locked --all-targets
 
   installers:
     name: parse the installers on ${{ matrix.os }}
@@ -57,7 +105,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Parse install.sh
         if: runner.os != 'Windows'
@@ -107,12 +155,16 @@ jobs:
     if: github.event_name == 'push'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run install.ps1
         shell: powershell
         env:
           TINY_REF: ${{ github.ref_name }}
           TINY_PREFIX: ${{ runner.temp }}\tinybin
+          # Build, do not download. Once a release exists the installer would
+          # rightly prefer it, and this job would quietly stop testing the
+          # commit that was just pushed — which is the whole point of it.
+          TINY_FROM_SOURCE: 1
         run: |
           Set-Location $env:RUNNER_TEMP
           & "$env:GITHUB_WORKSPACE\install.ps1"
@@ -125,12 +177,35 @@ jobs:
     if: github.event_name == 'push'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run install.sh
         env:
           TINY_REF: ${{ github.ref_name }}
           TINY_PREFIX: ${{ runner.temp }}/tinybin
+          # Build rather than download, for the reason above.
+          TINY_FROM_SOURCE: 1
         run: |
           cd "$RUNNER_TEMP"
           sh "$GITHUB_WORKSPACE/install.sh"
           "$TINY_PREFIX/tiny" --version
+
+  # The README leads with screenshots, and a moved file turns them into broken
+  # images on the front page of the project — which is the one page everybody
+  # sees and nobody tests.
+  pictures:
+    name: the README's pictures are there
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Every image the README points at
+        run: |
+          missing=0
+          for image in $(grep -o 'docs/[A-Za-z0-9_-]*\.png' README.md | sort -u); do
+            if [ -f "$image" ]; then
+              echo "ok      $image"
+            else
+              echo "MISSING $image"
+              missing=1
+            fi
+          done
+          exit $missing

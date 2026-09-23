@@ -369,3 +369,56 @@ fn a_command_still_runs_from_over_the_map() {
     );
     assert!(joined(&mut app).contains("fromthemap.md") || app.window == Window::Main);
 }
+
+// ---- the keyboard this terminal actually has -------------------------------
+
+#[test]
+fn a_terminal_that_cannot_send_ctrl_and_a_digit_gets_the_function_keys() {
+    let (_td, mut app) = fixture();
+    // What `main` does once the terminal has answered.
+    app.set_keyboard(Keyboard::Legacy);
+
+    app.on_key(k(KeyCode::F(4)));
+    assert_eq!(app.window, Window::Map, "F4 reaches the map here");
+
+    app.on_key(ctrl('1'));
+    assert_eq!(
+        app.window,
+        Window::Map,
+        "and the chord is not bound at all — on this terminal it is not a \
+         chord, it is a bare 1"
+    );
+
+    app.on_key(k(KeyCode::F(2)));
+    assert_eq!(app.window, Window::Main, "F2 comes back");
+}
+
+#[test]
+fn the_hint_names_the_key_this_terminal_actually_has() {
+    let (_td, mut app) = fixture();
+    let bar = screen(&mut app, 96, 14).pop().expect("a status line");
+    assert!(bar.contains("Ctrl+3 map"), "a whole keyboard:\n{bar}");
+
+    app.set_keyboard(Keyboard::Legacy);
+    let bar = screen(&mut app, 96, 14).pop().expect("a status line");
+    assert!(bar.contains("F4 map"), "and a legacy one:\n{bar}");
+    assert!(
+        !bar.contains("Ctrl+3"),
+        "which never names a key that would quit:\n{bar}"
+    );
+}
+
+#[test]
+fn a_rebinding_survives_the_terminal_being_asked() {
+    let (_td, mut app) = fixture();
+    app.config.keys.insert("window_map".into(), "ctrl+g".into());
+    app.apply_config();
+    app.set_keyboard(Keyboard::Legacy);
+
+    app.on_key(ctrl('g'));
+    assert_eq!(
+        app.window,
+        Window::Map,
+        "what the user asked for still wins"
+    );
+}

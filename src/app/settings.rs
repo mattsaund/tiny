@@ -12,7 +12,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::config::keys::{Action, Keymap};
+use crate::config::keys::{Action, Keyboard, Keymap};
 use crate::config::{Config, Palette};
 
 use super::App;
@@ -31,9 +31,29 @@ impl App {
     /// the config struct without reaching the screen. Rebuilds the palette and
     /// keymap, swaps the syntax theme, and re-reads the tree if dotfile
     /// visibility changed.
+    /// Take on what the terminal turned out to be able to send.
+    ///
+    /// Called once, from the event loop, after the first frame is on screen
+    /// and before any key has been read — asking costs a round trip to the
+    /// terminal, and doing it earlier would delay the paint. Rebuilds the
+    /// keymap, because which keys the three windows answer to is decided by
+    /// the answer; every binding the user has set in `tiny.conf` still wins,
+    /// since those are laid over the shipped keyboard either way.
+    pub fn set_keyboard(&mut self, keyboard: Keyboard) {
+        if self.keyboard == keyboard {
+            return;
+        }
+        self.keyboard = keyboard;
+        let (keymap, warning) = Keymap::new(&self.config.keys, keyboard);
+        self.keymap = keymap;
+        if let Some(w) = warning {
+            self.status = w;
+        }
+    }
+
     pub(super) fn apply_config(&mut self) {
         self.palette = Palette::from_theme(&self.config.theme);
-        let (keymap, warning) = Keymap::new(&self.config.keys);
+        let (keymap, warning) = Keymap::new(&self.config.keys, self.keyboard);
         self.keymap = keymap;
         if let Some(w) = warning {
             self.status = w;
@@ -231,7 +251,8 @@ impl App {
                     let action = actions[kb.selected - KEYBIND_BUTTONS.len()];
                     self.config.keys.remove(action.name());
                     self.apply_config();
-                    self.status = format!("{} back to {}", action.name(), action.defaults());
+                    let shipped = self.keymap.shipped(action);
+                    self.status = format!("{} back to {}", action.name(), shipped);
                 }
             }
             KeyCode::Enter => {
@@ -288,7 +309,7 @@ impl App {
     /// back to the shipped keys — so the config file only ever holds what has
     /// actually been changed.
     fn set_binding(&mut self, action: Action, spec: &str) {
-        if spec == action.defaults() {
+        if spec == self.keymap.shipped(action) {
             self.config.keys.remove(action.name());
         } else {
             self.config

@@ -63,10 +63,13 @@
 //!
 //! Where that would leave a function unreachable, the key that always arrives
 //! is the one that is bound: dotfiles are the browser's bare `.` rather than
-//! `Ctrl+.`, and the bar keeps `/` in the browser beside `Ctrl+/`. That last
-//! one is the single deliberate repeat in the table, and it is here because
-//! searching from inside a file needs the chord while searching at all needs
-//! the letter.
+//! `Ctrl+.`, and the bar keeps `/` beside `Ctrl+/`. A control that cannot be
+//! reached on a common terminal is not a control.
+//!
+//! The window switcher takes that further, because `Ctrl` with a digit is not
+//! merely lost — it becomes another key. Rather than binding both and hoping,
+//! tiny asks the terminal what it can send and ships a different keyboard
+//! accordingly: see [`Keyboard`] and [`LEGACY_KEYS`].
 //!
 //! A key can also fail to arrive because something above the terminal answered
 //! it first. `Ctrl+Shift` with an arrow starts a selection in a good many
@@ -93,10 +96,18 @@
 //! What a number costs: `Ctrl` with a digit is not in the legacy encoding
 //! either. `Ctrl+1` sends nothing at all, `Ctrl+2` arrives as `Ctrl+Space` and
 //! `Ctrl+3` as `Esc`. On a terminal that speaks the disambiguating keyboard
-//! protocol all three arrive properly; on one that does not — macOS Terminal,
-//! Konsole, an old VTE — `Ctrl+2` will fold the browser and `Ctrl+3` will act
-//! as Escape. There is no encoding trick that avoids this; a terminal that
-//! cannot say which key was pressed cannot be made to.
+//! protocol all three arrive properly; on one that does not — GNOME Terminal,
+//! macOS Terminal, Konsole — `Ctrl+2` folds the browser and `Ctrl+3` is read
+//! as Escape, which from the browser *quits*. No encoding trick avoids that: a
+//! terminal that cannot say which key was pressed cannot be made to.
+//!
+//! So the keyboard is not fixed. `main` asks the terminal whether it speaks
+//! the disambiguating protocol before the first key is read, and tiny binds
+//! `Ctrl+1` `Ctrl+2` `Ctrl+3` where the answer is yes and `F2` `F3` `F4` —
+//! a row under the `F1` that opens the keys — where it is no. One keyboard or
+//! the other, never both: a key listed in the keybinds window is a key that
+//! works, and the status line names whichever one this terminal has. See
+//! [`Keyboard`].
 //!
 //! # No Alt at all
 //!
@@ -167,6 +178,54 @@ impl Context {
             Context::Map => "PROJECT MAP",
             Context::Source => "SOURCE CONTROL",
         }
+    }
+}
+
+/// What the terminal turned out to be able to send.
+///
+/// Not every terminal can deliver every chord, and the ones that cannot do not
+/// fail quietly — see [`LEGACY_KEYS`]. tiny asks at startup and builds the
+/// keyboard around the answer, so what the keybinds window lists is what the
+/// keys in front of you actually do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Keyboard {
+    /// The terminal speaks the disambiguating keyboard protocol: every chord
+    /// in [`TABLE`] arrives as itself. kitty, foot, WezTerm, Ghostty.
+    #[default]
+    Full,
+    /// The legacy encoding, where `Ctrl` with a digit or a punctuation mark is
+    /// another key's byte or no byte at all. GNOME Terminal, macOS Terminal,
+    /// Konsole.
+    Legacy,
+}
+
+/// What changes on a terminal that cannot send the whole of [`TABLE`].
+///
+/// Substitutions, not additions, which is the point: on such a terminal
+/// `Ctrl+1` arrives as a bare `1`, `Ctrl+2` as `Ctrl+Space` and `Ctrl+3` as
+/// `Esc`. Those three are not merely unreachable — they are *other keys
+/// wearing the wrong name*, and `Ctrl+3` in the browser would quit. Leaving
+/// them bound would have the keybinds window promise a key that does something
+/// else, so on this keyboard they are not bound at all. The function keys
+/// below reach the same three windows through an encoding every terminal has
+/// sent since the 1980s.
+///
+/// Anything not named here is the same on both keyboards.
+const LEGACY_KEYS: &[(Action, &str)] = &[
+    (Action::WindowMain, "f2"),
+    (Action::WindowSource, "f3"),
+    (Action::WindowMap, "f4"),
+];
+
+impl Keyboard {
+    /// The keys `action` ships with on this keyboard.
+    pub fn defaults(self, action: Action) -> &'static str {
+        if self == Keyboard::Legacy
+            && let Some((_, keys)) = LEGACY_KEYS.iter().find(|(a, _)| *a == action)
+        {
+            return keys;
+        }
+        action.defaults()
     }
 }
 
@@ -622,7 +681,12 @@ impl Action {
         self.row().3
     }
 
-    /// The keys this action ships with, as they would be written in the config.
+    /// The keys this action ships with on a terminal that can send all of
+    /// them, as they would be written in the config.
+    ///
+    /// The keyboard someone actually has may differ — see [`Keyboard`] — so
+    /// anything comparing against "the shipped key" wants
+    /// [`Keymap::shipped`], not this.
     pub fn defaults(self) -> &'static str {
         self.row().4
     }
@@ -642,21 +706,25 @@ pub struct Keymap {
     /// One entry per row of [`TABLE`], in the same order, so an action's keys
     /// are found by position rather than by searching for the action again.
     binds: Vec<Vec<Key>>,
+    /// Which shipped keyboard this was built from, so the settings area can
+    /// tell a changed binding from one that was always going to be this.
+    keyboard: Keyboard,
 }
 
 impl Default for Keymap {
     fn default() -> Self {
-        Self::new(&BTreeMap::new()).0
+        Self::new(&BTreeMap::new(), Keyboard::default()).0
     }
 }
 
 impl Keymap {
     /// Build the live keymap. Returns anything worth telling the user about a
     /// line in their config that could not be read.
-    pub fn new(overrides: &BTreeMap<String, String>) -> (Self, Option<String>) {
+    pub fn new(overrides: &BTreeMap<String, String>, keyboard: Keyboard) -> (Self, Option<String>) {
         let mut warning = None;
         let mut binds = Vec::with_capacity(TABLE.len());
-        for (_, _, name, _, shipped) in TABLE {
+        for (action, _, name, _, _) in TABLE {
+            let shipped = keyboard.defaults(*action);
             let spec = overrides.get(*name).map(String::as_str).unwrap_or(shipped);
             let mut keys = Vec::new();
             for word in spec.split_whitespace() {
@@ -676,7 +744,16 @@ impl Keymap {
         if let Some(unknown) = overrides.keys().find(|n| Action::from_name(n).is_none()) {
             warning.get_or_insert_with(|| format!("keys: nothing is called `{unknown}`"));
         }
-        (Self { binds }, warning)
+        (Self { binds, keyboard }, warning)
+    }
+
+    /// The keys `action` ships with on the keyboard this map was built for.
+    ///
+    /// What "back to the shipped key" means, and what an override is compared
+    /// against — both of which differ by terminal, so neither can read the
+    /// table directly.
+    pub fn shipped(&self, action: Action) -> &'static str {
+        self.keyboard.defaults(action)
     }
 
     /// What this keypress means in `ctx`, with the global chords checked first
@@ -814,6 +891,81 @@ mod tests {
     }
 
     #[test]
+    fn every_window_is_reachable_on_a_terminal_that_cannot_send_ctrl_and_a_digit() {
+        // The failure this exists to stop: on GNOME Terminal `Ctrl+3` arrives
+        // as Escape, which from the browser quits — so the map was not merely
+        // unreachable there, the key for it closed the program.
+        let legacy = Keymap::new(&BTreeMap::new(), Keyboard::Legacy).0;
+        for action in [Action::WindowMain, Action::WindowSource, Action::WindowMap] {
+            let spec = legacy.spec(action);
+            let sendable = spec.split_whitespace().all(|key| {
+                key.strip_prefix('f')
+                    .is_some_and(|n| n.parse::<u8>().is_ok())
+            });
+            assert!(
+                sendable,
+                "{} is on {spec}, which a legacy terminal cannot send",
+                action.name()
+            );
+        }
+        // And they actually answer.
+        for (key, action) in [
+            (KeyCode::F(2), Action::WindowMain),
+            (KeyCode::F(3), Action::WindowSource),
+            (KeyCode::F(4), Action::WindowMap),
+        ] {
+            assert_eq!(
+                legacy.resolve(Context::Tree, &ev(key, KeyModifiers::NONE)),
+                Some(action)
+            );
+        }
+    }
+
+    #[test]
+    fn one_keyboard_or_the_other_and_never_both() {
+        let full = Keymap::new(&BTreeMap::new(), Keyboard::Full).0;
+        let legacy = Keymap::new(&BTreeMap::new(), Keyboard::Legacy).0;
+        assert_eq!(full.spec(Action::WindowMap), "ctrl+3");
+        assert_eq!(legacy.spec(Action::WindowMap), "f4");
+
+        // A key listed in the keybinds window is a key that works here, so the
+        // one belonging to the other keyboard is not bound at all.
+        let f4 = ev(KeyCode::F(4), KeyModifiers::NONE);
+        let ctrl3 = ev(KeyCode::Char('3'), KeyModifiers::CONTROL);
+        assert_eq!(full.resolve(Context::Tree, &f4), None, "no spare key");
+        assert_eq!(legacy.resolve(Context::Tree, &ctrl3), None, "nor here");
+
+        // Everything else is the same keyboard either way.
+        for action in Action::all().filter(|a| {
+            !matches!(
+                a,
+                Action::WindowMain | Action::WindowSource | Action::WindowMap
+            )
+        }) {
+            assert_eq!(full.spec(action), legacy.spec(action), "{}", action.name());
+        }
+    }
+
+    #[test]
+    fn a_rebinding_wins_on_either_keyboard() {
+        let mut over = BTreeMap::new();
+        over.insert("window_map".to_string(), "ctrl+g".to_string());
+        for keyboard in [Keyboard::Full, Keyboard::Legacy] {
+            let (map, warning) = Keymap::new(&over, keyboard);
+            assert!(warning.is_none());
+            assert_eq!(map.spec(Action::WindowMap), "ctrl+g", "{keyboard:?}");
+            // What it would go back to still depends on the terminal, which is
+            // what `shipped` is for.
+            let shipped = if keyboard == Keyboard::Full {
+                "ctrl+3"
+            } else {
+                "f4"
+            };
+            assert_eq!(map.shipped(Action::WindowMap), shipped);
+        }
+    }
+
+    #[test]
     fn a_key_survives_being_written_down_and_read_back() {
         for spec in [
             "ctrl+s",
@@ -920,7 +1072,7 @@ mod tests {
         // So rebinding it is one line, not four.
         let mut over = BTreeMap::new();
         over.insert("down".to_string(), "n".to_string());
-        let (map, warning) = Keymap::new(&over);
+        let (map, warning) = Keymap::new(&over, Keyboard::default());
         assert!(warning.is_none());
         let n = ev(KeyCode::Char('n'), KeyModifiers::NONE);
         for ctx in [Context::Tree, Context::View, Context::Map, Context::Source] {
@@ -941,7 +1093,7 @@ mod tests {
     fn an_override_replaces_the_shipped_keys_for_that_action_only() {
         let mut over = BTreeMap::new();
         over.insert("down".to_string(), "n".to_string());
-        let (map, warning) = Keymap::new(&over);
+        let (map, warning) = Keymap::new(&over, Keyboard::default());
         assert!(warning.is_none());
         assert_eq!(
             map.resolve(Context::Tree, &ev(KeyCode::Char('n'), KeyModifiers::NONE)),
@@ -959,7 +1111,7 @@ mod tests {
     fn an_action_that_does_not_exist_warns() {
         let mut over = BTreeMap::new();
         over.insert("dowm".to_string(), "n".to_string());
-        let (map, warning) = Keymap::new(&over);
+        let (map, warning) = Keymap::new(&over, Keyboard::default());
         assert!(warning.is_some_and(|w| w.contains("dowm")), "it says so");
         assert_eq!(
             map.spec(Action::Down),
@@ -972,7 +1124,7 @@ mod tests {
     fn a_line_that_is_not_a_key_warns_and_keeps_the_rest() {
         let mut over = BTreeMap::new();
         over.insert("down".to_string(), "wibble k".to_string());
-        let (map, warning) = Keymap::new(&over);
+        let (map, warning) = Keymap::new(&over, Keyboard::default());
         assert!(warning.is_some_and(|w| w.contains("wibble")), "it says so");
         assert_eq!(
             map.resolve(Context::Tree, &ev(KeyCode::Char('k'), KeyModifiers::NONE)),

@@ -15,7 +15,7 @@ pub(super) use super::*;
 pub(super) use crate::app::mode::*;
 pub(super) use crate::app::parts::*;
 pub(super) use crate::app::preview::*;
-pub(super) use crate::config::keys::Action;
+pub(super) use crate::config::keys::{Action, Keyboard};
 pub(super) use crate::config::{Markers, Side};
 pub(super) use crossterm::event::KeyEventKind;
 pub(super) use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

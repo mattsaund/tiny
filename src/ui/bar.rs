@@ -19,6 +19,7 @@ use unicode_width::UnicodeWidthStr;
 use super::parts::split_at_char;
 
 use crate::app::{App, Focus, GitFocus, Mode, Window};
+use crate::config::keys::Action;
 use crate::files::size;
 
 /// The search (`/`) or command (`:`) line.
@@ -123,16 +124,25 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 f.render_widget(Paragraph::new(line).style(pal.text), area);
                 return;
             }
-            let hints = match (&app.mode, app.focus) {
-                (Mode::Settings(_), _) => "up/down pick | Enter change | Ctrl+S write | Esc close",
-                (Mode::Bar(_), _) => "Esc close",
-                // The chords, not the bare letters: they are the ones that
-                // work from either pane, so a hint that names them is true
-                // wherever it is read. Written out in full rather than as
-                // `^S` — this line is the first place most people meet these
-                // keys, and a caret is a thing you have to already know.
-                (_, Focus::Tree) => "Ctrl+/ search | Ctrl+P command | Ctrl+3 map",
-                (_, Focus::Editor) => "Ctrl+S save | Ctrl+Z undo | Ctrl+K cut | Esc back",
+            let hints: String = match (&app.mode, app.focus) {
+                (Mode::Settings(_), _) => {
+                    "up/down pick | Enter change | Ctrl+S write | Esc close".into()
+                }
+                (Mode::Bar(_), _) => "Esc close".into(),
+                // Written out in full rather than as `^S` — this line is the
+                // first place most people meet these keys, and a caret is a
+                // thing you have to already know.
+                //
+                // The map's key is read from the live keymap rather than
+                // written down here, because it is not the same key on every
+                // terminal: `Ctrl+3` where that arrives, `F4` where it would
+                // arrive as Escape instead. A hint has to name the one that
+                // will actually work.
+                (_, Focus::Tree) => format!(
+                    "/ search | Ctrl+P command | {} map",
+                    key_name(app, Action::WindowMap)
+                ),
+                (_, Focus::Editor) => "Ctrl+S save | Ctrl+Z undo | Ctrl+K cut | Esc back".into(),
             };
             let pos = position_readout(app);
             let room = area.width as usize;
@@ -153,6 +163,26 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         }
     };
     f.render_widget(Paragraph::new(line).style(app.palette.text), area);
+}
+
+/// The first key bound to an action, written the way someone would say it.
+///
+/// Read from the live keymap, so a hint names what will actually work — after
+/// a rebinding, and on a terminal that was given a different keyboard.
+fn key_name(app: &App, action: Action) -> String {
+    let spec = app.keymap.spec(action);
+    let first = spec.split_whitespace().next().unwrap_or_default();
+    first
+        .split('+')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 /// The right-hand end of the status line: how much disk the thing under the

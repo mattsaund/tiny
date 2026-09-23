@@ -132,7 +132,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 
-use crate::config::keys::Keymap;
+use crate::config::keys::{Keyboard, Keymap};
 use crate::config::{Config, Markers, Palette};
 use crate::files::project;
 use crate::files::size::Size;
@@ -184,6 +184,10 @@ pub struct App {
     /// [`App::apply_config`], so a rebinding takes effect on the next
     /// keypress without a restart.
     pub keymap: Keymap,
+    /// What this terminal turned out to be able to send, which decides which
+    /// keyboard the program has. Assumed whole until `main` has asked — see
+    /// [`App::set_keyboard`].
+    pub keyboard: Keyboard,
     /// Parsed styles. Rebuilt from `config.theme` by [`App::apply_config`], so
     /// a theme change repaints without a restart.
     pub palette: Palette,
@@ -248,7 +252,8 @@ impl App {
             return Err(anyhow!("{} is not a directory", root.display()));
         }
         let (highlighter, theme_warning) = Highlighter::with_theme(&config.syntax_theme);
-        let (keymap, keys_warning) = Keymap::new(&config.keys);
+        let keyboard = Keyboard::default();
+        let (keymap, keys_warning) = Keymap::new(&config.keys, keyboard);
         let tree = Tree::new(root, config.show_hidden);
         let rows = tree.flatten();
         let palette = Palette::from_theme(&config.theme);
@@ -273,6 +278,7 @@ impl App {
             buffers: HashMap::new(),
             config,
             keymap,
+            keyboard,
             palette,
             highlighter,
             highlight_cache: Resume::default(),
