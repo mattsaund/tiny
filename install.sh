@@ -8,6 +8,10 @@
 # not run here, or this is run from inside a checkout, does it build from
 # source — fetching the source itself when piped from the web.
 #
+# Then it offers what tiny reaches for while it runs — git for the git window,
+# ffmpeg for video and audio details, xdg-utils to open files on Linux — with
+# the system's own package manager, in one question. tiny runs without them.
+#
 # Override anything with the environment:
 #   TINY_REPO=...         git URL to clone
 #   TINY_REF=...          branch or tag (default: main); a version tag like
@@ -78,8 +82,130 @@ put_in_place() {
         || { rm -f "$PREFIX/.tiny.new"; return 1; }
 }
 
+# --- the system's package manager ---------------------------------------------
+
+# The package manager this system has, by the name of its command — the
+# distribution's own first, Homebrew last. Nothing when there is none.
+package_manager() {
+    for pm in apt-get dnf pacman zypper apk brew; do
+        if have "$pm"; then
+            echo "$pm"
+            return 0
+        fi
+    done
+}
+
+# Run a command as root: directly when we are, through sudo when we are not.
+# sudo asks for its password on the terminal, which works piped from the web.
+as_root() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    elif have sudo; then
+        sudo "$@"
+    else
+        say "installing needs root, and there is no sudo"
+        return 1
+    fi
+}
+
+# What `$2` is called by the package manager `$1`, where it is not the same
+# word everywhere. `cc` stands for "a C compiler", whatever provides one.
+package_name() {
+    case "$1:$2" in
+        dnf:ffmpeg) echo ffmpeg-free ;;
+        apt-get:cc) echo build-essential ;;
+        pacman:cc) echo base-devel ;;
+        apk:cc) echo build-base ;;
+        *:cc) echo gcc ;;
+        *) echo "$2" ;;
+    esac
+}
+
+# Install packages, by tiny's names for them, with the package manager `$1`.
+install_packages() {
+    pm=$1
+    shift
+    names=""
+    for p in "$@"; do names="$names $(package_name "$pm" "$p")"; done
+    # `$names` is split into words on purpose: one package per word.
+    case "$pm" in
+        apt-get) as_root apt-get update -qq && as_root apt-get install -y $names ;;
+        dnf) as_root dnf install -y $names ;;
+        pacman) as_root pacman -S --needed --noconfirm $names ;;
+        zypper) as_root zypper --non-interactive install $names ;;
+        apk) as_root apk add $names ;;
+        # Homebrew refuses to run as root, and does not need to.
+        brew) brew install $names ;;
+        *) return 1 ;;
+    esac
+}
+
+# --- what tiny reaches for while it runs ----------------------------------------
+#
+# tiny runs on its own. Three programs make parts of it work, and those that
+# are missing are offered together, in one question:
+#
+#   git        the git window
+#   ffprobe    the size and length of a video or a song (part of ffmpeg)
+#   xdg-open   handing a picture or a PDF to the desktop (Linux)
+#
+# A no, or no way to install them, leaves tiny working without them. Not asked
+# again when tiny is updating itself: that was answered when it was installed.
+offer_extras() {
+    [ -z "${TINY_UPDATE:-}" ] || return 0
+    nl='
+'
+    missing=""
+    why=""
+    if [ "$(uname -s)" = Darwin ]; then
+        # The git a fresh Mac has is a stand-in that asks for Apple's command
+        # line tools, so their presence is the question to ask.
+        if ! xcode-select -p >/dev/null 2>&1 && ! [ -x /opt/homebrew/bin/git ] \
+            && ! [ -x /usr/local/bin/git ]; then
+            say ""
+            say "The git window needs git, which comes with Apple's command line"
+            say "tools. Install them now?"
+            if ask; then
+                xcode-select --install >/dev/null 2>&1 || true
+                say "finish in the window that opened; tiny works meanwhile"
+            fi
+        fi
+    else
+        if ! have git; then
+            missing="$missing git"
+            why="$why${nl}  git        the git window"
+        fi
+        if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && ! have xdg-open; then
+            missing="$missing xdg-utils"
+            why="$why${nl}  xdg-utils  opening pictures and PDFs"
+        fi
+    fi
+    if ! have ffprobe; then
+        missing="$missing ffmpeg"
+        why="$why${nl}  ffmpeg     the size and length of videos and songs"
+    fi
+    [ -n "$missing" ] || return 0
+
+    say ""
+    say "tiny can also use these, which are not installed:$why"
+    pm=$(package_manager)
+    if [ -z "$pm" ]; then
+        say "install them to turn those on — tiny works without them"
+        return 0
+    fi
+    say "Install them with $pm?"
+    if ! ask; then
+        say "skipped — tiny works without them"
+        return 0
+    fi
+    # `$missing` is split into words on purpose: one package per word.
+    install_packages "$pm" $missing \
+        || say "not all of them installed — tiny works without them"
+}
+
 # What to say once there is a binary, from either route to one.
 finish() {
+    offer_extras
     say ""
     say "installed $PREFIX/tiny"
     case ":$PATH:" in
@@ -187,6 +313,18 @@ if [ "$(uname -s)" = Darwin ] \
     ask || die "the command line tools are needed to build: xcode-select --install"
     xcode-select --install >/dev/null 2>&1 || true
     die "finish installing the command line tools in the window that opened, then run this again"
+fi
+
+# Linux links with its C compiler too, and tiny compiles a little C of its
+# own — the map's parsers, and Lua for plugins. A minimal system often has
+# none, and the build would fail at the first crate that needs it.
+if [ "$(uname -s)" != Darwin ] && ! { have cc || have gcc || have clang; }; then
+    say "Building tiny needs a C compiler, and this system has none."
+    pm=$(package_manager)
+    [ -n "$pm" ] || die "install gcc (or clang) with your package manager, then run this again"
+    say "Install one with $pm now?"
+    ask || die "a C compiler is needed to build tiny: install gcc, then run this again"
+    install_packages "$pm" cc || die "could not install a C compiler"
 fi
 
 # --- rust -------------------------------------------------------------------

@@ -1,0 +1,12 @@
+# A Windows tiny.exe runs on a machine with nothing else installed: the C
+# runtime is linked into it, rather than expected to be there already as the
+# Visual C++ Redistributable. A fresh Windows does not have that, and the
+# binary would stop at "VCRUNTIME140.dll was not found" before drawing a thing.
+#
+# The C that tiny compiles — the map's parsers, and Lua — follows the same
+# setting, so everything in the binary agrees on which runtime it has.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

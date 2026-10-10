@@ -90,6 +90,7 @@ const KEYS: &[KeyRow] = &[
     Bound(&[Action::Bar], "search · *command"),
     Bound(&[Action::WindowSource], "git"),
     Bound(&[Action::WindowMap], "map"),
+    Bound(&[Action::NewWindow], "new window"),
     Merged(
         &[Action::ToggleTreePane, Action::Narrower, Action::Wider],
         "browser · width",
@@ -216,10 +217,21 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect, pal: &Palette, scr
     // The keys are read out of the live keymap, so a rebinding shows here and
     // not only in the window that made it.
     let keys = key_rows(&app.keymap);
-    let commands: Vec<(String, String)> = COMMANDS
+    let mut commands: Vec<(String, String)> = COMMANDS
         .iter()
         .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
         .collect();
+    // What the plugins added, under the name of the plugin that added each —
+    // they are commands like any other, and this is where commands are found.
+    let added = app.plugins.commands();
+    if !added.is_empty() {
+        commands.push((String::new(), String::new()));
+        commands.push((String::new(), "PLUGINS".to_string()));
+        for name in added {
+            let owner = app.plugins.command_owner(&name).unwrap_or_default();
+            commands.push((format!("*{name}"), owner));
+        }
+    }
     let (keys_field, keys_w) = (field_width(&keys), natural_width(&keys));
     let (cmds_field, cmds_w) = (field_width(&commands), natural_width(&commands));
 

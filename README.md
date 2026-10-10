@@ -1,18 +1,12 @@
 # tiny
 
-Tiny is a personal knowledge management system (PKMS), IDE, and text editor
-that works entirely in the terminal.
-
-Everything tiny manages and edits is non proprietary and not obfuscated: plain
-files in plain folders, on your own disk. Notes are markdown, code is code, and
-nothing is stored anywhere you cannot open with something else.
+A text editor, file browser and notebook that lives in the terminal — like
+nano or micro, with search, git, a project map and plugins built in. Plain
+files in plain folders; nothing proprietary.
 
 Try it here: https://msaunders.dev/tiny/
 
 ![tiny editing its own source](docs/browser.png)
-
-The browser on the left, the file on the right, and one status line that says
-where the cursor is and how big the thing under it is.
 
 ## Install
 
@@ -28,96 +22,97 @@ curl -fsSL https://raw.githubusercontent.com/mattsaund/tiny/main/install.sh | sh
 irm https://raw.githubusercontent.com/mattsaund/tiny/main/install.ps1 | iex
 ```
 
-**From a checkout**
-
-```sh
-git clone https://github.com/mattsaund/tiny.git && cd tiny && sh install.sh
-```
-
-The installer takes the ready-made binary when there is one for your machine,
-and otherwise builds from source — offering Rust, and your system's compiler,
-if they are missing. `tiny --uninstall` removes it again and leaves your notes
-alone.
+Downloads the newest [release](https://github.com/mattsaund/tiny/releases) for
+your machine (or builds it), and offers git and ffmpeg if they are missing.
+tiny tells you when a new version is out — `y` updates it. `tiny --update` does
+the same; `tiny --uninstall` removes tiny and leaves your files alone.
+What changed: [CHANGELOG](CHANGELOG.md).
 
 ## Use
 
 ```sh
-tiny                      # this folder, or the project it sits inside
-tiny ~/notes              # that folder — created empty if missing
-tiny ~/code/main.py       # that one file, in the editor
+tiny                 # this folder
+tiny ~/notes         # that folder, made if it is missing
+tiny ~/code/main.py  # that file
 ```
 
-## One bar finds everything
+## Search everything
 
 ![searching the project](docs/search.png)
 
-`/` opens it. It searches names and contents as you type, marks every hit in
-the file behind it, and `Enter` jumps to the one you picked. Start the line
-with `*` and the same field is the command line.
+`/` searches names and contents as you type. Start with `*` for a command.
 
-## Git without leaving
+## Git
 
 ![the git window](docs/git.png)
 
-What has changed on the left, the file before and after beside it, the branch
-graph underneath. `Enter` stages a file — or a whole section from its header —
-and the `commit` button opens a message box across both columns. It runs the
-`git` already on your machine, so your aliases and credentials work.
+`Ctrl+G`. `Enter` stages, `commit` commits — with the git you already have.
 
-## A map of the project
+## Project map
 
 ![the project map](docs/map.png)
 
-Every file, grouped by folder, with lines to whatever the file under the cursor
-is joined to: green for the files that reach it, red for the ones it reaches.
-The links are wikilinks, markdown links, and one file calling a function
-another defines.
+`Ctrl+L`. Wikilinks, markdown links and calls between files: green reaches
+this file, red is what it reaches.
 
-## Notes are markdown
+## Notes, pictures, PDFs
 
 ![markdown, rendered](docs/markdown.png)
 
-Headings, lists, tables and code render as you read them. `Enter` drops into
-the raw text to edit, `Ctrl+S` saves.
+Markdown renders as you read it; `Enter` edits. Pictures, video, audio and PDFs
+open in your own viewer.
 
 ## Keys
 
-`F1` lists every key, read from your own keymap.
+`?` shows every key.
 
 | key | does |
 |---|---|
-| arrows — or `i` `j` `k` `l` | move |
-| `Enter` | open or close a folder, or edit a file |
-| `Tab` | hand the keyboard to the file |
-| `Esc` | back — and from the browser, quit |
-| `Ctrl+S` | save — on a folder, everything unsaved in it |
-| `/` | the bar: search, or `*` for a command |
-| `Ctrl+1` `Ctrl+2` `Ctrl+3` | browser · git · map |
+| arrows, `i` `j` `k` `l` | move |
+| `Enter` · `Esc` | open · back |
+| `Ctrl+S` | save — on a folder, all of it |
+| `/` · `Ctrl+F` | search |
+| `Ctrl+G` · `Ctrl+L` | git · map |
+| `Ctrl+T` · `<` `>` | hide the browser · its width |
+| `Ctrl+N` | another tiny window |
+| `Ctrl+Q` | quit |
 
-Commands go in the same bar, after a `*`:
+## Commands
 
 ```
-*new [file.txt]        *rename [old] to [new]     *delete [path]
-*mkdir [folder]        *copy [file] to [folder]   *replace [old] [new]
-*line [42]             *set [setting] to [value]  *config
+*new [file]       *rename [old] to [new]   *delete [path]   *line [42]
+*mkdir [folder]   *copy [from] to [to]     *replace [old] [new]
+*commit [message] *set [setting] [value]   *config   *reload   *update
 ```
+
+## Plugins
+
+A plugin is a Lua file in the plugins folder — settings, `Plugins` opens it.
+Drop one in and `*reload`.
+
+```lua
+-- words.lua: *words counts them
+tiny.command("words", function()
+  local n = 0
+  for _ in tiny.text():gmatch("%S+") do n = n + 1 end
+  tiny.status(n .. " words")
+end)
+```
+
+`tiny.command` `tiny.on("open"/"save")` `tiny.status` `tiny.text`
+`tiny.set_text` `tiny.insert` `tiny.cursor` `tiny.go` `tiny.path` `tiny.root`
+`tiny.open`
 
 ## Config
 
-`*config` opens the settings area and `*set` changes one from anywhere; both
-write `tiny.conf` — `~/.config/tiny/tiny.conf`, or `%APPDATA%\tiny\tiny.conf`
-on Windows. Keys live in a `[keys]` section by action name:
+`*config` opens the settings; `tiny --config` prints where `tiny.conf` is.
+Keys go in `[keys]`:
 
 ```toml
 [keys]
-down        = "z"          # one key
-up          = "up i w"     # or several, space separated
+down        = "z"
 editor.undo = "ctrl+u"
 ```
-
-A name with no prefix is one key doing one job wherever it applies — `down` is
-down in the browser, in a note, on the map and in the change list. A prefix
-means the key belongs to that pane alone.
 
 ## Contributing
 
@@ -129,17 +124,15 @@ to follow specific guidelines:
 3. Contributors MUST look at and document code and code changes. You need to
    understand the code that is being written.
 
-**Tests.** `cargo test` renders real frames through ratatui's test backend, so
-navigation, editing, search, git and the settings area are covered without a
-terminal. `cargo clippy` should be quiet and `cargo fmt` clean before a pull
-request; CI checks all three, on Linux, macOS and Windows.
+**Tests.** `cargo test`, `cargo clippy` and `cargo fmt` — CI runs all three on
+Linux, macOS and Windows. A version is released by tagging it; see
+`.github/workflows/release.yml`.
 
 ## License and credits
 
 Created by Matthew Saunders — https://msaunders.dev
 
-MIT. See [LICENSE](LICENSE). `tiny --licenses` prints the whole picture: tiny's
-own terms, every crate compiled into the binary — all permissive, none
-copyleft — and the syntax definitions, which come from the
-[bat](https://github.com/sharkdp/bat) project by way of
+MIT. See [LICENSE](LICENSE). `tiny --licenses` lists every crate compiled in —
+all permissive — and the syntax definitions, from
+[bat](https://github.com/sharkdp/bat) via
 [two-face](https://codeberg.org/CosmicHarper/two-face).

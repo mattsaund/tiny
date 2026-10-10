@@ -47,8 +47,13 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     // end of the line: in the middle of one it would read as text that is
     // already there rather than as an offer.
     let ghost = if command && b.cursor == b.input.chars().count() {
-        crate::app::completion_for(b, app.tree.root_path(), app.config.show_hidden)
-            .unwrap_or_default()
+        crate::app::completion_for(
+            b,
+            app.tree.root_path(),
+            app.config.show_hidden,
+            &app.plugins.commands(),
+        )
+        .unwrap_or_default()
     } else {
         String::new()
     };

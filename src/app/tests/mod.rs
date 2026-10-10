@@ -31,6 +31,7 @@ mod fileops;
 mod layout;
 mod map;
 mod navigation;
+mod plugins;
 mod preview;
 mod scrolling;
 mod search;
@@ -299,6 +300,29 @@ pub(super) fn select(app: &mut App, name: &str) {
         });
     app.selected = i;
     app.sync_preview();
+}
+
+/// Move a freshly opened settings area's cursor onto the setting `name`,
+/// past however many buttons sit above the settings.
+pub(super) fn settings_on(app: &mut App, name: &str) {
+    let index = Config::settings_index()
+        .iter()
+        .position(|(k, _)| *k == name)
+        .unwrap_or_else(|| panic!("no setting called {name}"));
+    for _ in 0..BUTTONS.len() + index {
+        app.on_key(k(KeyCode::Down));
+    }
+}
+
+/// Move a freshly opened settings area's cursor onto the button `label`.
+pub(super) fn settings_button(app: &mut App, label: &str) {
+    let row = BUTTONS
+        .iter()
+        .position(|b| *b == label)
+        .unwrap_or_else(|| panic!("no button called {label}"));
+    for _ in 0..row {
+        app.on_key(k(KeyCode::Down));
+    }
 }
 
 /// Open the keybinds window with the cursor on `action`.

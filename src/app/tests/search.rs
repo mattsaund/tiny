@@ -235,10 +235,7 @@ fn control_chords_do_not_type_letters_into_the_bar() {
 fn ctrl_s_while_editing_a_setting_does_not_type_an_s_into_it() {
     let (_td, mut app) = fixture();
     settings(&mut app);
-    // Past the two buttons, then to tab_width, second in the index.
-    for _ in 0..3 {
-        app.on_key(k(KeyCode::Down));
-    }
+    settings_on(&mut app, "tab_width");
     app.on_key(k(KeyCode::Enter));
     app.on_key(ctrl('s'));
     let Mode::Settings(s) = &app.mode else {

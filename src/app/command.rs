@@ -89,7 +89,16 @@ impl App {
             }
             "reload" | "refresh" => {
                 self.refresh();
-                Ok(String::new())
+                // The plugins folder is on disk too, and this is how a plugin
+                // just dropped into it starts working.
+                self.load_plugins();
+                let n = self.plugins.loaded.len();
+                Ok(match (n, self.plugins.errors.is_empty()) {
+                    (0, true) => String::new(),
+                    (n, true) => format!("refreshed — {n} plugin{}", plural(n)),
+                    // `load_plugins` has already named the one that failed.
+                    _ => String::new(),
+                })
             }
             "commit" => self.commit(&rest.join(" ")),
             "update" => self.cmd_update(),
@@ -101,7 +110,12 @@ impl App {
             "line" | "go" => self.cmd_line(rest),
             // A bare number is a line number, the way `:42` is everywhere else.
             n if n.parse::<usize>().is_ok() => self.cmd_line(&args),
-            other => Err(anyhow!("unknown command `{other}` — ? lists them")),
+            // Last, so a plugin can add commands but never replace one of
+            // tiny's: `*delete` is always tiny's own delete.
+            other => match self.run_plugin_command(other, rest) {
+                Some(result) => result,
+                None => Err(anyhow!("unknown command `{other}` — ? lists them")),
+            },
         };
         match result {
             Ok(msg) if !msg.is_empty() => self.status = msg,

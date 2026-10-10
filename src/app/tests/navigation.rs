@@ -409,15 +409,47 @@ fn tab_in_the_browser_is_not_a_second_enter() {
 }
 
 #[test]
-fn making_and_renaming_files_are_commands_and_no_longer_keys() {
-    for (key, what) in [(ctrl('n'), "ctrl+n"), (ctrl('r'), "ctrl+r")] {
-        let (_td, mut app) = fixture();
-        editing(&mut app);
-        let before = app.status.clone();
-        app.on_key(key);
-        assert_eq!(app.status, before, "{what} did something");
-        assert!(matches!(app.mode, Mode::Normal), "{what} opened something");
+fn renaming_files_is_a_command_and_no_longer_a_key() {
+    let (_td, mut app) = fixture();
+    editing(&mut app);
+    let before = app.status.clone();
+    app.on_key(ctrl('r'));
+    assert_eq!(app.status, before, "ctrl+r did something");
+    assert!(matches!(app.mode, Mode::Normal), "ctrl+r opened something");
+}
+
+#[test]
+fn ctrl_n_opens_another_tiny_on_this_project_from_anywhere() {
+    let (_td, mut app) = fixture();
+    editing(&mut app);
+    crate::terminal::spawned::take();
+    app.on_key(ctrl('n'));
+    let spawned = crate::terminal::spawned::take();
+    if spawned.is_empty() {
+        // A Linux machine with no desktop and no tmux — a CI runner — has
+        // nowhere to put a window, and says so instead.
+        assert!(app.status.contains("no desktop"), "{}", app.status);
+        return;
     }
+    let (_, args) = &spawned[0];
+    let root = app.root().to_path_buf();
+    assert!(
+        args.iter().any(|a| Path::new(a) == root)
+            || cfg!(target_os = "macos") && args.iter().any(|a| a.ends_with(".command")),
+        "the new window opens on the project: {args:?}"
+    );
+    assert!(
+        app.status.starts_with("opened another tiny"),
+        "{}",
+        app.status
+    );
+    assert!(
+        app.active_buffer()
+            .unwrap()
+            .to_text()
+            .starts_with("# Fixture"),
+        "and nothing was typed into the file"
+    );
 }
 
 #[test]

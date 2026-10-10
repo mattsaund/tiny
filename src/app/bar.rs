@@ -82,8 +82,8 @@ fn path_candidates(root: &Path, typed: &str, show_hidden: bool) -> Vec<String> {
 /// The whole of `copy README.md to notes/today.md` can be typed with Tab, which
 /// is the point: a command that reads like a sentence is no use if every word
 /// of it has to be spelled out by hand.
-fn complete_command(b: &mut Bar, root: &Path, show_hidden: bool) {
-    if let Some(rest) = completion_for(b, root, show_hidden) {
+fn complete_command(b: &mut Bar, root: &Path, show_hidden: bool, added: &[String]) {
+    if let Some(rest) = completion_for(b, root, show_hidden, added) {
         b.input.push_str(&rest);
         b.cursor = b.input.chars().count();
     }
@@ -100,8 +100,9 @@ fn complete_command(b: &mut Bar, root: &Path, show_hidden: bool) {
 ///
 /// Any new command added to [`App::run_command`] needs adding to `COMMANDS`
 /// here too, or it will work but never complete — and one that takes a path
-/// needs adding to `TAKES_PATHS` as well.
-pub fn completion_for(b: &Bar, root: &Path, show_hidden: bool) -> Option<String> {
+/// needs adding to `TAKES_PATHS` as well. `added` is the commands plugins
+/// have added, which complete like tiny's own.
+pub fn completion_for(b: &Bar, root: &Path, show_hidden: bool, added: &[String]) -> Option<String> {
     const COMMANDS: &[&str] = &[
         "set", "replace", "config", "settings", "reload", "new", "mkdir", "rename", "mv", "delete",
         "rm", "copy", "cp", "line", "commit", "update",
@@ -129,7 +130,14 @@ pub fn completion_for(b: &Bar, root: &Path, show_hidden: bool) -> Option<String>
 
     let (prefix, candidates): (String, Vec<String>) = match args.first().map(String::as_str) {
         // Still on the command name itself.
-        _ if position == 0 => (typed, COMMANDS.iter().map(|s| s.to_string()).collect()),
+        _ if position == 0 => (
+            typed,
+            COMMANDS
+                .iter()
+                .map(|s| s.to_string())
+                .chain(added.iter().cloned())
+                .collect(),
+        ),
         Some("set") => (
             typed,
             Config::settings_index()
@@ -282,7 +290,12 @@ impl App {
             }
             KeyCode::Tab => {
                 if b.is_command() {
-                    complete_command(&mut b, self.tree.root_path(), self.config.show_hidden);
+                    complete_command(
+                        &mut b,
+                        self.tree.root_path(),
+                        self.config.show_hidden,
+                        &self.plugins.commands(),
+                    );
                 }
                 self.mode = Mode::Bar(b);
                 return;
@@ -310,7 +323,12 @@ impl App {
                 // the same key, doing the same thing, to what is drawn there.
                 // Anywhere else it moves along the text as it always did.
                 if b.is_command() && b.cursor == b.input.chars().count() {
-                    complete_command(&mut b, self.tree.root_path(), self.config.show_hidden);
+                    complete_command(
+                        &mut b,
+                        self.tree.root_path(),
+                        self.config.show_hidden,
+                        &self.plugins.commands(),
+                    );
                 } else {
                     b.cursor = (b.cursor + 1).min(b.input.chars().count());
                 }

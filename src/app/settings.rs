@@ -163,7 +163,9 @@ impl App {
                     self.status = "keybinds".into();
                     return;
                 }
-                1 => {
+                // The folder opens beside tiny, and the settings stay open.
+                1 => self.open_plugins_folder(),
+                2 => {
                     self.confirm_reset_settings();
                     return;
                 }

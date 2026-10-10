@@ -52,6 +52,9 @@ use serde::{Deserialize, Serialize};
 /// The config file, in [`config_dir`]. There is exactly one of these.
 pub const CONF_NAME: &str = "tiny.conf";
 
+/// The plugins folder, beside the config file.
+pub const PLUGINS_NAME: &str = "plugins";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 /// Which side of the window the tree pane occupies.
 #[serde(rename_all = "lowercase")]
@@ -153,6 +156,12 @@ impl Config {
     /// `~/.config/tiny/tiny.conf`.
     pub fn user_path() -> Option<PathBuf> {
         config_dir().map(|d| d.join(CONF_NAME))
+    }
+
+    /// `~/.config/tiny/plugins` — see [`crate::plugins`]. Beside `tiny.conf`,
+    /// so everything that is tiny's own is in one folder.
+    pub fn plugins_dir() -> Option<PathBuf> {
+        config_dir().map(|d| d.join(PLUGINS_NAME))
     }
 
     /// Read the one config file, if it is there. Returns the config plus

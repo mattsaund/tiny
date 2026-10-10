@@ -269,11 +269,18 @@ pub fn open_with_desktop(path: &Path) -> Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .with_context(|| format!("could not open {}", name(path)))?;
+    keep_until_done(child);
+    Ok(())
+}
+
+/// Hold on to a program tiny started and does not wait for, so that it is
+/// reaped once it finishes rather than lingering — see [`LAUNCHED`]. The
+/// desktop's viewers come through here, and so do the windows `Ctrl+N` opens.
+pub fn keep_until_done(child: Child) {
     if let Ok(mut open) = LAUNCHED.lock() {
         open.retain_mut(|c| !matches!(c.try_wait(), Ok(Some(_))));
         open.push(child);
     }
-    Ok(())
 }
 
 /// What a test build hands to the desktop: nothing, written down.

@@ -216,6 +216,7 @@ pub enum Action {
     WindowSource,
     WindowMap,
     ToggleTreePane,
+    NewWindow,
     Copy,
     Paste,
     // In every pane that has them. One name for one movement, however many
@@ -318,6 +319,13 @@ const TABLE: &[Row] = &[
         "browser",
         "hide or show",
         "ctrl+t",
+    ),
+    (
+        Action::NewWindow,
+        &[Context::Global],
+        "new_window",
+        "another tiny, here",
+        "ctrl+n",
     ),
     (
         Action::Copy,

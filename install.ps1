@@ -5,7 +5,9 @@
 # Downloads the ready-made tiny.exe from the latest GitHub release. Only when
 # there is none to download - no release published, or a branch asked for by
 # name - does it build from source, which on Windows needs Rust and the Visual
-# Studio Build Tools; it offers to install both.
+# Studio Build Tools; it offers to install both. Then it offers what tiny
+# reaches for while it runs - git for the git window, ffmpeg for video and
+# audio details - with winget, in one question. tiny runs without them.
 #
 # Override anything with the environment:
 #   $env:TINY_REPO         git URL (default: https://github.com/mattsaund/tiny.git)
@@ -43,6 +45,15 @@
 
     function Have([string]$Name) {
         [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+    }
+
+    # Ask a yes-or-no question, where Enter means yes. With nobody there to
+    # answer - a CI job, input redirected from somewhere - the answer is no:
+    # Read-Host would otherwise wait for an answer that is never coming.
+    function Confirm-Yes([string]$Question) {
+        if ($env:CI -or [Console]::IsInputRedirected) { return $false }
+        $reply = Read-Host "$Question [Y/n]"
+        return -not ($reply -match '^[Nn]')
     }
 
     # --- putting tiny.exe in place --------------------------------------------
@@ -140,8 +151,7 @@
         Write-Host 'Building tiny from source on Windows needs the Visual Studio Build Tools:'
         Write-Host 'the C/C++ compiler and linker Rust uses. They are free, a few gigabytes,'
         Write-Host 'install in the background, and ask for an administrator prompt.'
-        $reply = Read-Host 'Install them now? [Y/n]'
-        if ($reply -match '^[Nn]') {
+        if (-not (Confirm-Yes 'Install them now?')) {
             throw 'the Build Tools are needed to build from source: https://visualstudio.microsoft.com/visual-cpp-build-tools/'
         }
         if (-not (Have 'winget')) {
@@ -168,8 +178,7 @@
         Write-Host ''
         Write-Host 'Building tiny needs Rust, and cargo is not installed. It goes in'
         Write-Host '~\.rustup and ~\.cargo, and "rustup self uninstall" removes it again.'
-        $reply = Read-Host 'Install it now? [Y/n]'
-        if ($reply -match '^[Nn]') { throw 'cargo is needed to build from source: https://rustup.rs' }
+        if (-not (Confirm-Yes 'Install it now?')) { throw 'cargo is needed to build from source: https://rustup.rs' }
         $init = Join-Path ([IO.Path]::GetTempPath()) 'rustup-init.exe'
         $ProgressPreference = 'SilentlyContinue'
         Invoke-WebRequest -UseBasicParsing -Uri 'https://win.rustup.rs/x86_64' -OutFile $init -ErrorAction Stop
@@ -318,6 +327,43 @@
         }
     }
 
+    # --- what tiny reaches for while it runs --------------------------------
+
+    # tiny runs on its own. Two programs make parts of it work, and those that
+    # are missing are offered together, in one question:
+    #
+    #   git      the git window
+    #   ffprobe  the size and length of a video or a song (part of ffmpeg)
+    #
+    # A no, or no winget, leaves tiny working without them. Not asked again
+    # when tiny is updating itself: that was answered when it was installed.
+    function Install-Extras {
+        if ($env:TINY_UPDATE) { return }
+        $missing = @()
+        if (-not (Have 'git')) {
+            $missing += @{ Id = 'Git.Git'; Why = 'git      the git window' }
+        }
+        if (-not (Have 'ffprobe')) {
+            $missing += @{ Id = 'Gyan.FFmpeg'; Why = 'ffmpeg   the size and length of videos and songs' }
+        }
+        if ($missing.Count -eq 0) { return }
+        Write-Host ''
+        Write-Host 'tiny can also use these, which are not installed:'
+        foreach ($m in $missing) { Write-Host "  $($m.Why)" }
+        if (-not (Have 'winget')) {
+            Write-Host 'install them to turn those on - tiny works without them'
+            return
+        }
+        if (-not (Confirm-Yes 'Install them with winget?')) {
+            Write-Host 'skipped - tiny works without them'
+            return
+        }
+        foreach ($m in $missing) {
+            & winget install --id $m.Id --exact --accept-package-agreements --accept-source-agreements
+        }
+        Write-Host 'open a new terminal for tiny to find them'
+    }
+
     # --- the whole of it ----------------------------------------------------
 
     function Install-Tiny {
@@ -342,6 +388,7 @@
         if (-not (Test-Path $binary)) { throw "expected a binary at $binary" }
 
         Add-ToPath -Prefix $prefix
+        Install-Extras
         Write-Host ''
         Write-Host "installed $binary"
         Write-Host 'run it with:      tiny ~\notes'

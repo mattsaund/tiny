@@ -155,6 +155,9 @@ pub fn install(version: &str) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("cannot tell where tiny is installed"))?;
     let status = installer()
         .env("TINY_PREFIX", folder)
+        // So the installer does not ask again about git and ffmpeg: that was
+        // answered when tiny was first installed.
+        .env("TINY_UPDATE", "1")
         .current_dir(std::env::temp_dir())
         .status()
         .context("could not start the installer")?;

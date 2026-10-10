@@ -29,6 +29,7 @@
 //! | [`source`] | the git window: what has changed, and what to do about it |
 //! | [`watch`] | noticing files another program changed |
 //! | [`update`] | asking whether to install a newer tiny |
+//! | [`plugins`] | what plugins are shown, and doing what they ask |
 //!
 //! They are all `impl App` blocks on the same struct. Splitting an impl across
 //! files means anything used by a sibling has to say so with `pub(super)`,
@@ -114,6 +115,7 @@ mod fileops;
 mod input;
 mod mode;
 mod parts;
+mod plugins;
 mod preview;
 mod prompt;
 mod settings;
@@ -229,6 +231,12 @@ pub struct App {
     /// The version to install once tiny has quit — set by a `y` to the update
     /// question, and read by `main` after the terminal is handed back.
     pub update_on_exit: Option<String>,
+    /// Every plugin, loaded — see [`crate::plugins`].
+    pub plugins: crate::plugins::Plugins,
+    /// Where plugins are loaded from. `None` until `main` says — so a test,
+    /// which builds an `App` directly, never runs or opens anyone's real
+    /// plugins folder unless it hands this one of its own.
+    pub plugins_dir: Option<PathBuf>,
     /// Which pane had the keyboard when the tree was folded away, so unfolding
     /// puts it back and the key is a true toggle.
     focus_before_hide: Focus,
@@ -306,6 +314,8 @@ impl App {
             update_found: None,
             update_by_hand: false,
             update_on_exit: None,
+            plugins: crate::plugins::Plugins::default(),
+            plugins_dir: None,
             focus_before_hide: Focus::Tree,
             status: warning
                 .or(keys_warning)

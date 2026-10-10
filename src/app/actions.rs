@@ -90,9 +90,11 @@ impl App {
     /// Does nothing for a directory, and explains itself for a binary.
     pub(super) fn focus_editor(&mut self) {
         match &self.preview {
-            Preview::Buffer { .. } => {
+            Preview::Buffer { path, .. } => {
+                let path = path.clone();
                 self.focus = Focus::Editor;
                 self.status = "editing — Ctrl+S save, Esc back".into();
+                self.plugin_event("open", &path);
             }
             Preview::Media { path, .. } => {
                 let path = path.clone();
@@ -199,6 +201,16 @@ impl App {
             "browser {}% of the window",
             (self.config.tree_width * 100.0).round()
         );
+    }
+
+    /// `Ctrl+N`: another tiny on this project, in a new window of the
+    /// terminal this one is running in — see [`crate::terminal`].
+    pub(super) fn open_new_window(&mut self) {
+        let root = self.root().to_path_buf();
+        self.status = match crate::terminal::open_window(&root) {
+            Ok(by) => format!("opened another tiny in {by}"),
+            Err(e) => format!("{e:#}"),
+        };
     }
 
     /// Put the tree on screen and give it the keyboard. What Esc means from

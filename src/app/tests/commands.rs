@@ -439,6 +439,9 @@ fn arrow(c: char) -> Option<KeyCode> {
 ///
 /// `TINY_SHOT_UPDATE=0.9.9` pretends a release check found that version, so
 /// a shot can be taken of the update question.
+///
+/// `TINY_SHOT_CELLS=file` also writes every cell, with its colors and
+/// modifiers, one per line — what a picture for the README is drawn from.
 #[test]
 #[ignore]
 fn screenshot() {
@@ -514,6 +517,29 @@ fn screenshot() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(30);
+    if let Ok(out) = std::env::var("TINY_SHOT_CELLS") {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        let color = |c: Color| match c {
+            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+            other => format!("{other:?}").replace(' ', ""),
+        };
+        let mut dump = String::new();
+        for y in 0..h {
+            for x in 0..w {
+                let cell = buf.cell((x, y)).unwrap();
+                dump.push_str(&format!(
+                    "{x} {y} {} {} {} {}\n",
+                    color(cell.fg),
+                    color(cell.bg),
+                    cell.modifier.bits(),
+                    cell.symbol()
+                ));
+            }
+        }
+        fs::write(out, dump).unwrap();
+    }
     for row in screen(&mut app, w, h) {
         println!("{row}");
     }

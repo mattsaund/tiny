@@ -29,11 +29,12 @@ fn a_chord_is_not_a_movement_in_a_list() {
 }
 
 #[test]
-fn the_settings_area_opens_on_its_two_buttons() {
+fn the_settings_area_opens_on_its_buttons() {
     let (_td, mut app) = fixture();
     settings(&mut app);
     let out = screen(&mut app, 96, 40).join("\n");
     assert!(out.contains("[ Keybinds ]"), "{out}");
+    assert!(out.contains("[ Plugins ]"), "{out}");
     assert!(out.contains("[ Reset ]"), "{out}");
     assert!(
         out.contains("tab_width"),
@@ -45,9 +46,7 @@ fn the_settings_area_opens_on_its_two_buttons() {
 fn a_hint_is_shown_for_the_row_under_the_cursor_and_no_other() {
     let (_td, mut app) = fixture();
     settings(&mut app);
-    // Down past the two buttons, onto `show_hidden`.
-    app.on_key(k(KeyCode::Down));
-    app.on_key(k(KeyCode::Down));
+    settings_on(&mut app, "show_hidden");
     let out = screen(&mut app, 100, 40).join("\n");
     assert!(
         out.contains("dotfiles"),
@@ -60,6 +59,26 @@ fn a_hint_is_shown_for_the_row_under_the_cursor_and_no_other() {
         out.contains("spaces per Tab"),
         "it follows the cursor:\n{out}"
     );
+}
+
+#[test]
+fn the_plugins_button_opens_the_plugins_folder_and_keeps_the_settings_open() {
+    let (td, mut app) = fixture();
+    let folder = td.path().join("config-plugins");
+    app.plugins_dir = Some(folder.clone());
+    settings(&mut app);
+    settings_button(&mut app, "Plugins");
+    crate::files::media::opened::take();
+    app.on_key(k(KeyCode::Enter));
+
+    assert!(folder.is_dir(), "made, so there is somewhere to drop one");
+    assert_eq!(
+        crate::files::media::opened::take(),
+        std::slice::from_ref(&folder),
+        "and handed to the desktop's file manager"
+    );
+    assert!(matches!(app.mode, Mode::Settings(_)), "the settings stay");
+    assert!(app.status.contains("*reload"), "{}", app.status);
 }
 
 #[test]
@@ -203,7 +222,7 @@ fn resetting_the_settings_asks_first_and_then_restores_them() {
     assert_eq!(app.config.tab_width, 7);
 
     settings(&mut app);
-    app.on_key(k(KeyCode::Down)); // the reset button
+    settings_button(&mut app, "Reset");
     app.on_key(k(KeyCode::Enter));
     assert!(
         joined(&mut app).contains("Reset 1 setting"),
@@ -213,7 +232,7 @@ fn resetting_the_settings_asks_first_and_then_restores_them() {
     app.on_key(ch('n'));
     assert_eq!(app.config.tab_width, 7, "n backed out");
 
-    app.on_key(k(KeyCode::Down));
+    settings_button(&mut app, "Reset");
     app.on_key(k(KeyCode::Enter));
     app.on_key(ch('y'));
     assert_eq!(app.config.tab_width, 4, "back to the shipped value");
@@ -240,7 +259,7 @@ fn the_two_resets_do_not_touch_each_other() {
     app.on_key(k(KeyCode::Enter));
     app.on_key(ch('z'));
     app.on_key(k(KeyCode::Esc));
-    app.on_key(k(KeyCode::Down));
+    settings_button(&mut app, "Reset");
     app.on_key(k(KeyCode::Enter));
     app.on_key(ch('y'));
     assert_eq!(app.config.tab_width, 4);
@@ -254,7 +273,7 @@ fn the_two_resets_do_not_touch_each_other() {
 fn resetting_when_nothing_has_changed_says_so() {
     let (_td, mut app) = fixture();
     settings(&mut app);
-    app.on_key(k(KeyCode::Down));
+    settings_button(&mut app, "Reset");
     app.on_key(k(KeyCode::Enter));
     assert!(app.status.contains("already"), "{}", app.status);
     assert!(matches!(app.mode, Mode::Settings(_)), "nothing to confirm");
@@ -276,10 +295,7 @@ fn a_rebinding_from_the_config_file_is_what_the_keys_do() {
 fn a_setting_can_be_changed_from_the_settings_area() {
     let (_td, mut app) = fixture();
     settings(&mut app);
-    // Past the two buttons, then to tab_width, second in the index.
-    for _ in 0..3 {
-        app.on_key(k(KeyCode::Down));
-    }
+    settings_on(&mut app, "tab_width");
     app.on_key(k(KeyCode::Enter));
 
     // The field is prefilled with the current value.
@@ -294,9 +310,7 @@ fn escape_while_editing_a_setting_leaves_it_alone() {
     let (_td, mut app) = fixture();
     settings(&mut app);
     // Onto tab_width, the same row the test above changes.
-    for _ in 0..3 {
-        app.on_key(k(KeyCode::Down));
-    }
+    settings_on(&mut app, "tab_width");
     app.on_key(k(KeyCode::Enter));
     app.on_key(k(KeyCode::Backspace));
     type_str(&mut app, "9");

@@ -304,6 +304,7 @@ impl App {
             Action::Quit => self.request_quit(),
             Action::Bar => self.open_bar(),
             Action::ToggleTreePane => self.toggle_tree_pane(),
+            Action::NewWindow => self.open_new_window(),
             Action::Copy => self.copy_selection(),
             Action::Paste => self.paste_clipboard(),
             Action::Help => self.mode = Mode::Help(0),

@@ -20,7 +20,9 @@
 //!    `ui` call into: [`text`] (the buffer, markdown, highlighting, search),
 //!    [`files`] (the tree, project resolution, media), and [`map`] (the link
 //!    graph and the view of it). [`config`] holds the settings and the key
-//!    bindings, and is read once before any of them.
+//!    bindings, and is read once before any of them. Beside them,
+//!    [`plugins`] runs the Lua ones, [`update`] knows about new releases,
+//!    and [`terminal`] opens another tiny in a window of its own.
 //!
 //! # The one-way rule
 //!
@@ -54,6 +56,8 @@ mod files;
 mod git;
 mod licenses;
 mod map;
+mod plugins;
+mod terminal;
 mod text;
 mod ui;
 mod update;
@@ -69,7 +73,7 @@ use crossterm::execute;
 
 use app::App;
 use config::keys::Keyboard;
-use config::{CONF_NAME, Config};
+use config::{CONF_NAME, Config, PLUGINS_NAME};
 
 /// `--help` output. Kept here as one literal rather than assembled from an
 /// argument parser: there are only seven options, and a contributor changing
@@ -188,6 +192,11 @@ fn real_main() -> Result<()> {
     // Which keys the terminal keeps for itself is known from the environment
     // alone, so it is settled before the first frame — see `Keyboard`.
     app.set_keyboard(Keyboard::detect());
+    // The plugins, from the one real folder — the app is only ever told where
+    // it is from here, so a test never loads anybody's plugins.
+    app.plugins_dir = Config::plugins_dir();
+    app.load_plugins();
+    app.tell_plugins_what_is_open();
     // A release build asks, once, whether there is a newer one. A debug build
     // is somebody working on tiny, and is left alone — see `update`.
     if app.config.update_check && !cfg!(debug_assertions) {
@@ -327,8 +336,13 @@ struct Removal {
     bin: Option<PathBuf>,
     /// `tiny.conf`, if one was ever written.
     conf: Option<PathBuf>,
-    /// The config directory, only when `tiny.conf` is the last thing in it.
-    /// A directory someone put their own files in stays.
+    /// The plugins folder, only when there is nothing in it — the settings
+    /// area's button makes it, and an empty one is nobody's work. One with
+    /// plugins in it stays, and so does the folder around it.
+    plugins_dir: Option<PathBuf>,
+    /// The config directory, only when `tiny.conf` is the last thing in it,
+    /// beside an empty plugins folder at most. A directory someone put their
+    /// own files in stays.
     conf_dir: Option<PathBuf>,
     /// The `--root` cargo installed into, when its bookkeeping names tiny.
     /// `cargo uninstall` is then the right way to remove the binary, because
@@ -344,13 +358,29 @@ impl Removal {
     /// temporary directory instead of against the machine it runs on.
     fn plan(bin: Option<PathBuf>, conf: Option<PathBuf>) -> Self {
         let conf = conf.filter(|p| p.is_file());
+        let is_empty = |d: &std::path::Path| {
+            std::fs::read_dir(d)
+                .map(|mut it| it.next().is_none())
+                .unwrap_or(false)
+        };
+        let plugins_dir = conf
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|d| d.join(PLUGINS_NAME))
+            .filter(|p| p.is_dir() && is_empty(p));
         let conf_dir = conf
             .as_ref()
             .and_then(|p| p.parent())
-            // Exactly one entry, and it is the file we are about to remove.
+            // Nothing in it but what we are about to remove: the file, and an
+            // empty plugins folder if there is one.
             .filter(|d| {
                 std::fs::read_dir(d)
-                    .map(|mut it| it.next().is_some() && it.next().is_none())
+                    .map(|entries| {
+                        entries.flatten().all(|e| {
+                            e.file_name() == CONF_NAME
+                                || (e.file_name() == PLUGINS_NAME && plugins_dir.is_some())
+                        })
+                    })
                     .unwrap_or(false)
             })
             .map(PathBuf::from);
@@ -369,6 +399,7 @@ impl Removal {
         Self {
             bin: bin.filter(|p| p.is_file()),
             conf,
+            plugins_dir,
             conf_dir,
             cargo_root,
         }
@@ -379,6 +410,9 @@ impl Removal {
         let mut out = Vec::new();
         if let Some(p) = &self.conf {
             out.push(format!("  {}", p.display()));
+        }
+        if let Some(p) = &self.plugins_dir {
+            out.push(format!("  {}/", p.display()));
         }
         if let Some(p) = &self.conf_dir {
             out.push(format!("  {}/", p.display()));
@@ -400,6 +434,11 @@ impl Removal {
         let mut errors = Vec::new();
         if let Some(p) = &self.conf
             && let Err(e) = std::fs::remove_file(p)
+        {
+            errors.push(format!("{}: {e}", p.display()));
+        }
+        if let Some(p) = &self.plugins_dir
+            && let Err(e) = std::fs::remove_dir(p)
         {
             errors.push(format!("{}: {e}", p.display()));
         }
@@ -537,6 +576,35 @@ mod tests {
         removal.perform();
         assert!(!conf.exists(), "our file still goes");
         assert!(theirs.exists(), "theirs stays");
+    }
+
+    #[test]
+    fn an_empty_plugins_folder_goes_with_the_config() {
+        let td = tempfile::tempdir().unwrap();
+        let (_, conf) = fake_install(td.path());
+        let plugins = conf.parent().unwrap().join(PLUGINS_NAME);
+        fs::create_dir(&plugins).unwrap();
+
+        let removal = Removal::plan(None, Some(conf.clone()));
+        assert_eq!(removal.plugins_dir.as_ref(), Some(&plugins));
+        assert!(removal.perform().is_empty());
+        assert!(!conf.parent().unwrap().exists(), "the whole folder went");
+    }
+
+    #[test]
+    fn installed_plugins_are_kept_and_so_is_their_folder() {
+        let td = tempfile::tempdir().unwrap();
+        let (_, conf) = fake_install(td.path());
+        let plugins = conf.parent().unwrap().join(PLUGINS_NAME);
+        fs::create_dir(&plugins).unwrap();
+        fs::write(plugins.join("words.lua"), "-- mine").unwrap();
+
+        let removal = Removal::plan(None, Some(conf.clone()));
+        assert_eq!(removal.plugins_dir, None, "somebody's plugins");
+        assert_eq!(removal.conf_dir, None, "and the folder they are in");
+        removal.perform();
+        assert!(!conf.exists(), "the config still goes");
+        assert!(plugins.join("words.lua").exists(), "the plugin stays");
     }
 
     #[test]

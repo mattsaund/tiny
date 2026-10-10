@@ -117,5 +117,56 @@ impl Editor {
         self.clamp_cursor();
     }
 
+    /// Put `text` in at the cursor, newlines and all, as one step of undo —
+    /// what a plugin's `tiny.insert` does. The cursor ends up after it.
+    ///
+    /// Unlike typing it, no indentation is carried onto the new lines: the
+    /// text arrives exactly as it was given, so a plugin inserting an indented
+    /// block does not get it indented twice.
+    pub fn insert_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.push_undo(EditKind::Structural);
+        let byte = byte_of_char(&self.lines[self.cursor_line], self.cursor_col);
+        let tail = self.lines[self.cursor_line].split_off(byte);
+        let mut pieces = text.split('\n').map(|p| p.strip_suffix('\r').unwrap_or(p));
+        let mut line = self.cursor_line;
+        self.lines[line].push_str(pieces.next().unwrap_or(""));
+        for piece in pieces {
+            line += 1;
+            self.lines.insert(line, piece.to_string());
+        }
+        self.cursor_line = line;
+        self.cursor_col = self.lines[line].chars().count();
+        self.lines[line].push_str(&tail);
+        self.goal_col = self.cursor_col;
+        self.dirty = true;
+    }
+
+    /// Replace everything with `text`, as one step of undo — what a plugin's
+    /// `tiny.set_text` does. The cursor keeps its line and column, as near as
+    /// the new text allows.
+    ///
+    /// One trailing newline is read as the end of the last line rather than as
+    /// an empty line after it: the buffer already knows whether the file ends
+    /// with one, and puts it back on save.
+    pub fn replace_all(&mut self, text: &str) {
+        self.push_undo(EditKind::Structural);
+        let body = text
+            .strip_suffix('\n')
+            .map(|s| s.strip_suffix('\r').unwrap_or(s))
+            .unwrap_or(text);
+        self.lines = body
+            .split('\n')
+            .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
+            .collect();
+        // Every line may have changed, not only the ones near the cursor.
+        self.touched = 0;
+        self.dirty = true;
+        self.clamp_cursor();
+        self.goal_col = self.cursor_col;
+    }
+
     // ---- movement ---------------------------------------------------------
 }

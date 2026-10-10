@@ -95,13 +95,14 @@ impl Bar {
     }
 }
 
-/// The two rows above the settings themselves: things you do, rather than
-/// values you set.
+/// The rows above the settings themselves: things you do, rather than values
+/// you set.
 ///
 /// They live at the top because they are what someone opening this area is
 /// most often looking for — and because a button below thirty rows of settings
-/// is a button nobody finds.
-pub const BUTTONS: &[&str] = &["Keybinds", "Reset"];
+/// is a button nobody finds. `Plugins` opens the folder plugins go in, in the
+/// desktop's own file manager, so one can be dragged in.
+pub const BUTTONS: &[&str] = &["Keybinds", "Plugins", "Reset"];
 
 /// The in-program settings area. Rows come from [`BUTTONS`] and then
 /// `Config::settings_index`, so this holds only the cursor and whatever is

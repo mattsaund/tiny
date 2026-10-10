@@ -199,9 +199,13 @@ impl App {
             self.status = "no changes".into();
             return;
         }
-        let name = display_name(&ed.path.clone());
+        let path = ed.path.clone();
+        let name = display_name(&path);
         match ed.save() {
-            Ok(()) => self.status = format!("saved {name}"),
+            Ok(()) => {
+                self.status = format!("saved {name}");
+                self.plugin_event("save", &path);
+            }
             Err(e) => self.status = format!("save failed: {e}"),
         }
         // The file just changed length under a cursor that did not move, and
@@ -260,7 +264,10 @@ impl App {
         let (mut saved, mut failed) = (0usize, Vec::new());
         for path in paths {
             match self.buffers.get_mut(path).map(Editor::save) {
-                Some(Ok(())) => saved += 1,
+                Some(Ok(())) => {
+                    saved += 1;
+                    self.plugin_event("save", path);
+                }
                 Some(Err(e)) => failed.push(format!("{}: {e}", display_name(path))),
                 None => {}
             }

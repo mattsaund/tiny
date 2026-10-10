@@ -508,6 +508,42 @@ mod tests {
     }
 
     #[test]
+    fn inserted_text_lands_as_given_and_undoes_in_one_step() {
+        let mut e = ed("    fn a() {}\n");
+        e.goto(0, 4);
+        e.insert_text("first\n  second\n");
+        assert_eq!(
+            e.to_text(),
+            "    first\n  second\nfn a() {}\n",
+            "no indentation added, and the rest of the line follows"
+        );
+        assert_eq!((e.cursor_line, e.cursor_col), (2, 0), "after what went in");
+        assert!(e.dirty);
+        assert!(e.undo());
+        assert_eq!(e.to_text(), "    fn a() {}\n", "one undo takes it all back");
+    }
+
+    #[test]
+    fn replacing_everything_keeps_the_file_s_own_ending_and_undoes() {
+        let mut e = ed("a\r\nb\r\n");
+        e.goto(1, 1);
+        e.replace_all("one\ntwo\nthree\n");
+        assert_eq!(
+            e.to_text(),
+            "one\r\ntwo\r\nthree\r\n",
+            "still CRLF, one newline"
+        );
+        assert_eq!(
+            (e.cursor_line, e.cursor_col),
+            (1, 1),
+            "the cursor stays put"
+        );
+        assert_eq!(e.take_touched(), Some(0), "every line is in doubt");
+        assert!(e.undo());
+        assert_eq!(e.to_text(), "a\r\nb\r\n");
+    }
+
+    #[test]
     fn delete_line_leaves_at_least_one_line() {
         let mut e = ed("only\n");
         e.delete_line();
