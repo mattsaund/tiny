@@ -34,11 +34,48 @@ fn the_settings_area_opens_on_its_two_buttons() {
     settings(&mut app);
     let out = screen(&mut app, 96, 40).join("\n");
     assert!(out.contains("[ Keybinds ]"), "{out}");
-    assert!(out.contains("[ Reset settings ]"), "{out}");
+    assert!(out.contains("[ Reset ]"), "{out}");
     assert!(
         out.contains("tab_width"),
         "the settings are still there:\n{out}"
     );
+}
+
+#[test]
+fn a_hint_is_shown_for_the_row_under_the_cursor_and_no_other() {
+    let (_td, mut app) = fixture();
+    settings(&mut app);
+    // Down past the two buttons, onto `show_hidden`.
+    app.on_key(k(KeyCode::Down));
+    app.on_key(k(KeyCode::Down));
+    let out = screen(&mut app, 100, 40).join("\n");
+    assert!(
+        out.contains("dotfiles"),
+        "the selected row says a word more:\n{out}"
+    );
+    assert!(!out.contains("spaces per Tab"), "the others do not:\n{out}");
+    app.on_key(k(KeyCode::Down));
+    let out = screen(&mut app, 100, 40).join("\n");
+    assert!(
+        out.contains("spaces per Tab"),
+        "it follows the cursor:\n{out}"
+    );
+}
+
+#[test]
+fn a_long_value_never_runs_into_the_next_column() {
+    let (_td, mut app) = fixture();
+    settings(&mut app);
+    let out = screen(&mut app, 100, 40).join("\n");
+    let row = out
+        .lines()
+        .find(|l| l.contains("prose_extensions"))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(
+        row.contains('…'),
+        "a dozen extensions are cut short:\n{row}"
+    );
+    assert!(!row.contains("asciidoc log"), "{row}");
 }
 
 #[test]

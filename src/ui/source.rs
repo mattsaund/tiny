@@ -1,4 +1,4 @@
-//! The source-control window: `Ctrl+2`.
+//! The source-control window: `Ctrl+G`.
 //!
 //! Three parts, laid out the way the questions are asked. On the left, what has
 //! changed. On the right, the file the cursor is on — before on one side, after
@@ -130,7 +130,7 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
         let lines = vec![
             Line::from(Span::styled(format!("  {error}"), pal.marker)),
             Line::from(""),
-            Line::from(Span::styled("  Ctrl+1 back to the browser", pal.dim)),
+            Line::from(Span::styled("  Esc back to the browser", pal.dim)),
         ];
         f.render_widget(Paragraph::new(lines), inner);
         return;

@@ -81,8 +81,8 @@ impl App {
     /// formatting while you edit it (see `ui::live_rows`), so the rendered
     /// view was a step that no longer bought anything.
     ///
-    /// A picture or a video is the one thing that opens *out* of tiny, in
-    /// whatever program the desktop already uses for it. The keyboard stays on
+    /// A picture, a video, a PDF or a sound is the one thing that opens *out*
+    /// of tiny, in whatever program the desktop already uses for it. The keyboard stays on
     /// the tree, because there is nothing in the pane to give it to and
     /// leaving it there means the next arrow key still moves the cursor
     /// instead of needing an Esc first.
@@ -243,6 +243,13 @@ impl App {
     /// here. It used to ask whether to *discard*, where the natural yes threw
     /// work away.
     pub(super) fn request_quit(&mut self) {
+        self.request_quit_to("quitting");
+    }
+
+    /// [`request_quit`](Self::request_quit), naming why tiny is leaving —
+    /// "before updating" is a different question from "before quitting" to
+    /// someone deciding whether to save.
+    pub(super) fn request_quit_to(&mut self, why: &str) {
         let mut dirty: Vec<String> = self
             .dirty_buffers()
             .iter()
@@ -258,7 +265,7 @@ impl App {
         self.mode = Mode::Confirm(Confirm {
             kind: ConfirmKind::QuitUnsaved,
             message: format!(
-                "Save changes to {} before quitting?  (y/n, Esc cancels)",
+                "Save changes to {} before {why}?  (y/n, Esc cancels)",
                 dirty.join(", ")
             ),
         });
@@ -281,6 +288,9 @@ impl App {
         let (saved, failed) = self.save_each(&dirty);
         match failed.first() {
             Some(first) => {
+                // Not leaving, so not updating on the way out either: a
+                // later Ctrl+Q should quit, not install something.
+                self.update_on_exit = None;
                 self.status = format!(
                     "saved {saved}, {} failed — {first}; still open",
                     failed.len()

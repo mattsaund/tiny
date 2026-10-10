@@ -20,8 +20,10 @@
 //!           ├─ draw_reading   rendered, no cursor in it
 //!           ├─ draw_editor    the file with the real cursor   editor.rs
 //!           └─ draw_media     what a picture or a video is
-//!  └─ draw_help                                help.rs
-//!  └─ draw_settings / draw_keybinds             settings.rs
+//!  └─ overlays, over whichever window is up
+//!      ├─ draw_help                             help.rs
+//!      ├─ draw_settings / draw_keybinds         settings.rs
+//!      └─ draw_update                           update.rs
 //! ```
 //!
 //! [`parts`] holds what they all share: the border, the selected row, the
@@ -68,6 +70,7 @@ mod preview;
 mod settings;
 mod source;
 mod tree;
+mod update;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -79,8 +82,9 @@ use self::preview::draw_preview;
 use self::settings::{draw_keybinds, draw_settings};
 use self::source::draw_source;
 use self::tree::{draw_results, draw_tree, results_height};
+use self::update::draw_update;
 
-use crate::app::{App, Mode, Window};
+use crate::app::{App, ConfirmKind, Mode, Window};
 use crate::config::Side;
 
 /// Paint one frame. Called once per keypress by the event loop in `main`.
@@ -91,10 +95,10 @@ use crate::config::Side;
 /// are derived from it. The main area is whatever is left.
 ///
 /// Overlays (help, settings) are drawn against the *full* screen area rather
-/// than the main region, so they float above the panes.
+/// than the main region, so they float above the panes — and over whichever
+/// window is up, since every one of them can be opened from all three.
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
-    let pal = app.palette;
 
     // Rows: the bar at the top when it is open, the panes, the status line at
     // the bottom. Both used to be settable at either end, which was two
@@ -131,17 +135,39 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     // Two of the three windows take the whole pane and answer for themselves.
     match app.window {
-        Window::Map => {
-            draw_map(f, app, main);
-            return;
-        }
-        Window::Source => {
-            draw_source(f, app, main);
-            return;
-        }
-        Window::Main => {}
+        Window::Map => draw_map(f, app, main),
+        Window::Source => draw_source(f, app, main),
+        Window::Main => draw_main(f, app, main),
     }
+    draw_overlay(f, app, area);
+}
 
+/// What is layered over the window: help, settings, keybinds, and the update
+/// question.
+fn draw_overlay(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    let pal = app.palette;
+    match &app.mode {
+        Mode::Help(scroll) => draw_help(f, app, area, &pal, *scroll),
+        Mode::Settings(s) => {
+            let s = s.clone();
+            draw_settings(f, app, area, &s);
+        }
+        Mode::Keybinds(kb) => {
+            let kb = kb.clone();
+            draw_keybinds(f, app, area, &kb);
+        }
+        Mode::Confirm(c) => {
+            if let ConfirmKind::Update(version) = &c.kind {
+                draw_update(f, app, area, version);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The browser and the file, with search results dropped down over them while
+/// a search is open.
+fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
     // Results drop down from the top of the panes, pushing them down rather
     // than covering them. What you are searching *from* stays on screen — the
     // browser beside you, the file behind the list with the match marked in
@@ -162,8 +188,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
 
     // The browser keeps whatever share of the width it was last given —
-    // `Ctrl+Shift+Left` and `Ctrl+Shift+Right` move it, and `Ctrl+Space` takes
-    // it away entirely.
+    // `<` and `>` move it, and `Ctrl+T` takes it away entirely.
     let (side_area, preview_area) = if app.tree_hidden {
         (None, main)
     } else {
@@ -192,19 +217,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_tree(f, app, side_area);
     }
     draw_preview(f, app, preview_area);
-
-    match &app.mode {
-        Mode::Help(scroll) => draw_help(f, app, area, &pal, *scroll),
-        Mode::Settings(s) => {
-            let s = s.clone();
-            draw_settings(f, app, area, &s);
-        }
-        Mode::Keybinds(kb) => {
-            let kb = kb.clone();
-            draw_keybinds(f, app, area, &kb);
-        }
-        _ => {}
-    }
 }
 
 /// A horizontal band of the window, used to build the vertical layout in the

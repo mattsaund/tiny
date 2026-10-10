@@ -148,11 +148,11 @@ fn the_arrow_on_the_selected_row_inverts_with_the_rest_of_it() {
 }
 
 #[test]
-fn ctrl_space_folds_the_tree_away_and_brings_it_back() {
+fn ctrl_t_folds_the_tree_away_and_brings_it_back() {
     let (_td, mut app) = fixture();
     assert!(joined(&mut app).contains("BROWSER"));
 
-    app.on_key(ctrl(' '));
+    app.on_key(ctrl('t'));
     let out = joined(&mut app);
     assert!(!out.contains("BROWSER"), "the pane is gone:\n{out}");
     assert!(
@@ -161,7 +161,7 @@ fn ctrl_space_folds_the_tree_away_and_brings_it_back() {
     );
     assert_eq!(app.focus, Focus::Editor, "keys cannot go to an unseen pane");
 
-    app.on_key(ctrl(' '));
+    app.on_key(ctrl('t'));
     assert!(joined(&mut app).contains("BROWSER"));
     assert_eq!(app.focus, Focus::Tree, "the keyboard comes back with it");
 }
@@ -172,10 +172,10 @@ fn folding_the_tree_while_editing_leaves_you_editing() {
     select(&mut app, "main.py");
     app.on_key(k(KeyCode::Enter));
 
-    app.on_key(ctrl(' '));
+    app.on_key(ctrl('t'));
     assert!(app.tree_hidden);
     assert_eq!(app.focus, Focus::Editor);
-    app.on_key(ctrl(' '));
+    app.on_key(ctrl('t'));
     assert_eq!(
         app.focus,
         Focus::Editor,
@@ -190,7 +190,7 @@ fn esc_brings_the_tree_back_and_lands_on_it() {
     let (_td, mut app) = fixture();
     select(&mut app, "main.py");
     app.on_key(k(KeyCode::Enter));
-    app.on_key(ctrl(' '));
+    app.on_key(ctrl('t'));
 
     app.on_key(k(KeyCode::Esc));
     assert!(
@@ -203,8 +203,8 @@ fn esc_brings_the_tree_back_and_lands_on_it() {
 #[test]
 fn search_still_gets_a_pane_while_the_tree_is_folded_away() {
     let (_td, mut app) = fixture();
-    app.on_key(ctrl(' '));
-    app.on_key(ctrl('/'));
+    app.on_key(ctrl('t'));
+    app.on_key(ctrl('f'));
     type_str(&mut app, "widget");
 
     let out = joined(&mut app);
@@ -266,7 +266,7 @@ fn ijkl_scroll_something_with_no_text_in_it() {
     // Folding the tree away is what hands the keyboard to a pane like
     // this one \u{2014} Enter on a picture opens it outside tiny instead.
     select(&mut app, "logo.png");
-    app.on_key(ctrl(' '));
+    app.on_key(ctrl('t'));
     assert_eq!(app.focus, Focus::Editor);
     joined(&mut app);
     app.on_key(ch('k'));
@@ -395,8 +395,17 @@ fn the_cursor_cannot_run_off_either_end() {
 /// Put the keyboard in a file, with a cursor in real text.
 fn editing(app: &mut App) {
     select(app, "README.md");
-    app.on_key(k(KeyCode::Tab));
+    app.on_key(k(KeyCode::Enter));
     assert_eq!(app.focus, Focus::Editor, "the editor should have the keys");
+}
+
+#[test]
+fn tab_in_the_browser_is_not_a_second_enter() {
+    // It used to hand the keyboard to the file, which Enter already does.
+    let (_td, mut app) = fixture();
+    select(&mut app, "README.md");
+    app.on_key(k(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Tree, "one key opens a file, not two");
 }
 
 #[test]
@@ -463,10 +472,10 @@ fn a_chord_never_types_its_letter_into_the_file() {
 }
 
 #[test]
-fn ctrl_slash_opens_the_search_and_a_star_turns_it_into_a_command() {
+fn ctrl_f_opens_the_search_and_a_star_turns_it_into_a_command() {
     let (_td, mut app) = fixture();
     editing(&mut app);
-    app.on_key(ctrl('/'));
+    app.on_key(ctrl('f'));
     let Mode::Bar(b) = &app.mode else {
         panic!("the bar should have opened from the editor")
     };
@@ -480,19 +489,21 @@ fn ctrl_slash_opens_the_search_and_a_star_turns_it_into_a_command() {
 }
 
 #[test]
-fn only_ctrl_with_an_arrow_resizes_the_browser() {
-    // Every other arrow belongs to movement, whatever is held with it — see
-    // the module docs in `config::keys`. `Ctrl` is the exception and only in
-    // this pane, because in the editor those two are word motions.
+fn no_arrow_resizes_the_browser() {
+    // Every arrow belongs to movement, whatever is held with it — see the
+    // module docs in `config::keys`. `Ctrl` with one used to be the
+    // exception, and on a Mac it switches Spaces instead of reaching tiny.
     let (_td, mut app) = fixture();
     let width = app.config.tree_width;
     for key in [
         k(KeyCode::Left),
         alt(KeyCode::Left),
+        ctrl_key(KeyCode::Left),
         ctrl_shift(KeyCode::Left),
         ctrl_alt(KeyCode::Left),
         k(KeyCode::Right),
         alt(KeyCode::Right),
+        ctrl_key(KeyCode::Right),
         ctrl_shift(KeyCode::Right),
         ctrl_alt(KeyCode::Right),
     ] {
@@ -511,20 +522,19 @@ fn only_ctrl_with_an_arrow_resizes_the_browser() {
 }
 
 #[test]
-fn ctrl_with_an_arrow_sizes_the_browser_from_the_browser() {
+fn angle_brackets_size_the_browser_from_the_browser() {
     let (_td, mut app) = fixture();
     let width = app.config.tree_width;
-    app.on_key(ctrl_key(KeyCode::Left));
+    app.on_key(ch('<'));
     assert!(app.config.tree_width < width, "narrower");
-    app.on_key(ctrl_key(KeyCode::Right));
+    app.on_key(ch('>'));
     assert_eq!(app.config.tree_width, width, "and back");
 }
 
 #[test]
 fn ctrl_with_an_arrow_is_a_word_motion_once_the_keyboard_is_in_a_file() {
-    // The reason the resize is a browser key rather than a global chord: the
-    // same two keys have an older job in the editor, and a global binding
-    // would take it from them.
+    // In the editor the PC's word keys still work, for the keyboards whose
+    // desktop does not take them.
     let (_td, mut app) = fixture();
     editing(&mut app);
     let width = app.config.tree_width;
@@ -540,7 +550,7 @@ fn ctrl_with_an_arrow_is_a_word_motion_once_the_keyboard_is_in_a_file() {
 }
 
 #[test]
-fn ctrl_and_an_arrow_moves_the_edge_between_the_browser_and_the_file() {
+fn the_angle_brackets_move_the_edge_between_the_browser_and_the_file() {
     let (_td, mut app) = fixture();
     let edge = |app: &mut App| {
         screen(app, 90, 24)
@@ -551,21 +561,21 @@ fn ctrl_and_an_arrow_moves_the_edge_between_the_browser_and_the_file() {
     };
     let start = edge(&mut app);
 
-    app.on_key(ctrl_key(KeyCode::Right));
+    app.on_key(ch('>'));
     let wider = edge(&mut app);
-    assert!(wider > start, "right widens it: {start} -> {wider}");
+    assert!(wider > start, "> widens it: {start} -> {wider}");
 
-    app.on_key(ctrl_key(KeyCode::Left));
-    app.on_key(ctrl_key(KeyCode::Left));
+    app.on_key(ch('<'));
+    app.on_key(ch('<'));
     let narrower = edge(&mut app);
-    assert!(narrower < start, "left narrows it: {start} -> {narrower}");
+    assert!(narrower < start, "< narrows it: {start} -> {narrower}");
 }
 
 #[test]
 fn narrowing_past_the_end_folds_the_browser_and_widening_brings_it_back() {
     let (_td, mut app) = fixture();
     for _ in 0..20 {
-        app.on_key(ctrl_key(KeyCode::Left));
+        app.on_key(ch('<'));
     }
     assert!(app.tree_hidden, "the last step is the fold: {}", app.status);
     assert!(
@@ -575,7 +585,7 @@ fn narrowing_past_the_end_folds_the_browser_and_widening_brings_it_back() {
 
     // The width keys belong to the browser, and the browser is not on screen
     // to press them in — so the fold key is what brings it back.
-    app.on_key(ctrl(' '));
+    app.on_key(ctrl('t'));
     assert!(!app.tree_hidden, "and the fold key brings it back");
 }
 
@@ -583,7 +593,7 @@ fn narrowing_past_the_end_folds_the_browser_and_widening_brings_it_back() {
 fn the_browser_never_grows_past_what_the_config_would_accept() {
     let (_td, mut app) = fixture();
     for _ in 0..40 {
-        app.on_key(ctrl_key(KeyCode::Right));
+        app.on_key(ch('>'));
     }
     // The same ceiling `Config::sanitized` enforces. A width the keys could
     // reach but the config would clamp is one that changes by itself on the
@@ -600,11 +610,9 @@ fn the_browser_never_grows_past_what_the_config_would_accept() {
 
 #[test]
 fn home_and_end_reach_the_ends_of_a_line() {
-    // The Alt pair beside them is unreachable on a Mac, where Option is not a
-    // modifier — and before these were bound, Home and End did nothing at all.
     let (_td, mut app) = fixture();
     select(&mut app, "main.py");
-    app.on_key(k(KeyCode::Tab));
+    app.on_key(k(KeyCode::Enter));
     app.on_key(k(KeyCode::End));
     let line = app.active_buffer().unwrap().lines()[0].chars().count();
     assert_eq!(app.active_buffer().unwrap().cursor_col, line, "the end");
@@ -613,10 +621,74 @@ fn home_and_end_reach_the_ends_of_a_line() {
 }
 
 #[test]
+fn ctrl_a_and_ctrl_e_reach_the_ends_of_a_line_where_there_is_no_home_key() {
+    // A MacBook has no Home or End, and Terminal keeps Fn with an arrow for
+    // scrolling its own history. These two are what every Mac text field and
+    // every shell already answers to.
+    let (_td, mut app) = fixture();
+    select(&mut app, "main.py");
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(ctrl('e'));
+    let line = app.active_buffer().unwrap().lines()[0].chars().count();
+    assert_eq!(app.active_buffer().unwrap().cursor_col, line, "the end");
+    app.on_key(ctrl('a'));
+    assert_eq!(app.active_buffer().unwrap().cursor_col, 0, "and back");
+}
+
+#[test]
+fn option_and_an_arrow_skips_a_word_however_the_terminal_spells_it() {
+    let (_td, mut app) = fixture();
+    select(&mut app, "main.py");
+    app.on_key(k(KeyCode::Enter));
+    // iTerm2 sends ⌥→ as Alt and the arrow; macOS Terminal sends `Esc f`,
+    // which arrives as Alt+F. Both are a word.
+    app.on_key(alt(KeyCode::Right));
+    let after_one = app.active_buffer().unwrap().cursor_col;
+    assert!(after_one > 0, "a word right");
+    app.on_key(alt(KeyCode::Char('f')));
+    assert!(
+        app.active_buffer().unwrap().cursor_col > after_one,
+        "and another"
+    );
+    app.on_key(alt(KeyCode::Char('b')));
+    assert_eq!(
+        app.active_buffer().unwrap().cursor_col,
+        after_one,
+        "and one back"
+    );
+    assert!(
+        !app.active_buffer().unwrap().lines()[0].contains('f'),
+        "nothing was typed"
+    );
+}
+
+#[test]
+fn ctrl_u_and_ctrl_d_page_where_there_are_no_page_keys() {
+    let (td, mut app) = fixture();
+    let long: String = (0..200).map(|i| format!("line {i}\n")).collect();
+    fs::write(td.path().join("long.txt"), long).unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "long.txt");
+    app.on_key(k(KeyCode::Enter));
+    joined(&mut app);
+    app.on_key(ctrl('d'));
+    let down = app.active_buffer().unwrap().cursor_line;
+    assert!(down > 5, "a screen down, not a line: {down}");
+    app.on_key(ctrl('u'));
+    assert_eq!(app.active_buffer().unwrap().cursor_line, 0, "and back up");
+
+    // And in the browser, where they move the cursor a screen at a time.
+    app.on_key(k(KeyCode::Esc));
+    let before = app.selected;
+    app.on_key(ctrl('d'));
+    assert!(app.selected > before || app.selected == app.rows.len() - 1);
+}
+
+#[test]
 fn ctrl_home_and_ctrl_end_reach_the_ends_of_a_file() {
     let (_td, mut app) = fixture();
     select(&mut app, "main.py");
-    app.on_key(k(KeyCode::Tab));
+    app.on_key(k(KeyCode::Enter));
     app.on_key(ctrl_key(KeyCode::End));
     let last = app.active_buffer().unwrap().line_count() - 1;
     assert_eq!(app.active_buffer().unwrap().cursor_line, last, "last line");
@@ -634,18 +706,23 @@ fn home_and_end_reach_the_ends_of_the_browser_list() {
 }
 
 #[test]
-fn no_key_is_bound_to_alt_at_all() {
-    // On macOS Terminal, Option is not a modifier: an `alt+` binding never
-    // arrives at all. There are none left, and this is what keeps it that way.
+fn the_only_alt_keys_are_option_and_an_arrow() {
+    // On macOS Terminal, Option with a letter types a symbol rather than
+    // arriving as Alt, so an `alt+` binding on a letter never arrives at all.
+    // Option with an arrow does arrive — as one spelling or the other, see
+    // `keyspec::from_terminal` — and those two are a word in the editor.
     use crate::config::keys::{Action, Keymap};
     let keymap = Keymap::default();
     for action in Action::all() {
-        let keys = keymap.spec(action);
-        assert!(
-            !keys.split_whitespace().any(|k| k.starts_with("alt+")),
-            "{} is bound to an Alt key a Mac cannot send: {keys}",
-            action.name()
-        );
+        for key in keymap.spec(action).split_whitespace() {
+            if key.starts_with("alt+") {
+                assert!(
+                    matches!(key, "alt+left" | "alt+right"),
+                    "{} is bound to {key}, which a Mac cannot send",
+                    action.name()
+                );
+            }
+        }
     }
 }
 
@@ -718,6 +795,21 @@ fn f1_reaches_the_help_window_from_inside_the_editor() {
 }
 
 #[test]
+fn a_question_mark_is_help_in_the_browser_and_a_question_mark_in_a_file() {
+    // On a Mac F1 is the brightness key, so the browser has a key that works
+    // everywhere; in a file the same key is a character being typed.
+    let (_td, mut app) = fixture();
+    app.on_key(ch('?'));
+    assert!(matches!(app.mode, Mode::Help(_)), "help, from the browser");
+    app.on_key(k(KeyCode::Esc));
+
+    editing(&mut app);
+    app.on_key(ch('?'));
+    assert!(matches!(app.mode, Mode::Normal), "no window opened");
+    assert!(app.active_buffer().unwrap().to_text().contains('?'));
+}
+
+#[test]
 fn the_settings_are_a_command_and_no_longer_a_key() {
     let (_td, mut app) = fixture();
     editing(&mut app);
@@ -746,16 +838,25 @@ fn a_comma_in_the_browser_is_not_a_key_either() {
 }
 
 #[test]
-fn the_windows_are_ctrl_and_a_number() {
+fn the_windows_are_ctrl_g_and_ctrl_l_from_anywhere() {
     let (_td, mut app) = fixture();
     editing(&mut app);
 
-    app.on_key(ctrl('3'));
+    app.on_key(ctrl('l'));
     assert_eq!(app.window, Window::Map, "the map, from inside a file");
-    app.on_key(ctrl('2'));
-    assert_eq!(app.window, Window::Source, "and straight on to source");
-    app.on_key(ctrl('1'));
-    assert_eq!(app.window, Window::Main, "and back to the files");
+    app.on_key(ctrl('g'));
+    assert_eq!(app.window, Window::Source, "and straight on to git");
+    app.on_key(ctrl('g'));
+    assert_eq!(
+        app.window,
+        Window::Main,
+        "and the same key back to the files"
+    );
+    assert_eq!(
+        app.focus,
+        Focus::Editor,
+        "where the file still has the keys"
+    );
 }
 
 #[test]
@@ -763,8 +864,8 @@ fn esc_leaves_a_window_for_the_main_one() {
     let (_td, mut app) = fixture();
     for window in [Window::Map, Window::Source] {
         app.on_key(match window {
-            Window::Map => ctrl('3'),
-            _ => ctrl('2'),
+            Window::Map => ctrl('l'),
+            _ => ctrl('g'),
         });
         assert_eq!(app.window, window);
         app.on_key(k(KeyCode::Esc));
@@ -778,7 +879,7 @@ fn the_map_is_rebuilt_every_time_it_is_switched_to() {
     open_map(&mut app);
     let before = app.project_map.as_ref().expect("built").graph.nodes.len();
 
-    app.on_key(ctrl('1'));
+    app.on_key(k(KeyCode::Esc));
     fs::write(td.path().join("late.md"), "# late\n").unwrap();
     open_map(&mut app);
 

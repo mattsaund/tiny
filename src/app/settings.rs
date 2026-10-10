@@ -25,20 +25,13 @@ use super::parts::{char_byte, list_move, plural};
 const OVERLAY_PAGE: usize = 10;
 
 impl App {
-    /// Re-derive everything a settings change can affect.
+    /// Take on which keys this terminal keeps for itself — see
+    /// [`Keyboard`].
     ///
-    /// Must be called after any successful `Config::set`, or the change sits in
-    /// the config struct without reaching the screen. Rebuilds the palette and
-    /// keymap, swaps the syntax theme, and re-reads the tree if dotfile
-    /// visibility changed.
-    /// Take on what the terminal turned out to be able to send.
-    ///
-    /// Called once, from the event loop, after the first frame is on screen
-    /// and before any key has been read — asking costs a round trip to the
-    /// terminal, and doing it earlier would delay the paint. Rebuilds the
-    /// keymap, because which keys the three windows answer to is decided by
-    /// the answer; every binding the user has set in `tiny.conf` still wins,
-    /// since those are laid over the shipped keyboard either way.
+    /// Called once, from `main`, before the first frame. Rebuilds the keymap,
+    /// because what the shipped keys are depends on the answer; every binding
+    /// the user has set in `tiny.conf` still wins, since those are laid over
+    /// the shipped keyboard either way.
     pub fn set_keyboard(&mut self, keyboard: Keyboard) {
         if self.keyboard == keyboard {
             return;
@@ -51,6 +44,12 @@ impl App {
         }
     }
 
+    /// Re-derive everything a settings change can affect.
+    ///
+    /// Must be called after any successful `Config::set`, or the change sits in
+    /// the config struct without reaching the screen. Rebuilds the palette and
+    /// keymap, swaps the syntax theme, and re-reads the tree if dotfile
+    /// visibility changed.
     pub(super) fn apply_config(&mut self) {
         self.palette = Palette::from_theme(&self.config.theme);
         let (keymap, warning) = Keymap::new(&self.config.keys, self.keyboard);
@@ -73,7 +72,7 @@ impl App {
 
     pub(super) fn open_settings(&mut self) {
         self.mode = Mode::Settings(Settings::default());
-        self.status = "settings — Enter to change, Ctrl+S to write tiny.conf, Esc to close".into();
+        self.status = "settings".into();
     }
 
     /// Keys for the settings overlay.
@@ -161,7 +160,7 @@ impl App {
             KeyCode::Enter => match s.selected {
                 0 => {
                     self.mode = Mode::Keybinds(Keybinds::default());
-                    self.status = "keybinds — Enter to change a key, Esc to close".into();
+                    self.status = "keybinds".into();
                     return;
                 }
                 1 => {
@@ -241,8 +240,7 @@ impl App {
             KeyCode::Esc => {
                 // Back to where this was opened from, not out to the tree.
                 self.mode = Mode::Settings(Settings::default());
-                self.status =
-                    "settings — Enter to change, Ctrl+S to write tiny.conf, Esc to close".into();
+                self.status = "settings".into();
                 return;
             }
             KeyCode::Char('s') if ctrl => self.write_config(),
@@ -262,7 +260,7 @@ impl App {
                 }
                 kb.capturing = true;
                 let action = actions[kb.selected - KEYBIND_BUTTONS.len()];
-                self.status = format!("press the key for {} — Delete restores it", action.name());
+                self.status = format!("press a key for {}", action.name());
             }
             _ => {}
         }

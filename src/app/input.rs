@@ -21,7 +21,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::config::keys::{Action, Context as KeyContext};
+use crate::config::keys::{Action, Context as KeyContext, from_terminal};
 use crate::map::view::Intent;
 use crate::text::editor::Editor;
 
@@ -30,13 +30,6 @@ use super::mode::{Focus, Mode, Window};
 use super::parts::list_move;
 use super::preview::Preview;
 use super::source::GitFocus;
-
-/// How far `Ctrl+Up` and `Ctrl+Down` jump, in the tree and in the editor.
-///
-/// A fixed count rather than a fraction of the pane: the point of it is a step
-/// you can feel the size of and repeat, which a number tied to the window
-/// height would not be. `PageUp`/`PageDown` are the ones that move by a screen.
-const JUMP_LINES: usize = 5;
 
 /// Apply one key to a buffer, and say what to complain about if anything.
 ///
@@ -71,12 +64,12 @@ pub(super) fn edit_with_key(
             ed.move_word_right();
             return None;
         }
-        Some(Action::JumpUp) => {
-            ed.page_up(JUMP_LINES);
+        Some(Action::PageUp) => {
+            ed.page_up(page);
             return None;
         }
-        Some(Action::JumpDown) => {
-            ed.page_down(JUMP_LINES);
+        Some(Action::PageDown) => {
+            ed.page_down(page);
             return None;
         }
         Some(Action::EditorLineStart) => {
@@ -124,12 +117,15 @@ impl App {
     /// out and `Normal` left in its place, so a handler that does nothing
     /// closes its overlay, and one that wants to stay open has to say so.
     pub fn on_key(&mut self, key: KeyEvent) {
+        // One spelling per key, before anything reads it: macOS Terminal's
+        // `⌥←` arrives as `Alt+B`, and becomes the arrow it was.
+        let key = from_terminal(key);
         // The window switcher answers before anything else, from every window
         // and through every overlay. A key that changes which window you are
         // looking at cannot be one that a pane might swallow first, or it
         // would work from some places and not others.
         if let Some(window) = self.window_key(&key) {
-            return self.show_window(window);
+            return self.toggle_window(window);
         }
         // An overlay owns the keyboard wherever it was opened from — the bar
         // is drawn over every window, so it has to be typed into from every
@@ -180,11 +176,9 @@ impl App {
         match action {
             Action::Up => self.move_git_cursor(-1),
             Action::Down => self.move_git_cursor(1),
-            Action::JumpUp => self.move_git_cursor(-(JUMP_LINES as isize)),
-            Action::JumpDown => self.move_git_cursor(JUMP_LINES as isize),
             Action::Left => self.move_git_button(-1),
             Action::Right => self.move_git_button(1),
-            Action::SourceEnter => self.activate_git(),
+            Action::Open => self.activate_git(),
             Action::SourceOpen => self.open_from_git(),
             Action::Refresh => {
                 self.refresh_git();
@@ -200,12 +194,41 @@ impl App {
     }
 
     /// Which window this key asks for, if it asks for one.
+    ///
+    /// Read with [`resolve_while_typing`](crate::config::keys::Keymap::resolve_while_typing)
+    /// so that, if someone binds a window to a bare letter, that letter is
+    /// still a letter in a file or a commit message.
     fn window_key(&self, key: &KeyEvent) -> Option<Window> {
-        match self.keymap.find(KeyContext::Global, key) {
-            Some(Action::WindowMain) => Some(Window::Main),
+        // While the keybinds window is waiting for a key, every key is data —
+        // these included, or nothing could ever be bound to them.
+        if matches!(&self.mode, Mode::Keybinds(kb) if kb.capturing) {
+            return None;
+        }
+        let typing = matches!(self.mode, Mode::Bar(_) | Mode::Settings(_))
+            || (self.window == Window::Main
+                && self.focus == Focus::Editor
+                && matches!(self.preview, Preview::Buffer { .. }))
+            || (self.window == Window::Source && self.git.focus == GitFocus::Message);
+        let action = if typing {
+            self.keymap.resolve_while_typing(KeyContext::Global, key)
+        } else {
+            self.keymap.find(KeyContext::Global, key)
+        };
+        match action {
             Some(Action::WindowSource) => Some(Window::Source),
             Some(Action::WindowMap) => Some(Window::Map),
             _ => None,
+        }
+    }
+
+    /// The window keys are toggles: the key for the window you are in takes
+    /// you back to the browser, so one key opens git and the same key puts it
+    /// away — the way the browser's own key folds it and brings it back.
+    fn toggle_window(&mut self, window: Window) {
+        if self.window == window {
+            self.show_window(Window::Main);
+        } else {
+            self.show_window(window);
         }
     }
 
@@ -263,31 +286,27 @@ impl App {
         }
     }
 
-    /// Every chord in [`KeyContext::Global`], in one place.
+    /// Every action in [`KeyContext::Global`] that means the same thing
+    /// wherever you are, in one place.
     ///
     /// These are the controls that have to work while you are typing into a
-    /// file, which is what makes them chords rather than letters: `n` is the
-    /// letter n in the editor and cannot be anything else, so "new" is
-    /// `Ctrl+N` everywhere instead of `n` in one pane and nothing in the
-    /// other.
+    /// file, which is what makes them chords: `f` is the letter f in the
+    /// editor and cannot be anything else, so search is `Ctrl+F` there, with
+    /// the bare `/` beside it for the panes where nothing is being typed.
     ///
     /// Handled here rather than twice, because a global that the tree and the
     /// editor disagreed about would not be global. Returns whether the action
-    /// was one of them; [`Action::Save`] and the two "leave this pane" keys
-    /// are deliberately not, since what they mean does depend on where you
-    /// are.
+    /// was one of them; [`Action::Save`] is deliberately not, since what it
+    /// saves depends on where you are. The two window keys are not either:
+    /// [`App::on_key`] answers them before any pane is asked.
     fn on_global_action(&mut self, action: Action) -> bool {
         match action {
             Action::Quit => self.request_quit(),
-            Action::Bar => self.open_bar(false),
-            Action::CommandBar => self.open_bar(true),
+            Action::Bar => self.open_bar(),
             Action::ToggleTreePane => self.toggle_tree_pane(),
             Action::Copy => self.copy_selection(),
             Action::Paste => self.paste_clipboard(),
             Action::Help => self.mode = Mode::Help(0),
-            Action::WindowMain => self.show_window(Window::Main),
-            Action::WindowSource => self.show_window(Window::Source),
-            Action::WindowMap => self.show_window(Window::Map),
             _ => return false,
         }
         true
@@ -296,13 +315,11 @@ impl App {
     /// Keys for the tree pane.
     ///
     /// Single letters are free here — unlike the editor, nothing is being
-    /// typed — so `n`, `r`, `m` and friends stay bound as bare keys alongside
-    /// the chords that do the same thing from anywhere. Two ways to reach one
-    /// action, and the tree is the pane where the short one still works.
+    /// typed — which is why the browser's own keys are bare: `.` for dotfiles,
+    /// `<` and `>` for its width, `i` `j` `k` `l` for the arrows.
     ///
-    /// A few keys are *only* here: the browser's own width, on `Ctrl` with an
-    /// arrow, which cannot be global because those two are word motions in the
-    /// editor.
+    /// Esc is `back` here as it is everywhere, and back from the browser is
+    /// out of tiny — asking first if anything is unsaved.
     fn on_tree_key(&mut self, key: KeyEvent) {
         let page = self.last_tree_height.saturating_sub(1).max(1) as isize;
         let Some(action) = self.keymap.resolve(KeyContext::Tree, &key) else {
@@ -313,19 +330,16 @@ impl App {
         }
         match action {
             Action::Save => self.save_from_tree(),
-            Action::TreeQuit => self.request_quit(),
+            Action::Back => self.request_quit(),
             Action::Up => self.move_selection(-1),
             Action::Down => self.move_selection(1),
             Action::First => self.select_index(0),
             Action::Last => self.select_index(usize::MAX),
-            Action::JumpUp => self.move_selection(-(JUMP_LINES as isize)),
-            Action::JumpDown => self.move_selection(JUMP_LINES as isize),
             Action::PageUp => self.move_selection(-page),
             Action::PageDown => self.move_selection(page),
-            Action::TreeOpen => self.toggle_or_open(),
+            Action::Open => self.toggle_or_open(),
             Action::Right => self.activate(),
             Action::Left => self.collapse_or_parent(),
-            Action::TreePreview => self.focus_editor(),
             Action::TreeHidden => self.toggle_hidden(),
             Action::Narrower => self.resize_tree_pane(-1),
             Action::Wider => self.resize_tree_pane(1),
@@ -337,8 +351,8 @@ impl App {
     ///
     /// The escape hatches come first and return early, so nothing that leaves
     /// the pane or acts on the file can be swallowed as text input. That is
-    /// also why `Ctrl+P` exists as a second binding for the command bar: a
-    /// bare `:` in the editor is a colon being typed.
+    /// why every one of them is a chord, or Esc: a bare `/` in the editor is a
+    /// slash being typed.
     ///
     /// Below that the function forks on whether there is a buffer behind the
     /// preview: a text file types, a picture scrolls.
@@ -348,10 +362,10 @@ impl App {
 
         // Keys that leave the pane or act on the file come first, so they can
         // never be swallowed as text input. Everything global reaches here,
-        // which is the point of the chords: `Ctrl+N` makes a file from inside
-        // the editor, where a bare `n` is the letter n and always will be.
-        // A buffer is being typed into; a picture or a folder listing is not,
-        // and in front of one a bare `/` should still open the bar.
+        // which is the point of the chords: `Ctrl+F` searches from inside the
+        // editor, where a bare `/` is a slash and always will be. A buffer is
+        // being typed into; a picture or a folder listing is not, and in front
+        // of one a bare `/` should still open the bar.
         let resolved = if matches!(self.preview, Preview::Buffer { .. }) {
             self.keymap.resolve_while_typing(KeyContext::Editor, &key)
         } else {

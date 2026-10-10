@@ -92,6 +92,7 @@ impl App {
                 Ok(String::new())
             }
             "commit" => self.commit(&rest.join(" ")),
+            "update" => self.cmd_update(),
             "rename" | "mv" => self.cmd_rename(rest),
             "new" => self.cmd_new(rest, false),
             "mkdir" => self.cmd_new(rest, true),
@@ -100,7 +101,7 @@ impl App {
             "line" | "go" => self.cmd_line(rest),
             // A bare number is a line number, the way `:42` is everywhere else.
             n if n.parse::<usize>().is_ok() => self.cmd_line(&args),
-            other => Err(anyhow!("unknown command `{other}` — F1 lists them")),
+            other => Err(anyhow!("unknown command `{other}` — ? lists them")),
         };
         match result {
             Ok(msg) if !msg.is_empty() => self.status = msg,

@@ -149,15 +149,28 @@ fn a_command_typed_into_the_search_bar_runs() {
 }
 
 #[test]
-fn ctrl_p_opens_the_bar_with_the_sigil_already_there() {
+fn ctrl_f_opens_the_bar_empty_and_a_star_makes_it_the_command_line() {
     let (_td, mut app) = fixture();
-    app.on_key(ctrl('p'));
+    app.on_key(ctrl('f'));
     let Mode::Bar(b) = &app.mode else {
         panic!("no bar")
     };
-    assert_eq!(b.input, "*");
+    assert!(!b.is_command(), "it opens as a search");
+    app.on_key(ch('*'));
+    let Mode::Bar(b) = &app.mode else {
+        panic!("no bar")
+    };
     assert!(b.is_command());
-    assert_eq!(b.cursor, 1, "and the cursor is past it");
+    assert_eq!(b.cursor, 1, "and the cursor is past the star");
+}
+
+#[test]
+fn there_is_one_key_for_the_bar_not_two() {
+    // Ctrl+P used to open it with the star already typed: one key to save
+    // one keystroke, and one more row in the keybinds window.
+    let (_td, mut app) = fixture();
+    app.on_key(ctrl('p'));
+    assert!(matches!(app.mode, Mode::Normal), "{:?}", app.mode);
 }
 
 #[test]
@@ -177,14 +190,14 @@ fn a_colon_is_just_a_colon_now() {
     app.on_key(ch(':'));
     assert!(
         matches!(app.mode, Mode::Normal),
-        "the bar is reached by / and Ctrl+P; it does not need a third key"
+        "the bar is reached by / and Ctrl+F; it does not need a third key"
     );
 }
 
 #[test]
 fn the_bar_shows_the_star_once_not_twice() {
     let (_td, mut app) = fixture();
-    app.on_key(ctrl('p'));
+    command_bar(&mut app);
     type_str(&mut app, "copy");
     let bar = screen(&mut app, 90, 24)
         .into_iter()
@@ -197,7 +210,7 @@ fn the_bar_shows_the_star_once_not_twice() {
 #[test]
 fn the_bar_offers_the_completion_in_gray_before_tab() {
     let (_td, mut app) = fixture();
-    app.on_key(ctrl('p'));
+    command_bar(&mut app);
     type_str(&mut app, "cop");
     let bar = screen(&mut app, 90, 24)
         .into_iter()
@@ -219,7 +232,7 @@ fn the_bar_offers_the_completion_in_gray_before_tab() {
 #[test]
 fn the_offer_is_only_made_at_the_end_of_the_line() {
     let (_td, mut app) = fixture();
-    app.on_key(ctrl('p'));
+    command_bar(&mut app);
     type_str(&mut app, "cop");
     app.on_key(k(KeyCode::Home));
     let bar = screen(&mut app, 90, 24)
@@ -247,7 +260,7 @@ fn a_search_is_not_offered_a_command_completion() {
 #[test]
 fn the_right_arrow_takes_up_the_suggestion_too() {
     let (_td, mut app) = fixture();
-    app.on_key(ctrl('p'));
+    command_bar(&mut app);
     type_str(&mut app, "cop");
     app.on_key(k(KeyCode::Right));
     let Mode::Bar(b) = &app.mode else {
@@ -260,7 +273,7 @@ fn the_right_arrow_takes_up_the_suggestion_too() {
 #[test]
 fn the_right_arrow_still_moves_along_the_text_mid_line() {
     let (_td, mut app) = fixture();
-    app.on_key(ctrl('p'));
+    command_bar(&mut app);
     type_str(&mut app, "cop");
     app.on_key(k(KeyCode::Home));
     app.on_key(k(KeyCode::Right));
@@ -291,15 +304,15 @@ fn tab_completes_commands_and_setting_names() {
 }
 
 #[test]
-fn ctrl_p_reaches_the_command_bar_from_inside_the_editor() {
+fn ctrl_f_reaches_the_command_line_from_inside_the_editor() {
     let (td, mut app) = fixture();
     select(&mut app, "main.py");
     app.on_key(k(KeyCode::Enter));
     type_str(&mut app, "z");
-    // A bare `:` here would be a character, so the editor needs its own way in.
-    app.on_key(ctrl('p'));
+    // A bare `/` here would be a character, so the editor needs its own way in.
+    app.on_key(ctrl('f'));
     assert!(matches!(app.mode, Mode::Bar(_)));
-    type_str(&mut app, "set tab_width 7");
+    type_str(&mut app, "*set tab_width 7");
     app.on_key(k(KeyCode::Enter));
     assert_eq!(app.config.tab_width, 7, "the command ran: {}", app.status);
     assert!(

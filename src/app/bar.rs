@@ -104,7 +104,7 @@ fn complete_command(b: &mut Bar, root: &Path, show_hidden: bool) {
 pub fn completion_for(b: &Bar, root: &Path, show_hidden: bool) -> Option<String> {
     const COMMANDS: &[&str] = &[
         "set", "replace", "config", "settings", "reload", "new", "mkdir", "rename", "mv", "delete",
-        "rm", "copy", "cp", "line", "commit",
+        "rm", "copy", "cp", "line", "commit", "update",
     ];
     const TAKES_PATHS: &[&str] = &["new", "mkdir", "rename", "mv", "delete", "rm", "copy", "cp"];
 
@@ -169,23 +169,19 @@ pub fn completion_for(b: &Bar, root: &Path, show_hidden: bool) -> Option<String>
 impl App {
     // ---- the bar ----------------------------------------------------------
 
-    /// Open the bar, discarding whatever was there before.
+    /// Open the bar, empty, discarding whatever was there before.
     ///
-    /// `as_command` only decides what is already typed into it: the sigil, or
-    /// nothing. After that the bar decides for itself, keystroke by keystroke,
-    /// which of the two things it is.
+    /// It opens as a search, and decides for itself, keystroke by keystroke,
+    /// whether it is still one: a `*` typed first makes it the command line.
+    /// There used to be a second key that opened it with the star already
+    /// typed — one key to save one keystroke, and one more row to read past.
     ///
     /// The file being edited is remembered as the bar opens, so a search
     /// started from inside a file can put that file's hits at the top. Only
     /// when the editor actually has the keyboard: hovering a file in the tree
     /// is looking around the project, and a search from there has no reason to
     /// favor whichever row the cursor happened to be resting on.
-    pub(super) fn open_bar(&mut self, as_command: bool) {
-        let input = if as_command {
-            COMMAND_SIGIL.to_string()
-        } else {
-            String::new()
-        };
+    pub(super) fn open_bar(&mut self) {
         let home = match (&self.preview, self.focus) {
             (Preview::Buffer { path, .. }, Focus::Editor) => Some(path.clone()),
             _ => None,
@@ -193,14 +189,12 @@ impl App {
         // Over the map the bar is the map's filter, and opening it starts a
         // new one: the last filter is not something to carry into this search
         // without being asked for again.
-        let filtering = !as_command && self.window == Window::Map;
+        let filtering = self.window == Window::Map;
         if filtering {
             self.filter_map("");
         }
-        self.mode = Mode::Bar(Bar::new(input, home));
-        self.status = if as_command {
-            "command — Tab completes | Enter runs | Esc closes".into()
-        } else if filtering {
+        self.mode = Mode::Bar(Bar::new(String::new(), home));
+        self.status = if filtering {
             "filter the map — Enter keeps it | Esc clears it".into()
         } else {
             format!("search — or {COMMAND_SIGIL} for a command, like {COMMAND_SIGIL}copy a to b")

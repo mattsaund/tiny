@@ -1,33 +1,72 @@
-# Ready-made binaries, attached to a GitHub release whenever a version is tagged.
+# Ready-made binaries: built on every push to main, published when a version
+# is tagged.
 #
 # This is what makes tiny installable on a machine with no compiler. Building
 # from source needs Rust, and on Windows it also needs the Visual Studio Build
 # Tools — several gigabytes, an administrator prompt and twenty minutes, to try
 # a seven-megabyte program. A Mac needs the Xcode command line tools for the
 # same reason. The installers download one of these instead, and only fall back
-# to building when there is no release to download.
+# to building when there is none for the machine.
 #
-#   git tag v0.3.1 && git push matt v0.3.1
+# Every push to main runs all of it except the publishing, so by the time a
+# version is tagged its exact build has already passed here. To release:
 #
-# builds every target below and publishes them as the release for that tag.
+#   1. Set `version` in Cargo.toml, and give it a section in CHANGELOG.md.
+#   2. Push to main, and wait for this and `ci` to pass.
+#   3. git tag v0.4.5 && git push origin v0.4.5
+#
+# The tag has to match Cargo.toml and the changelog has to have the version in
+# it — the `version` job stops the release before anything is built otherwise.
 name: release
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   # Runs the builds by hand, to check the packaging without publishing. Only a
   # tag publishes; see the `publish` job's condition.
   workflow_dispatch:
 
+# Building needs nothing more. The one job that writes asks for it itself.
 permissions:
-  contents: write
+  contents: read
+
+# A dry run on main is made moot by the next push. A release is never cut
+# short half way through.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  version:
+    name: check the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the version, and hold the tag and the changelog to it
+        id: read
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          echo "Cargo.toml says $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::the tag is $GITHUB_REF_NAME but Cargo.toml says $version"
+            exit 1
+          fi
+          if ! grep -q "^## $version " CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+
   build:
     name: build ${{ matrix.target }}
+    needs: version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -41,8 +80,15 @@ jobs:
             target: aarch64-apple-darwin
           - os: macos-latest
             target: x86_64-apple-darwin
-          - os: ubuntu-latest
+            cross: true
+          # The oldest Ubuntu GitHub still runs, because a binary runs on the
+          # C library it was linked against *or newer*. install.sh tries the
+          # download before keeping it, and builds instead where it will not
+          # start.
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v7
 
@@ -50,7 +96,25 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
       - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # A binary that does not start, or calls itself a different version,
+      # is caught here rather than on someone's machine.
+      - name: Run it
+        if: ${{ !matrix.cross }}
+        shell: bash
+        run: |
+          got=$("target/${{ matrix.target }}/release/tiny" --version)
+          echo "$got"
+          [ "$got" = "tiny ${{ needs.version.outputs.version }}" ]
+
+      - name: Check it is built for Intel
+        if: ${{ matrix.cross }}
+        run: lipo -info "target/${{ matrix.target }}/release/tiny" | grep x86_64
 
       # The names here are what the installers ask for — `tiny-<target>.zip` on
       # Windows, `tiny-<target>.tar.gz` everywhere else — so change them in both
@@ -76,18 +140,40 @@ jobs:
           path: tiny-${{ matrix.target }}.*
 
   publish:
-    needs: build
-    # A hand-run build has no tag to hang a release on; it stops here with the
-    # packages downloadable from the run page.
-    if: startsWith(github.ref, 'refs/tags/')
+    name: publish the release
+    needs: [version, build]
+    # A push to main or a hand-run build has no tag to hang a release on; it
+    # stops here with the packages downloadable from the run page.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - uses: actions/checkout@v7
+
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
 
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * | tee SHA256SUMS
+
+      # The release notes are the version's own section of the changelog, so
+      # the two can never say different things.
+      - name: Release notes
+        run: |
+          awk -v v="${{ needs.version.outputs.version }}" '
+            index($0, "## " v " ") == 1 { inside = 1; next }
+            inside && /^## / { exit }
+            inside { print }
+          ' CHANGELOG.md > notes.md
+          cat notes.md
+          [ -s notes.md ]
+
       - uses: softprops/action-gh-release@v3
         with:
+          name: tiny ${{ needs.version.outputs.version }}
+          body_path: notes.md
           files: dist/*
-          generate_release_notes: true

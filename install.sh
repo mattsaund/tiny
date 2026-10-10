@@ -3,14 +3,15 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/mattsaund/tiny/main/install.sh | sh
 #
-# On a Mac it downloads the ready-made binary from the latest GitHub release.
-# Otherwise — Linux, a Mac with no release to download, or run from inside a
-# checkout — it builds from source, fetching the source itself when piped from
-# the web and building what is there when run from a checkout.
+# It downloads the ready-made binary from the latest GitHub release, for macOS
+# or Linux, Intel or ARM. Only when there is none for this machine, or it will
+# not run here, or this is run from inside a checkout, does it build from
+# source — fetching the source itself when piped from the web.
 #
 # Override anything with the environment:
 #   TINY_REPO=...         git URL to clone
-#   TINY_REF=...          branch or tag (default: main)
+#   TINY_REF=...          branch or tag (default: main); a version tag like
+#                         v0.4.5 installs that release
 #   TINY_PREFIX=...       where the binary lands (default: ~/.local/bin)
 #   TINY_FROM_SOURCE=1    build even where a download is available
 
@@ -63,6 +64,20 @@ trap cleanup EXIT INT TERM
 # into a file is a single unreadable line thousands of characters long.
 tty_out() { [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; }
 
+# Put the binary at $1 in $PREFIX, over whatever tiny is already there.
+#
+# Copied in beside the old one and renamed over it. A rename replaces a program
+# even while it runs — which it is, when tiny is updating itself — without
+# touching the copy it is running from; writing over it in place would not,
+# and a copy from a temporary directory on another disk is a write.
+put_in_place() {
+    mkdir -p "$PREFIX" \
+        && cp "$1" "$PREFIX/.tiny.new" \
+        && chmod +x "$PREFIX/.tiny.new" \
+        && mv -f "$PREFIX/.tiny.new" "$PREFIX/tiny" \
+        || { rm -f "$PREFIX/.tiny.new"; return 1; }
+}
+
 # What to say once there is a binary, from either route to one.
 finish() {
     say ""
@@ -90,32 +105,44 @@ finish() {
 
 # --- a ready-made binary -----------------------------------------------------
 #
-# Building on a Mac needs the Xcode command line tools as well as Rust — a
-# large download to try a small program — so a Mac takes the binary the
-# release workflow built, and only builds when there is none to take. Linux
-# keeps building: it has a compiler already, and a binary linked against one
-# distribution's C library is one that can fail on another's.
+# Building needs Rust, and on a Mac the Xcode command line tools as well — a
+# large download to try a small program — so this takes the binary the release
+# workflow built, and only builds when there is none to take.
 #
-# Not when asked to build, and not for a named ref: a release is a tag, and a
-# branch today is not what the last tag was.
+# A Linux binary is linked against the C library of the system that built it,
+# and will not start on an older one, or on a different one — Alpine's musl.
+# So it is asked its version before it replaces anything, and a binary that
+# cannot answer is a reason to build instead.
+#
+# Not when asked to build, and not for a branch: a branch today is not what any
+# release was. A version tag names its release exactly, and `main` means the
+# newest one.
 prebuilt() {
-    [ "$(uname -s)" = Darwin ] || return 1
     [ -z "${TINY_FROM_SOURCE:-}" ] || return 1
-    [ "$REF" = main ] || return 1
+    case "$REF" in
+        main) release=latest/download ;;
+        v[0-9]*) release="download/$REF" ;;
+        *) return 1 ;;
+    esac
     have curl || return 1
+    case "$(uname -s)" in
+        Darwin) os=apple-darwin ;;
+        Linux) os=unknown-linux-gnu ;;
+        *) return 1 ;;
+    esac
     case "$(uname -m)" in
         arm64|aarch64) arch=aarch64 ;;
-        x86_64) arch=x86_64 ;;
+        x86_64|amd64) arch=x86_64 ;;
         *) return 1 ;;
     esac
     slug=${REPO#https://github.com/}
     slug=${slug%.git}
     case "$slug" in *://*|*/*/*) return 1 ;; */*) ;; *) return 1 ;; esac
-    url="https://github.com/$slug/releases/latest/download/tiny-$arch-apple-darwin.tar.gz"
+    url="https://github.com/$slug/releases/$release/tiny-$arch-$os.tar.gz"
     dir="$(temp_dir)" || return 1
-    printf 'downloading tiny for %s ... ' "$arch"
+    printf 'downloading tiny for %s ... ' "$arch-$os"
     if ! curl -fsSL "$url" -o "$dir/tiny.tar.gz" 2>/dev/null; then
-        say "none published yet, so building from source instead"
+        say "none published for it, so building from source instead"
         rm -rf "$dir"
         return 1
     fi
@@ -124,8 +151,15 @@ prebuilt() {
         rm -rf "$dir"
         return 1
     fi
-    mkdir -p "$PREFIX"
-    mv "$dir/tiny" "$PREFIX/tiny" && chmod +x "$PREFIX/tiny"
+    if ! "$dir/tiny" --version >/dev/null 2>&1; then
+        say "it does not run on this system, so building from source instead"
+        rm -rf "$dir"
+        return 1
+    fi
+    if ! put_in_place "$dir/tiny"; then
+        rm -rf "$dir"
+        die "could not put tiny in $PREFIX"
+    fi
     rm -rf "$dir"
     say "done"
 }
@@ -348,13 +382,5 @@ if ! build; then
 fi
 
 [ -x "$ROOT/bin/tiny" ] || die "the build finished without leaving a binary"
-
-# Copied in beside the old one and renamed over it. A rename replaces a program
-# even while it runs, without touching the copy it is running from; writing
-# over it in place would not, and a copy from a temporary directory on another
-# disk is a write.
-cp "$ROOT/bin/tiny" "$PREFIX/.tiny.new" \
-    && chmod +x "$PREFIX/.tiny.new" \
-    && mv -f "$PREFIX/.tiny.new" "$PREFIX/tiny" \
-    || { rm -f "$PREFIX/.tiny.new"; die "could not put tiny in $PREFIX"; }
+put_in_place "$ROOT/bin/tiny" || die "could not put tiny in $PREFIX"
 finish

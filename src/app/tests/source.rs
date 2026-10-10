@@ -54,9 +54,9 @@ fn repo() -> (tempfile::TempDir, App) {
     (td, app)
 }
 
-/// Switch to the source window the way `Ctrl+2` does.
+/// Switch to the source window the way `Ctrl+G` does.
 fn source(app: &mut App) {
-    app.on_key(ctrl('2'));
+    app.on_key(ctrl('g'));
     assert_eq!(app.window, Window::Source);
 }
 
@@ -561,38 +561,28 @@ fn long_repo() -> (tempfile::TempDir, App) {
 }
 
 #[test]
-fn ctrl_and_an_arrow_moves_five_at_a_time_in_both_halves() {
+fn a_page_key_pages_the_diff_from_either_half() {
     let (_td, mut app) = long_repo();
     source(&mut app);
     cursor_on(&mut app, "long.txt");
+    // Drawn once, so the diff has a height to page by.
+    joined(&mut app);
+    let page = app.git.diff_height.saturating_sub(1).max(1);
 
-    // In the diff, five lines rather than one.
-    app.on_key(k(KeyCode::Right));
-    assert_eq!(app.git.focus, GitFocus::Diff);
-    app.on_key(ctrl_key(KeyCode::Down));
-    assert_eq!(app.git.diff_scroll, 5, "{}", app.status);
-    app.on_key(ctrl_key(KeyCode::Up));
+    app.on_key(k(KeyCode::PageDown));
+    assert_eq!(app.git.diff_scroll, page, "{}", app.status);
+    // The chord beside it, for a keyboard with no Page Down.
+    app.on_key(ctrl('u'));
     assert_eq!(app.git.diff_scroll, 0, "and back up again");
 
-    // And in the list, five rows rather than one.
-    app.on_key(k(KeyCode::Left));
-    app.on_key(ctrl_key(KeyCode::Up));
-    assert_eq!(
-        app.git.selected, 0,
-        "clamped at the top rather than running off"
-    );
-    let rows = app.git.rows.len();
-    app.on_key(ctrl_key(KeyCode::Down));
-    assert_eq!(
-        app.git.selected,
-        5.min(rows - 1),
-        "five down the list: {}",
-        app.status
-    );
+    app.on_key(k(KeyCode::Right));
+    assert_eq!(app.git.focus, GitFocus::Diff);
+    app.on_key(ctrl('d'));
+    assert_eq!(app.git.diff_scroll, page, "the same from inside the diff");
 }
 
 #[test]
-fn ctrl_and_an_arrow_is_five_lines_in_the_message_box_too() {
+fn a_page_key_pages_the_message_box_too() {
     // `long_repo` committed everything else, so `long.txt` is the one change.
     let (_td, mut app) = long_repo();
     source(&mut app);
@@ -606,29 +596,34 @@ fn ctrl_and_an_arrow_is_five_lines_in_the_message_box_too() {
     let editor = app.git.message.as_ref().unwrap();
     assert_eq!(editor.cursor_line, 10, "ten lines in");
 
-    app.on_key(ctrl_key(KeyCode::Up));
+    app.on_key(ctrl('u'));
+    let page = app.git.diff_height.saturating_sub(1).max(1);
     assert_eq!(
         app.git.message.as_ref().unwrap().cursor_line,
-        5,
-        "five lines back — the editor's own key, working here too"
+        10usize.saturating_sub(page),
+        "a screen back — the editor's own key, working here too"
+    );
+    assert!(
+        !app.git.message.as_ref().unwrap().to_text().contains('u'),
+        "and not a letter typed"
     );
 }
 
 #[test]
-fn ctrl_and_an_arrow_sizes_the_change_list_without_folding_it() {
+fn the_angle_brackets_size_the_change_list_without_folding_it() {
     let (_td, mut app) = repo();
     source(&mut app);
     let start = app.config.tree_width;
 
-    app.on_key(ctrl_key(KeyCode::Right));
+    app.on_key(ch('>'));
     assert!(app.config.tree_width > start, "wider: {}", app.status);
-    app.on_key(ctrl_key(KeyCode::Left));
+    app.on_key(ch('<'));
     assert!((app.config.tree_width - start).abs() < 0.001, "and back");
 
     // Past the end it stops rather than folding: a source window with no
     // change list has nothing in it.
     for _ in 0..20 {
-        app.on_key(ctrl_key(KeyCode::Left));
+        app.on_key(ch('<'));
     }
     assert!(!app.tree_hidden, "the list is still there: {}", app.status);
     assert!(app.config.tree_width >= 0.10);
@@ -638,7 +633,7 @@ fn ctrl_and_an_arrow_sizes_the_change_list_without_folding_it() {
 #[test]
 fn a_project_that_is_not_a_repository_says_so_rather_than_looking_broken() {
     let (_td, mut app) = fixture();
-    app.on_key(ctrl('2'));
+    app.on_key(ctrl('g'));
     assert_eq!(app.window, Window::Source);
 
     let out = joined(&mut app);

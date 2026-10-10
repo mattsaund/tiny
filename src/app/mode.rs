@@ -24,15 +24,15 @@ pub enum Focus {
 
 /// Which window is on screen.
 ///
-/// `Ctrl+1`, `Ctrl+2` and `Ctrl+3`, and nothing else switches between them —
-/// they are windows rather than overlays, so there is no stack to pop and no
-/// "back" that could land you somewhere you did not choose. Esc from either of
-/// the other two returns to [`Window::Main`], which is where the files are.
+/// `Ctrl+G` and `Ctrl+L` switch to the other two, and each key takes you back
+/// again — they are windows rather than overlays, so there is no stack to pop
+/// and no "back" that could land you somewhere you did not choose. Esc from
+/// either returns to [`Window::Main`] as well, which is where the files are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Window {
     /// The browser and the file: what tiny opens on.
     Main,
-    /// Git, and what has changed. Not built yet.
+    /// Git, and what has changed.
     Source,
     /// The project map.
     Map,
@@ -101,7 +101,7 @@ impl Bar {
 /// They live at the top because they are what someone opening this area is
 /// most often looking for — and because a button below thirty rows of settings
 /// is a button nobody finds.
-pub const BUTTONS: &[&str] = &["Keybinds", "Reset settings"];
+pub const BUTTONS: &[&str] = &["Keybinds", "Reset"];
 
 /// The in-program settings area. Rows come from [`BUTTONS`] and then
 /// `Config::settings_index`, so this holds only the cursor and whatever is
@@ -130,6 +130,9 @@ pub enum ConfirmKind {
     ResetSettings,
     /// Throw away every rebinding and go back to the shipped keyboard.
     ResetKeybinds,
+    /// A newer tiny is out: `y` quits and installs it. Drawn as a window of
+    /// its own rather than on the status line — see `App::offer_update`.
+    Update(String),
 }
 
 /// A pending yes/no question. The `message` is built at the point the action
@@ -167,4 +170,4 @@ pub struct Keybinds {
 }
 
 /// The button above the keybinds list.
-pub const KEYBIND_BUTTONS: &[&str] = &["Reset keybinds"];
+pub const KEYBIND_BUTTONS: &[&str] = &["Reset"];

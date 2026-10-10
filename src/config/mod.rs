@@ -91,13 +91,16 @@ pub struct Config {
     /// Re-read files and folders that another program changed, without being
     /// asked. Off makes `*reload` the only way the disk is looked at again.
     pub auto_reload: bool,
+    /// Ask GitHub, once per run, whether a newer tiny has been released, and
+    /// offer to install it. Off leaves `*update` and `tiny --update` as the
+    /// only ways to find out — see [`crate::update`].
+    pub update_check: bool,
 
     /// Which side the project tree sits on.
     pub tree_side: Side,
     /// Share of the window given to the tree, 0.1 - 0.6.
     pub tree_width: f32,
-    /// Where the search bar appears when open.
-    /// Where the status line sits.
+    /// Number the lines of a file being edited.
     pub line_numbers: bool,
     pub markers: Markers,
     /// Draw boxes around the panes. Off gives a plainer, quieter screen.
@@ -105,7 +108,6 @@ pub struct Config {
 
     /// syntect theme used for code. Chrome stays monochrome regardless.
     pub syntax_theme: String,
-    /// Cap on hits collected by one search.
     /// Directories never walked by search, by exact name.
     pub search_ignore: Vec<String>,
 
@@ -113,8 +115,6 @@ pub struct Config {
     /// Everything else that is text opens straight in the editor.
     pub prose_extensions: Vec<String>,
 
-    /// A symbol defined in more files than this is too ambiguous to draw a
-    /// call edge for. Names like `new` and `main` are everywhere.
     pub theme: Theme,
 }
 
@@ -126,6 +126,7 @@ impl Default for Config {
             show_hidden: false,
             tab_width: 4,
             auto_reload: true,
+            update_check: true,
             tree_side: Side::Left,
             tree_width: 0.30,
             line_numbers: true,
@@ -217,7 +218,8 @@ impl Config {
             .count()
     }
 
-    /// Clamp every numeric field into a range that cannot break the layout.
+    /// Clamp every numeric field into a range that cannot break the layout,
+    /// and bring key names written by an older tiny up to date.
     ///
     /// Run after loading a file and after every `:set`, so there is no path by
     /// which a hand-edited `tree_width = 40` produces a tree wider than the
@@ -225,36 +227,42 @@ impl Config {
     fn sanitized(mut self) -> Self {
         self.tree_width = self.tree_width.clamp(0.10, 0.60);
         self.tab_width = self.tab_width.clamp(1, 16);
+        keys::migrate(&mut self.keys);
         self
     }
 
-    /// Every key `:set` accepts, with a one-line description. Also what the
+    /// Every key `:set` accepts, with a hint of a word or two. Also what the
     /// in-program settings area lists, so the two can never drift apart.
+    ///
+    /// A hint says what the name does not — the values a setting takes, or
+    /// what it is for when the name is not enough — and is empty otherwise.
+    /// The settings area shows it only beside the row under the cursor.
     pub fn settings_index() -> &'static [(&'static str, &'static str)] {
         &[
-            ("show_hidden", "list dotfiles in the tree"),
-            ("tab_width", "spaces inserted by Tab"),
-            ("auto_reload", "pick up changes made by other programs"),
-            ("tree_side", "tree side: left, right"),
-            ("tree_width", "share of width for the tree"),
-            ("line_numbers", "line numbers while editing"),
-            ("markers", "tree glyphs: arrows, ascii"),
-            ("borders", "draw boxes around the panes"),
-            ("syntax_theme", "syntect theme used for code"),
-            ("prose_extensions", "wrapped, read-first file types"),
-            ("search_ignore", "folders search never walks"),
-            ("theme.text", "body text style"),
-            ("theme.dim", "secondary text style"),
-            ("theme.border", "pane border style"),
-            ("theme.border_focus", "focused pane border style"),
-            ("theme.selection", "selected row style"),
-            ("theme.directory", "folder name style"),
-            ("theme.heading", "markdown heading style"),
-            ("theme.link", "link and wikilink style"),
-            ("theme.code", "inline code style"),
-            ("theme.marker", "unsaved marker and warnings"),
-            ("theme.map_in", "map: files that reach this one"),
-            ("theme.map_out", "map: files this one reaches"),
+            ("show_hidden", "dotfiles"),
+            ("tab_width", "spaces per Tab"),
+            ("auto_reload", "pick up outside changes"),
+            ("update_check", "ask when a new tiny is out"),
+            ("tree_side", "left or right"),
+            ("tree_width", "0.1 to 0.6"),
+            ("line_numbers", ""),
+            ("markers", "arrows or ascii"),
+            ("borders", ""),
+            ("syntax_theme", "colors for code"),
+            ("prose_extensions", "wrapped, not code"),
+            ("search_ignore", "folders search skips"),
+            ("theme.text", ""),
+            ("theme.dim", ""),
+            ("theme.border", ""),
+            ("theme.border_focus", ""),
+            ("theme.selection", ""),
+            ("theme.directory", ""),
+            ("theme.heading", ""),
+            ("theme.link", ""),
+            ("theme.code", ""),
+            ("theme.marker", "unsaved, and warnings"),
+            ("theme.map_in", "map: what reaches it"),
+            ("theme.map_out", "map: what it reaches"),
         ]
     }
 
@@ -272,6 +280,7 @@ impl Config {
             "show_hidden" => self.show_hidden.to_string(),
             "tab_width" => self.tab_width.to_string(),
             "auto_reload" => self.auto_reload.to_string(),
+            "update_check" => self.update_check.to_string(),
             "tree_side" => side_name(self.tree_side).into(),
             "tree_width" => format!("{:.2}", self.tree_width),
             "line_numbers" => self.line_numbers.to_string(),
@@ -313,6 +322,7 @@ impl Config {
             "show_hidden" => self.show_hidden = parse_bool(v)?,
             "tab_width" => self.tab_width = parse_num(v)?,
             "auto_reload" => self.auto_reload = parse_bool(v)?,
+            "update_check" => self.update_check = parse_bool(v)?,
             "tree_side" => {
                 self.tree_side = match v.to_ascii_lowercase().as_str() {
                     "left" => Side::Left,

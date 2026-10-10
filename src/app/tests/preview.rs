@@ -111,56 +111,61 @@ fn the_keybinds_window_lists_every_action_without_columns_colliding() {
 }
 
 #[test]
-fn ctrl_and_an_arrow_skips_five_lines_in_the_editor() {
+fn a_page_key_moves_a_screen_in_the_editor_and_stops_at_both_ends() {
     let (td, mut app) = fixture();
-    let body: String = (0..20).map(|i| format!("line {i}\n")).collect();
-    fs::write(td.path().join("notes/twenty.md"), body).unwrap();
+    let body: String = (0..60).map(|i| format!("line {i}\n")).collect();
+    fs::write(td.path().join("notes/sixty.md"), body).unwrap();
     command(&mut app, "reload");
-    select(&mut app, "twenty.md");
+    select(&mut app, "sixty.md");
     app.on_key(k(KeyCode::Enter));
+    // Lay it out once, so a screen has a size.
+    joined(&mut app);
+    let page = app.last_edit_height - 1;
+    let line = |app: &App| app.active_buffer().unwrap().cursor_line;
 
-    app.on_key(ctrl_key(KeyCode::Down));
-    assert_eq!(app.active_buffer().unwrap().cursor_line, 5);
-    app.on_key(ctrl_key(KeyCode::Down));
-    assert_eq!(app.active_buffer().unwrap().cursor_line, 10);
-    app.on_key(ctrl_key(KeyCode::Up));
-    assert_eq!(app.active_buffer().unwrap().cursor_line, 5);
+    app.on_key(k(KeyCode::PageDown));
+    assert_eq!(line(&app), page);
+    // The chord beside it, for the keyboards — every MacBook — with no
+    // Page Down to press.
+    app.on_key(ctrl('d'));
+    assert_eq!(line(&app), 2 * page);
+    app.on_key(ctrl('u'));
+    assert_eq!(line(&app), page);
     // Both ends clamp rather than running off the buffer.
     for _ in 0..10 {
-        app.on_key(ctrl_key(KeyCode::Up));
+        app.on_key(k(KeyCode::PageUp));
     }
-    assert_eq!(app.active_buffer().unwrap().cursor_line, 0);
+    assert_eq!(line(&app), 0);
     for _ in 0..10 {
-        app.on_key(ctrl_key(KeyCode::Down));
+        app.on_key(ctrl('d'));
     }
-    assert_eq!(
-        app.active_buffer().unwrap().cursor_line,
-        19,
-        "the last line"
-    );
+    assert_eq!(line(&app), 59, "the last line");
 }
 
 #[test]
-fn ctrl_and_an_arrow_skips_five_entries_in_the_tree() {
+fn a_page_key_moves_a_screen_of_entries_in_the_browser() {
     let (td, mut app) = fixture();
     for i in 0..12 {
         fs::write(td.path().join(format!("f{i:02}.txt")), "x\n").unwrap();
     }
     command(&mut app, "reload");
     app.selected = 0;
+    // A short window, so the list is several screens long.
+    screen(&mut app, 90, 10);
+    let page = app.last_tree_height - 1;
 
-    app.on_key(ctrl_key(KeyCode::Down));
-    assert_eq!(app.selected, 5);
-    app.on_key(ctrl_key(KeyCode::Down));
-    assert_eq!(app.selected, 10);
-    app.on_key(ctrl_key(KeyCode::Up));
-    assert_eq!(app.selected, 5);
+    app.on_key(k(KeyCode::PageDown));
+    assert_eq!(app.selected, page);
+    app.on_key(ctrl('d'));
+    assert_eq!(app.selected, 2 * page);
+    app.on_key(ctrl('u'));
+    assert_eq!(app.selected, page);
     for _ in 0..5 {
-        app.on_key(ctrl_key(KeyCode::Up));
+        app.on_key(k(KeyCode::PageUp));
     }
     assert_eq!(app.selected, 0, "it stops at the top");
     for _ in 0..20 {
-        app.on_key(ctrl_key(KeyCode::Down));
+        app.on_key(ctrl('d'));
     }
     assert_eq!(app.selected, app.rows.len() - 1, "and at the bottom");
 }
@@ -307,8 +312,53 @@ fn opening_a_picture_leaves_the_keyboard_on_the_tree() {
     // type into, so the cursor stays where it can still be moved.
     let (_td, mut app) = fixture();
     select(&mut app, "logo.png");
+    crate::files::media::opened::take();
     app.on_key(k(KeyCode::Enter));
     assert_eq!(app.focus, Focus::Tree);
+    let opened = crate::files::media::opened::take();
+    assert!(
+        opened.len() == 1 && opened[0].ends_with("logo.png"),
+        "{opened:?}"
+    );
+}
+
+#[test]
+fn enter_on_a_pdf_opens_it_in_the_desktops_own_viewer() {
+    let (td, mut app) = fixture();
+    fs::write(td.path().join("paper.pdf"), b"%PDF-1.7\n%binary\0\n").unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "paper.pdf");
+    let out = joined(&mut app);
+    assert!(
+        out.contains("PDF document"),
+        "described, not binary:\n{out}"
+    );
+    assert!(
+        out.contains("PDF viewer"),
+        "and says what Enter does:\n{out}"
+    );
+
+    crate::files::media::opened::take();
+    app.on_key(k(KeyCode::Enter));
+    let opened = crate::files::media::opened::take();
+    assert!(
+        opened.len() == 1 && opened[0].ends_with("paper.pdf"),
+        "handed to the desktop: {opened:?}"
+    );
+    assert_eq!(app.focus, Focus::Tree, "and the keyboard stays here");
+    assert!(app.status.contains("outside tiny"), "{}", app.status);
+}
+
+#[test]
+fn a_sound_opens_in_the_desktops_player_too() {
+    let (td, mut app) = fixture();
+    fs::write(td.path().join("song.mp3"), b"ID3\0\0\0").unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "song.mp3");
+    assert!(joined(&mut app).contains("MP3 audio"));
+    crate::files::media::opened::take();
+    app.on_key(k(KeyCode::Enter));
+    assert_eq!(crate::files::media::opened::take().len(), 1);
 }
 
 #[test]

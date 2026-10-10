@@ -222,7 +222,7 @@ fn ctrl_q_quits_from_inside_the_search_bar() {
 #[test]
 fn control_chords_do_not_type_letters_into_the_bar() {
     let (_td, mut app) = fixture();
-    app.on_key(ctrl('p'));
+    command_bar(&mut app);
     type_str(&mut app, "new note.md");
     app.on_key(ctrl('s'));
     let Mode::Bar(b) = &app.mode else {
@@ -374,10 +374,10 @@ fn a_search_from_inside_a_file_lists_that_files_hits_first() {
     // From inside zzz.md, its own hits come out on top — and every other hit
     // is still in the list, further down.
     select(&mut app, "zzz.md");
-    app.on_key(k(KeyCode::Tab));
+    app.on_key(k(KeyCode::Enter));
     assert_eq!(app.focus, Focus::Editor);
     // The chord, not the bare slash: in a file a slash is a slash.
-    app.on_key(ctrl('/'));
+    app.on_key(ctrl('f'));
     type_str(&mut app, "marker");
     let Mode::Bar(b) = &app.mode else {
         panic!("bar closed")
@@ -402,8 +402,8 @@ fn stepping_through_results_does_not_re_order_them_underneath_you() {
     command(&mut app, "reload");
 
     select(&mut app, "zzz.md");
-    app.on_key(k(KeyCode::Tab));
-    app.on_key(ctrl('/'));
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(ctrl('f'));
     type_str(&mut app, "marke");
     // Down moves onto a hit in another file, which opens that file in the
     // preview. The next keystroke must still favor the file the search was

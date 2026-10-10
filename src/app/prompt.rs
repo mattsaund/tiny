@@ -36,6 +36,7 @@ impl App {
                 ConfirmKind::Replace { find, replace } => self.do_replace(&find, &replace),
                 ConfirmKind::ResetSettings => self.do_reset_settings(),
                 ConfirmKind::ResetKeybinds => self.do_reset_keybinds(),
+                ConfirmKind::Update(version) => self.begin_update(version),
             },
             KeyCode::Char('n') | KeyCode::Char('N')
                 if matches!(c.kind, ConfirmKind::QuitUnsaved) =>
@@ -49,6 +50,10 @@ impl App {
                 match c.kind {
                     ConfirmKind::ResetSettings => self.mode = Mode::Settings(Settings::default()),
                     ConfirmKind::ResetKeybinds => self.mode = Mode::Keybinds(Keybinds::default()),
+                    ConfirmKind::Update(_) => return self.decline_update(),
+                    // Staying, after all — and an update that was waiting on
+                    // the way out is not something a later Ctrl+Q should do.
+                    ConfirmKind::QuitUnsaved => self.update_on_exit = None,
                     _ => {}
                 }
                 self.status = "canceled".into();

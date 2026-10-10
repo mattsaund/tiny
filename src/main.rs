@@ -37,11 +37,12 @@
 //! There is no background thread. `run` waits for the keyboard and redraws
 //! once when something arrives, so nothing happens between keypresses that the
 //! user did not cause — with one exception. The wait has a timeout, and each
-//! time it expires the loop asks two questions: has anything on screen been
-//! changed by another program (see [`app`'s disk watcher](app)), and has a git
-//! push or pull finished on its thread. A frame is drawn only if the answer to
-//! one of them is yes. That is a few `stat` calls and one `try_recv` twice a
-//! second while idle. See `app::watch` for why polling beat inotify here.
+//! time it expires the loop asks three questions: has anything on screen been
+//! changed by another program (see [`app`'s disk watcher](app)), has a git
+//! push or pull finished on its thread, and has the [`update`] check come
+//! back. A frame is drawn only if the answer to one of them is yes. That is a
+//! few `stat` calls and two `try_recv`s twice a second while idle. See
+//! `app::watch` for why polling beat inotify here.
 //!
 //! Everything is still synchronous: a slow search or a big graph build freezes
 //! the UI while it runs, so anything expensive needs its own budget (see the
@@ -55,14 +56,14 @@ mod licenses;
 mod map;
 mod text;
 mod ui;
+mod update;
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, KeyboardEnhancementFlags,
-    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseEventKind,
 };
 use crossterm::execute;
 
@@ -71,7 +72,7 @@ use config::keys::Keyboard;
 use config::{CONF_NAME, Config};
 
 /// `--help` output. Kept here as one literal rather than assembled from an
-/// argument parser: there are only six options, and a contributor changing
+/// argument parser: there are only seven options, and a contributor changing
 /// the CLI should be able to see the whole surface in one place.
 const USAGE: &str = "\
 tiny — a terminal knowledge manager
@@ -85,6 +86,7 @@ USAGE:
 OPTIONS:
     -h, --help          show this message
     -V, --version       show the version
+        --update        install the newest release, if there is one
         --config        print the path of the config file
         --licenses      terms of the bundled syntax definitions
         --uninstall     remove tiny; your notes are not touched
@@ -93,9 +95,9 @@ tiny writes nothing into a folder of yours that you did not name: no starter
 page, no dotfiles, no per-project settings.
 
 KEYS:
-    F1                  every key and command, from inside the app
+    ?                   every key and command, from inside the app
     /                   the bar: searches, or `*` first for a command
-    Ctrl+1 2 3          the browser, source control, the project map
+    Ctrl+G  Ctrl+L      source control, the project map
 ";
 
 /// Print to stdout, and do not mind if nobody is listening.
@@ -146,9 +148,10 @@ fn real_main() -> Result<()> {
             return Ok(());
         }
         Some("-V") | Some("--version") => {
-            println!("tiny {}", env!("CARGO_PKG_VERSION"));
+            println!("tiny {}", update::running());
             return Ok(());
         }
+        Some("--update") => return update::run_cli(),
         Some("--config") => {
             match Config::user_path() {
                 Some(p) => println!("{}", p.display()),
@@ -182,6 +185,14 @@ fn real_main() -> Result<()> {
 
     let warning = warn_config.or(warn_first_run);
     let mut app = App::new(target, cfg, warning)?;
+    // Which keys the terminal keeps for itself is known from the environment
+    // alone, so it is settled before the first frame — see `Keyboard`.
+    app.set_keyboard(Keyboard::detect());
+    // A release build asks, once, whether there is a newer one. A debug build
+    // is somebody working on tiny, and is left alone — see `update`.
+    if app.config.update_check && !cfg!(debug_assertions) {
+        app.start_update_check(false);
+    }
 
     // A clean message beats a panic when there is no terminal to draw on —
     // piping the binary or running it from a script hits this.
@@ -199,89 +210,40 @@ fn real_main() -> Result<()> {
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
     }
     ratatui::restore();
-    result
+    result?;
+
+    // A yes to the update question, carried out now that the terminal is an
+    // ordinary terminal again: the installer's progress, and any question it
+    // asks, need it.
+    if let Some(version) = app.update_on_exit.take() {
+        println!("updating tiny {} to {version}\n", update::running());
+        let exe = update::install(&version)?;
+        println!("\ntiny {version} installed — starting it");
+        update::relaunch(&exe)?;
+    }
+    Ok(())
 }
 
-/// Turn off the two things tiny asked the terminal for, if it panics.
+/// Turn off the mouse reporting tiny asked for, if it panics.
 ///
 /// `ratatui::try_init` already leaves a hook that gives back raw mode and the
-/// alternate screen. It cannot know about the two requests tiny makes on its
-/// own account — the mouse, and the disambiguating keyboard protocol — so
-/// without this a panic drops you back at a shell whose terminal is still
-/// reporting wheel events and still encoding `Ctrl+M` as something other than
-/// Enter, with nothing on screen to say why.
+/// alternate screen. It cannot know about the request tiny makes on its own
+/// account, so without this a panic drops you back at a shell whose terminal
+/// is still reporting wheel events, with nothing on screen to say why.
 ///
-/// Both are safe to send when they were never turned on: the terminal is being
-/// told to stop doing something it is not doing. That matters, because a hook
-/// runs at a moment when what did and did not get set up is not knowable.
+/// It is safe to send when it was never turned on: the terminal is being told
+/// to stop doing something it is not doing. That matters, because a hook runs
+/// at a moment when what did and did not get set up is not knowable.
 ///
-/// Ours runs first and ratatui's second, so the escape sequences go out while
+/// Ours runs first and ratatui's second, so the escape sequence goes out while
 /// the alternate screen is still up and the panic message is the last thing
 /// written.
 fn hand_back_the_terminal_on_panic() {
     let next = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(
-            std::io::stdout(),
-            DisableMouseCapture,
-            PopKeyboardEnhancementFlags
-        );
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
         next(info);
     }));
-}
-
-/// The terminal reporting chords it would otherwise throw away, for as long as
-/// this is held.
-///
-/// A terminal's legacy keyboard encoding cannot express some of the keys tiny
-/// binds. `Ctrl` with a digit is not in it at all — `Ctrl+1` sends nothing,
-/// `Ctrl+2` arrives as `Ctrl+Space` and `Ctrl+3` as `Esc` — and neither is
-/// `Ctrl+.`, while `Ctrl+/` is indistinguishable from `Ctrl+7`. The
-/// disambiguating half of the kitty keyboard protocol separates them all, and
-/// asking for it is a request the terminal is free to decline.
-///
-/// A terminal that declines is a terminal where the window keys do not work,
-/// and there is no encoding trick that would change that: one that cannot say
-/// which key was pressed cannot be made to. What still works there is
-/// everything with a key of its own — the arrows, `Home`, `End`, the browser's
-/// bare `.` and `/`, and every command.
-///
-/// # Why this is a guard, and why it is asked for late
-///
-/// The flags have to come back off. Left pushed, they change how the *next*
-/// program to run in this terminal reads its keyboard — so the pop belongs in
-/// `Drop`, where it happens on the error path as well as the ordinary one.
-///
-/// And the asking is a round trip: a query written to the terminal and an
-/// answer read back, with a two-second ceiling inside crossterm. Every real
-/// terminal answers `ESC [ c` immediately, but a pty with no emulator behind it
-/// — a recording, a test harness — answers nothing at all and spends the whole
-/// two seconds. Doing it after the first frame is drawn means that terminal
-/// still paints instantly; anything typed meanwhile is queued by crossterm and
-/// arrives once the query is done, so nothing is lost either way.
-struct RealChords(bool);
-
-impl RealChords {
-    fn ask() -> Self {
-        Self(
-            crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
-                && execute!(
-                    std::io::stdout(),
-                    PushKeyboardEnhancementFlags(
-                        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                    )
-                )
-                .is_ok(),
-        )
-    }
-}
-
-impl Drop for RealChords {
-    fn drop(&mut self) {
-        if self.0 {
-            let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-        }
-    }
 }
 
 /// How long the loop will wait for a key before going to look at the disk.
@@ -305,31 +267,21 @@ const IDLE: Duration = Duration::from_millis(500);
 /// `ratatui::restore` in the caller runs whether or not this returns an error,
 /// so a failure in here still gives the terminal back.
 fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
-    let mut chords = None;
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
         if app.should_quit {
             return Ok(());
         }
-        // After the first frame, once, and held for the rest of the run — see
-        // [`RealChords`] for both halves of why. What comes back decides which
-        // keyboard tiny has: a terminal that cannot send `Ctrl` with a digit
-        // gets the function keys instead, rather than three bindings that
-        // arrive as other keys.
-        if chords.is_none() {
-            let asked = RealChords::ask();
-            app.set_keyboard(if asked.0 {
-                Keyboard::Full
-            } else {
-                Keyboard::Legacy
-            });
-            chords = Some(asked);
-        }
         loop {
             if !event::poll(IDLE)? {
-                // Nobody typed anything. Has anyone else been writing — and
-                // has the push we started come back?
-                if app.poll_git_job() || app.rescan_disk() {
+                // Nobody typed anything. Has anyone else been writing — has
+                // the push we started come back — is there a newer tiny?
+                // Each is asked every time: one with news must not keep the
+                // others from being heard.
+                let git = app.poll_git_job();
+                let disk = app.rescan_disk();
+                let update = app.poll_update();
+                if git || disk || update {
                     break;
                 }
                 continue;

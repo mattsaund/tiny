@@ -199,21 +199,37 @@ fn a_save_that_fails_on_the_way_out_keeps_tiny_open() {
 #[test]
 fn help_opens_and_any_key_closes_it() {
     let (_td, mut app) = fixture();
-    app.on_key(k(KeyCode::F(1)));
+    app.on_key(ch('?'));
     // Tall enough for the whole thing; the short-terminal case scrolls,
     // and has a test of its own.
     let out = screen(&mut app, 90, 70).join("\n");
-    assert!(out.contains("Keys and commands"), "{out}");
+    assert!(out.contains(" Help "), "{out}");
     assert!(out.contains("search"), "{out}");
-    assert!(out.contains("the project map"), "{out}");
+    assert!(out.contains("ctrl+l"), "the map's key:\n{out}");
     app.on_key(ch('x'));
     assert!(matches!(app.mode, Mode::Normal));
 }
 
 #[test]
+fn help_is_short_words_and_each_key_once() {
+    // What the window is for: a glance. No label is a sentence, and a key
+    // that two panes share is still one row.
+    let (_td, mut app) = fixture();
+    app.on_key(ch('?'));
+    let out = screen(&mut app, 70, 90).join("\n");
+    let rows: Vec<&str> = out.lines().filter(|l| l.contains('│')).collect();
+    for row in &rows {
+        let text = row.trim_matches(|c: char| c == '│' || c.is_whitespace());
+        assert!(!text.contains(" — "), "a sentence crept back in: {text}");
+    }
+    let enters = rows.iter().filter(|r| r.contains("enter ")).count();
+    assert_eq!(enters, 1, "Enter is listed once:\n{out}");
+}
+
+#[test]
 fn help_lists_the_commands_as_well_as_the_keys() {
     let (_td, mut app) = fixture();
-    app.on_key(k(KeyCode::F(1)));
+    app.on_key(ch('?'));
     let out = screen(&mut app, 90, 70).join("\n");
     assert!(
         out.contains("*copy [from] to [to]"),
@@ -235,11 +251,11 @@ fn a_key_two_actions_share_is_listed_once() {
     // line in the editor. The row that merges those four actions has to say so
     // once, not `home end home end`.
     let (_td, mut app) = fixture();
-    app.on_key(k(KeyCode::F(1)));
+    app.on_key(ch('?'));
     let out = screen(&mut app, 100, 70).join("\n");
     let row = out
         .lines()
-        .find(|l| l.contains("to the ends"))
+        .find(|l| l.contains("ends"))
         .unwrap_or_else(|| panic!("no ends row in:\n{out}"));
     assert!(row.contains("home end"), "{row}");
     assert!(!row.contains("home end home"), "said twice: {row}");
@@ -254,7 +270,7 @@ fn the_help_window_shows_a_rebinding_not_the_shipped_key() {
     app.on_key(k(KeyCode::Esc));
     app.on_key(k(KeyCode::Esc));
 
-    app.on_key(k(KeyCode::F(1)));
+    app.on_key(ch('?'));
     let out = screen(&mut app, 90, 70).join("\n");
     let row = out
         .lines()
@@ -278,11 +294,11 @@ fn an_unbound_action_leaves_the_help_row_empty_rather_than_lying() {
     app.on_key(k(KeyCode::Esc));
     app.on_key(k(KeyCode::Esc));
 
-    app.on_key(k(KeyCode::F(1)));
+    app.on_key(ch('?'));
     let out = screen(&mut app, 90, 70).join("\n");
     let row = out
         .lines()
-        .find(|l| l.contains("on a folder, all of it"))
+        .find(|l| l.contains("save") && !l.contains("copy"))
         .unwrap_or_else(|| panic!("{out}"));
     assert!(
         !row.contains("ctrl+s"),
@@ -293,13 +309,12 @@ fn an_unbound_action_leaves_the_help_row_empty_rather_than_lying() {
 #[test]
 fn a_wide_window_puts_keys_and_commands_side_by_side() {
     let (_td, mut app) = fixture();
-    app.on_key(k(KeyCode::F(1)));
+    app.on_key(ch('?'));
     let rows = screen(&mut app, 130, 46);
     // Whichever command happens to line up with it — the point is that a
     // key and a command share a row.
     assert!(
-        rows.iter()
-            .any(|r| r.contains("open or close") && r.contains('*')),
+        rows.iter().any(|r| r.contains("ends") && r.contains('*')),
         "two columns on one row:\n{}",
         rows.join("\n")
     );
@@ -308,16 +323,14 @@ fn a_wide_window_puts_keys_and_commands_side_by_side() {
 #[test]
 fn a_narrow_window_stacks_them_into_one_column() {
     let (_td, mut app) = fixture();
-    app.on_key(k(KeyCode::F(1)));
-    let rows = screen(&mut app, 70, 70);
+    app.on_key(ch('?'));
+    let rows = screen(&mut app, 50, 90);
     let out = rows.join("\n");
     assert!(
-        !rows
-            .iter()
-            .any(|r| r.contains("open or close") && r.contains('*')),
+        !rows.iter().any(|r| r.contains("ends") && r.contains('*')),
         "no room for two:\n{out}"
     );
-    assert!(out.contains("open or close"), "{out}");
+    assert!(out.contains("ends"), "{out}");
     assert!(
         out.contains("*copy [from] to [to]"),
         "both are still listed:\n{out}"
@@ -327,9 +340,9 @@ fn a_narrow_window_stacks_them_into_one_column() {
 #[test]
 fn help_scrolls_on_a_terminal_too_short_for_it() {
     let (_td, mut app) = fixture();
-    app.on_key(k(KeyCode::F(1)));
+    app.on_key(ch('?'));
     let top = screen(&mut app, 80, 16).join("\n");
-    assert!(top.contains("MOVING"), "starts at the top:\n{top}");
+    assert!(top.contains("MOVE"), "starts at the top:\n{top}");
 
     for _ in 0..12 {
         app.on_key(k(KeyCode::Down));
@@ -345,11 +358,11 @@ fn help_scrolls_on_a_terminal_too_short_for_it() {
     app.on_key(k(KeyCode::End));
     let bottom = screen(&mut app, 80, 16).join("\n");
     assert!(
-        bottom.contains("*config"),
+        bottom.contains("*update"),
         "the last entry is reachable:\n{bottom}"
     );
     assert!(
-        !bottom.contains("MOVING"),
+        !bottom.contains("MOVE"),
         "and the top has scrolled off:\n{bottom}"
     );
 
@@ -423,6 +436,9 @@ fn arrow(c: char) -> Option<KeyCode> {
 /// `TINY_SHOT_KEYS` sentinels: `^x` Ctrl+X, `^→` Ctrl+Right, `^⇧→`
 /// Ctrl+Shift+Right, `⇧→` Shift+Right, `~x` Alt+X, `⏎` Enter, `⎋` Esc, `\t`
 /// Tab, and the four arrows themselves.
+///
+/// `TINY_SHOT_UPDATE=0.9.9` pretends a release check found that version, so
+/// a shot can be taken of the update question.
 #[test]
 #[ignore]
 fn screenshot() {
@@ -435,6 +451,10 @@ fn screenshot() {
     let mut app = App::new(target(Path::new(&dir), None), Config::default(), None).unwrap();
     if let Some(f) = file {
         select(&mut app, &f);
+    }
+    if let Ok(version) = std::env::var("TINY_SHOT_UPDATE") {
+        app.update_found = Some(version);
+        app.poll_update();
     }
     if let Ok(keys) = std::env::var("TINY_SHOT_KEYS") {
         let mut chars = keys.chars();

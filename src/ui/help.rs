@@ -25,10 +25,10 @@ use crate::config::keys::{Action, Keymap};
 
 /// One row of the keys half of `?`.
 ///
-/// Descriptions are labels, not sentences. The window has to hold every
-/// binding at once, and its width is set by the longest of them, so a phrase
-/// here costs a column on every other row. The README is where the prose
-/// lives; this is the thing you glance at.
+/// Descriptions are labels of a word or two, not sentences. The window has to
+/// hold every binding at once, and its width is set by the longest of them, so
+/// a phrase here costs a column on every other row. This is the thing you
+/// glance at; the keybinds window has the whole list, one action a row.
 enum KeyRow {
     Heading(&'static str),
     /// A gap between sections.
@@ -51,23 +51,14 @@ use KeyRow::{Blank, Bound, Fixed, Heading, Merged};
 /// The keys half of `?`, in the order someone learning tiny needs them.
 ///
 /// Moving first, because that is what you do before anything else; then the
-/// things you do to a file; then the windows that open over the top; then how
-/// to leave. Every command in the second half is a chord, which is the point
-/// of them — see [`crate::config::keys::Context::Global`].
+/// things you do to a file; then the windows; then the keys only git and the
+/// map have. Each key appears once: Enter is "open" in the browser and on the
+/// map and "stage" in git, and that is one row saying so rather than three.
 const KEYS: &[KeyRow] = &[
-    Heading("MOVING — THE SAME IN EVERY PANE"),
+    Heading("MOVE"),
     Merged(
         &[Action::Up, Action::Down, Action::Left, Action::Right],
         "move",
-    ),
-    Merged(
-        &[
-            Action::JumpUp,
-            Action::JumpDown,
-            Action::EditorWordLeft,
-            Action::EditorWordRight,
-        ],
-        "five at a time — or a word, in a file",
     ),
     Merged(
         &[
@@ -76,55 +67,43 @@ const KEYS: &[KeyRow] = &[
             Action::EditorLineStart,
             Action::EditorLineEnd,
         ],
-        "to the ends",
+        "ends",
     ),
-    Bound(&[Action::PageUp, Action::PageDown], "a screen at a time"),
-    Bound(&[Action::TreeOpen], "open or close, or edit"),
-    Bound(&[Action::TreePreview], "hand the keyboard over"),
-    Bound(&[Action::Back], "back — or quit, from the browser"),
+    Merged(&[Action::PageUp, Action::PageDown], "page"),
+    Merged(&[Action::EditorWordLeft, Action::EditorWordRight], "word"),
+    Merged(
+        &[Action::EditorDocStart, Action::EditorDocEnd],
+        "top · bottom",
+    ),
+    Bound(&[Action::Open], "open · stage"),
+    Bound(&[Action::Back], "back · quit"),
+    Fixed("wheel", "scroll"),
     Blank,
     Heading("FILES"),
-    Bound(&[Action::Save], "save — on a folder, all of it"),
-    Bound(&[Action::Copy, Action::Paste], "copy | paste"),
-    Bound(&[Action::TreeHidden], "show dotfiles"),
-    Blank,
-    Heading("THE BAR"),
-    Bound(&[Action::Bar], "search — star first, a command"),
-    Bound(&[Action::Help], "this window"),
+    Bound(&[Action::Save], "save"),
+    Bound(&[Action::EditorUndo, Action::EditorRedo], "undo · redo"),
+    Bound(&[Action::EditorDeleteLine], "delete line"),
+    Bound(&[Action::Copy, Action::Paste], "copy · paste"),
+    Bound(&[Action::TreeHidden], "dotfiles"),
     Blank,
     Heading("WINDOWS"),
-    Bound(&[Action::WindowMain], "the browser and the file"),
-    Bound(&[Action::WindowSource], "git: what has changed"),
-    Bound(&[Action::WindowMap], "the project map"),
-    Blank,
-    // Git and the map share this section because they share their keys: the
-    // arrows, Enter and Esc are already above, and what is left is four rows.
-    Heading("GIT AND THE MAP"),
-    Bound(&[Action::Refresh], "read it again"),
-    Bound(
-        &[Action::SourceEnter],
-        "stage | unstage — a file or a section",
+    Bound(&[Action::Bar], "search · *command"),
+    Bound(&[Action::WindowSource], "git"),
+    Bound(&[Action::WindowMap], "map"),
+    Merged(
+        &[Action::ToggleTreePane, Action::Narrower, Action::Wider],
+        "browser · width",
     ),
-    Bound(&[Action::SourceOpen], "open this file"),
-    Bound(
-        &[Action::MapWikilinks, Action::MapLinks, Action::MapCalls],
-        "wikilinks | links | calls",
-    ),
-    Blank,
-    Heading("THE BROWSER"),
-    Bound(&[Action::Narrower, Action::Wider], "narrower | wider"),
-    Bound(&[Action::ToggleTreePane], "fold it away, and back"),
-    Fixed("wheel", "one line a notch"),
-    Blank,
-    Heading("EDITING"),
-    Bound(&[Action::EditorUndo, Action::EditorRedo], "undo | redo"),
-    Bound(&[Action::EditorDeleteLine], "delete the line"),
-    Bound(
-        &[Action::EditorDocStart, Action::EditorDocEnd],
-        "first | last line",
-    ),
-    Blank,
+    Bound(&[Action::Help], "help"),
     Bound(&[Action::Quit], "quit"),
+    Blank,
+    Heading("GIT · MAP"),
+    Merged(&[Action::SourceOpen, Action::MapNext], "edit · next file"),
+    Bound(&[Action::Refresh], "refresh"),
+    Merged(
+        &[Action::MapWikilinks, Action::MapLinks, Action::MapCalls],
+        "link kinds",
+    ),
 ];
 
 /// The keys of several actions, folded into one field.
@@ -207,35 +186,24 @@ fn key_rows(keymap: &Keymap) -> Vec<(String, String)> {
 /// and this is how you tell it you meant a command. Anything added to
 /// `App::run_command` belongs here, and in `complete_command`'s list too.
 ///
-/// One line per command, not per variation: the quoting rule for `*replace`
-/// and the dotted theme keys `*set` accepts are in the README rather than
-/// here, where they would have widened the window for everyone.
-/// The commands, for the right-hand half of the `?` window.
-///
 /// Everything here is a deliberate act with something to type after it, or a
-/// thing done rarely enough that a key would be one more key to remember. What
-/// is *not* here is the other half of the split: moving, editing, saving and
-/// quitting are keys, and were commands as well until the two lists were told
-/// apart.
+/// thing done rarely enough that a key would be one more key to remember. A
+/// command whose words already say what it does has no description: the
+/// column is for the few that need one.
 const COMMANDS: &[(&str, &str)] = &[
-    ("", "FILES"),
-    ("*new [file.txt]", "a file, folders and all"),
-    ("*mkdir [folder]", "a folder"),
-    ("*rename [old] to [new]", "or *rename [new], in place"),
-    ("*copy [from] to [to]", "a file or a folder"),
-    ("*delete [path]", "bare = the cursor's"),
-    ("", ""),
-    ("", "THE PROJECT"),
-    ("*replace [old] [new]", "across every file"),
-    ("*reload", "re-read from disk"),
-    ("*line [42]", "jump — *42 works too"),
-    ("", ""),
-    ("", "SOURCE CONTROL"),
-    ("*commit [message]", "what is staged — Ctrl+2"),
-    ("", ""),
-    ("", "SETTINGS"),
-    ("*set [setting] to [value]", "one setting; bare reports it"),
-    ("*config", "settings and keybinds"),
+    ("", "COMMANDS"),
+    ("*new [file]", ""),
+    ("*mkdir [folder]", ""),
+    ("*rename [old] to [new]", ""),
+    ("*copy [from] to [to]", ""),
+    ("*delete [path]", ""),
+    ("*replace [old] [new]", "every file"),
+    ("*line [42]", ""),
+    ("*reload", ""),
+    ("*commit [message]", "what is staged"),
+    ("*set [setting] [value]", ""),
+    ("*config", "settings · keys"),
+    ("*update", "newest tiny"),
 ];
 
 /// The keymap overlay. Scrollable, because the full list does not fit a short
@@ -285,14 +253,14 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect, pal: &Palette, scr
         .borders(Borders::ALL)
         .border_style(pal.border_focus)
         .title(Line::from(Span::styled(
-            " Keys and commands ",
+            " Help ",
             pal.text.add_modifier(Modifier::BOLD),
         )))
         .title_bottom(Line::from(Span::styled(
             if scrolls {
-                " up/down · any other key closes "
+                " up/down scroll · any other key closes "
             } else {
-                " any key to close "
+                " any key closes "
             },
             pal.dim,
         )));

@@ -3,13 +3,15 @@
 #   irm https://raw.githubusercontent.com/mattsaund/tiny/main/install.ps1 | iex
 #
 # Downloads the ready-made tiny.exe from the latest GitHub release. Only when
-# there is none to download - no release published yet, or a branch asked for
-# by name - does it build from source, which on Windows needs Rust and the
-# Visual Studio Build Tools; it offers to install both.
+# there is none to download - no release published, or a branch asked for by
+# name - does it build from source, which on Windows needs Rust and the Visual
+# Studio Build Tools; it offers to install both.
 #
 # Override anything with the environment:
 #   $env:TINY_REPO         git URL (default: https://github.com/mattsaund/tiny.git)
-#   $env:TINY_REF          branch or tag to build (default: main, which downloads)
+#   $env:TINY_REF          branch or tag (default: main, which downloads the
+#                          newest release); a version tag like v0.4.5 downloads
+#                          that release
 #   $env:TINY_PREFIX       where tiny.exe lands (default: %USERPROFILE%\.local\bin)
 #   $env:TINY_FROM_SOURCE  set to anything to build instead of downloading
 #
@@ -43,19 +45,46 @@
         [bool](Get-Command $Name -ErrorAction SilentlyContinue)
     }
 
+    # --- putting tiny.exe in place --------------------------------------------
+
+    # Copy $From to $Prefix\tiny.exe, over any tiny.exe already there.
+    #
+    # Windows will not overwrite a program while it runs, but it will rename
+    # one: the running copy carries on under its new name, and the next start
+    # finds the new one. That is what lets tiny update itself, and lets this
+    # run while a tiny is open in another window. The renamed copies are
+    # cleared away the next time this runs and they are no longer in use.
+    function Install-Exe([string]$From, [string]$Prefix) {
+        New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
+        $dest = Join-Path $Prefix 'tiny.exe'
+        Get-ChildItem -Path $Prefix -Filter 'tiny.exe.old-*' -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        if (Test-Path $dest) {
+            Remove-Item -Path $dest -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $dest) {
+            $aside = Join-Path $Prefix ('tiny.exe.old-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+            Move-Item -Path $dest -Destination $aside -ErrorAction Stop
+        }
+        Copy-Item -Path $From -Destination $dest -Force -ErrorAction Stop
+    }
+
     # --- the ready-made binary ----------------------------------------------
 
     # The release workflow's zip for this machine, unpacked into $Prefix.
     # Returns whether it worked. Every way it can fail - no release yet, no
     # network, a repository that is not on GitHub - is a reason to build
     # instead, not a reason to stop.
-    function Install-Prebuilt([string]$Repo, [string]$Prefix) {
+    #
+    # `main` means the newest release, and a version tag means that one.
+    function Install-Prebuilt([string]$Repo, [string]$Ref, [string]$Prefix) {
         $slug = $Repo -replace '^https://github\.com/', '' -replace '\.git$', ''
         if ($slug -match '://' -or $slug -notmatch '^[^/]+/[^/]+$') { return $false }
+        $release = if ($Ref -eq 'main') { 'latest/download' } else { "download/$Ref" }
 
         # One Windows build, for x64. ARM64 Windows runs it under emulation.
         $asset = 'tiny-x86_64-pc-windows-msvc.zip'
-        $url = "https://github.com/$slug/releases/latest/download/$asset"
+        $url = "https://github.com/$slug/releases/$release/$asset"
         $work = Join-Path ([IO.Path]::GetTempPath()) ('tiny-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $work | Out-Null
         try {
@@ -68,7 +97,7 @@
                 Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip -ErrorAction Stop
             }
             catch {
-                Write-Host 'none published yet, so building from source instead'
+                Write-Host 'none published for it, so building from source instead'
                 return $false
             }
             Expand-Archive -Path $zip -DestinationPath $work -Force -ErrorAction Stop
@@ -77,8 +106,7 @@
                 Write-Host 'the download had no tiny.exe in it, so building instead'
                 return $false
             }
-            New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
-            Copy-Item -Path $exe.FullName -Destination (Join-Path $Prefix 'tiny.exe') -Force -ErrorAction Stop
+            Install-Exe -From $exe.FullName -Prefix $Prefix
             Write-Host 'done'
             return $true
         }
@@ -226,7 +254,7 @@
         }
         $exe = Join-Path $Root 'bin\tiny.exe'
         if (-not (Test-Path $exe)) { throw 'the build finished without leaving a tiny.exe' }
-        Copy-Item -Path $exe -Destination (Join-Path $Prefix 'tiny.exe') -Force -ErrorAction Stop
+        Install-Exe -From $exe -Prefix $Prefix
     }
 
     function Install-FromSource([string]$Repo, [string]$Ref, [string]$Prefix, [bool]$Checkout) {
@@ -298,20 +326,15 @@
         $prefix = if ($env:TINY_PREFIX) { $env:TINY_PREFIX } else { Join-Path $HOME '.local\bin' }
         $binary = Join-Path $prefix 'tiny.exe'
 
-        # Windows locks a program while it runs, so a running tiny cannot be
-        # replaced. Better said now than half way through.
-        if (Get-Process -Name tiny -ErrorAction SilentlyContinue) {
-            throw 'tiny is running. Close it, then run this again'
-        }
-
         # Running from inside a checkout means "build this", so a checkout
-        # never downloads. Nor does naming a ref: a release is a tag, and
-        # a branch today is not what the last tag was.
+        # never downloads. Nor does naming a branch: a branch today is not what
+        # any release was. A version tag names its release exactly.
         $checkout = (Test-Path 'Cargo.toml') -and
             (Select-String -Path 'Cargo.toml' -Pattern 'name = "tiny"' -Quiet)
+        $released = ($ref -eq 'main') -or ($ref -match '^v[0-9]')
         $installed = $false
-        if (-not $checkout -and -not $env:TINY_FROM_SOURCE -and $ref -eq 'main') {
-            $installed = Install-Prebuilt -Repo $repo -Prefix $prefix
+        if (-not $checkout -and -not $env:TINY_FROM_SOURCE -and $released) {
+            $installed = Install-Prebuilt -Repo $repo -Ref $ref -Prefix $prefix
         }
         if (-not $installed) {
             Install-FromSource -Repo $repo -Ref $ref -Prefix $prefix -Checkout $checkout

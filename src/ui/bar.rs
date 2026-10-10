@@ -18,7 +18,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::parts::split_at_char;
 
-use crate::app::{App, Focus, GitFocus, Mode, Window};
+use crate::app::{App, ConfirmKind, Focus, GitFocus, Mode, Window};
 use crate::config::keys::Action;
 use crate::files::size;
 
@@ -93,6 +93,12 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
 pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette;
     let line = match &app.mode {
+        // The update question has a window of its own; under it, the line
+        // only needs to say which two keys answer it.
+        Mode::Confirm(c) if matches!(c.kind, ConfirmKind::Update(_)) => Line::from(vec![
+            Span::styled(" ! ", pal.marker.add_modifier(Modifier::REVERSED)),
+            Span::styled(" y update now · n not now", pal.marker),
+        ]),
         Mode::Confirm(c) => Line::from(vec![
             Span::styled(" ! ", pal.marker.add_modifier(Modifier::REVERSED)),
             Span::styled(format!(" {}", c.message), pal.marker),
@@ -125,21 +131,20 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 return;
             }
             let hints: String = match (&app.mode, app.focus) {
-                (Mode::Settings(_), _) => {
-                    "up/down pick | Enter change | Ctrl+S write | Esc close".into()
-                }
+                // Those two windows carry their own keys along their bottom
+                // edge, and saying them twice is just more to read.
+                (Mode::Settings(_) | Mode::Keybinds(_), _) => String::new(),
                 (Mode::Bar(_), _) => "Esc close".into(),
                 // Written out in full rather than as `^S` — this line is the
                 // first place most people meet these keys, and a caret is a
                 // thing you have to already know.
                 //
-                // The map's key is read from the live keymap rather than
-                // written down here, because it is not the same key on every
-                // terminal: `Ctrl+3` where that arrives, `F4` where it would
-                // arrive as Escape instead. A hint has to name the one that
-                // will actually work.
+                // The window keys are read from the live keymap rather than
+                // written down here, so a rebinding shows here too. A hint
+                // has to name the key that will actually work.
                 (_, Focus::Tree) => format!(
-                    "/ search | Ctrl+P command | {} map",
+                    "/ search | {} git | {} map",
+                    key_name(app, Action::WindowSource),
                     key_name(app, Action::WindowMap)
                 ),
                 (_, Focus::Editor) => "Ctrl+S save | Ctrl+Z undo | Ctrl+K cut | Esc back".into(),

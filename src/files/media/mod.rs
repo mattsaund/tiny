@@ -1,14 +1,22 @@
-//! What a picture or a video *is*, and how to hand it to the desktop.
+//! What a picture, a video, a PDF or a sound *is*, and how to hand it to the
+//! desktop.
 //!
 //! tiny does not draw media. A terminal is a poor picture frame — half-block
 //! rendering costs a decode and a scale on every resize, and what it buys you
-//! is a thumbnail you cannot zoom, pan, or seek. Your desktop already has a
-//! program that does all three properly, so [`open_with_desktop`] hands the
-//! file to it and the pane sticks to what a terminal is actually good at:
-//! saying, in words, what the thing is.
+//! is a thumbnail you cannot zoom, pan, or seek. A PDF is worse: pages of
+//! laid-out type that a grid of characters can only approximate. Your desktop
+//! already has a program that does each of these properly, so
+//! [`open_with_desktop`] hands the file to it and the pane sticks to what a
+//! terminal is actually good at: saying, in words, what the thing is.
 //!
 //! So the pane shows facts — format, resolution, running time, size — and
 //! Enter opens the file in your own viewer.
+//!
+//! # Only things that are safe to open
+//!
+//! The list in [`classify`] is deliberately a list of *documents*. "Open with
+//! the default program" is also how an executable, a script or an installer
+//! gets run, and Enter on a file in a browser must never be that.
 //!
 //! # Everything here is cheap enough to run on a cursor move
 //!
@@ -40,6 +48,8 @@ use anyhow::{Context, Result};
 pub enum Kind {
     Image,
     Video,
+    Pdf,
+    Audio,
     /// Anything else — text, binaries, files with no extension.
     Other,
 }
@@ -50,6 +60,8 @@ impl Kind {
         match self {
             Kind::Image => "image",
             Kind::Video => "video",
+            Kind::Pdf => "document",
+            Kind::Audio => "audio",
             Kind::Other => "file",
         }
     }
@@ -73,6 +85,10 @@ pub fn classify(path: &Path) -> Kind {
         }
         Some("mp4" | "mkv" | "mov" | "webm" | "avi" | "m4v" | "wmv" | "flv" | "mpg" | "mpeg") => {
             Kind::Video
+        }
+        Some("pdf") => Kind::Pdf,
+        Some("mp3" | "wav" | "flac" | "ogg" | "oga" | "opus" | "m4a" | "aac" | "aiff" | "aif") => {
+            Kind::Audio
         }
         _ => Kind::Other,
     }
@@ -140,18 +156,39 @@ pub fn probe(path: &Path, kind: Kind) -> Info {
                 ..Info::default()
             },
         },
-        Kind::Video => video_info(path),
+        Kind::Video | Kind::Audio => stream_info(path, kind),
+        Kind::Pdf => pdf_info(path),
         Kind::Other => Info::default(),
     }
 }
 
-/// Resolution and running time, via ffprobe.
+/// Whether a PDF really is one: the format puts `%PDF-` in its first kilobyte,
+/// and a file called `.pdf` without it is going to disappoint whatever it is
+/// handed to. Said in a note rather than refused, the way a mislabeled picture
+/// is — the viewer may still make something of it.
+fn pdf_info(path: &Path) -> Info {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(1024);
+    let read = std::fs::File::open(path).and_then(|f| f.take(1024).read_to_end(&mut head));
+    let note = match read {
+        Ok(_) if head.windows(5).any(|w| w == b"%PDF-") => None,
+        Ok(_) => Some(format!("{} does not start like a PDF", name(path))),
+        Err(e) => Some(format!("cannot read {}: {e}", name(path))),
+    };
+    Info {
+        note,
+        ..Info::default()
+    }
+}
+
+/// Resolution and running time, via ffprobe — of a video, or the running time
+/// alone of a sound, which has no picture to measure.
 ///
 /// One invocation asks for both, in ffprobe's flat `key=value` output — the
 /// simplest of its formats to parse and the only one that needs no JSON. A
 /// stream with no duration reports `N/A`, which parses as `None` and reads as
 /// "unknown" rather than as zero.
-fn video_info(path: &Path) -> Info {
+fn stream_info(path: &Path, kind: Kind) -> Info {
     let output = Command::new("ffprobe")
         .args([
             "-v",
@@ -166,8 +203,13 @@ fn video_info(path: &Path) -> Info {
         .arg(path)
         .output();
     let Ok(output) = output else {
+        let what = if kind == Kind::Audio {
+            "its length"
+        } else {
+            "size and length"
+        };
         return Info {
-            note: Some("install ffprobe (part of ffmpeg) to see size and length".into()),
+            note: Some(format!("install ffprobe (part of ffmpeg) to see {what}")),
             ..Info::default()
         };
     };
@@ -214,6 +256,13 @@ static LAUNCHED: Mutex<Vec<Child>> = Mutex::new(Vec::new());
 /// since the launcher exits long before the viewer decides whether it liked
 /// the file.
 pub fn open_with_desktop(path: &Path) -> Result<()> {
+    // The tests press the key that opens a file. They must not open one on the
+    // machine running them, so in a test build the request is written down for
+    // the test to read instead.
+    if cfg!(test) {
+        opened::record(path);
+        return Ok(());
+    }
     let child = launcher(path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -225,6 +274,33 @@ pub fn open_with_desktop(path: &Path) -> Result<()> {
         open.push(child);
     }
     Ok(())
+}
+
+/// What a test build hands to the desktop: nothing, written down.
+#[cfg(test)]
+pub mod opened {
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+
+    thread_local! {
+        static OPENED: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn record(path: &Path) {
+        OPENED.with(|o| o.borrow_mut().push(path.to_path_buf()));
+    }
+
+    /// Every file this test thread asked the desktop to open, oldest first,
+    /// and forget them.
+    pub fn take() -> Vec<PathBuf> {
+        OPENED.with(|o| std::mem::take(&mut *o.borrow_mut()))
+    }
+}
+
+/// In a real build there is nobody to tell.
+#[cfg(not(test))]
+mod opened {
+    pub(super) fn record(_: &std::path::Path) {}
 }
 
 /// The platform's "open this with the right program" command.
@@ -283,6 +359,40 @@ mod tests {
         assert_eq!(classify(Path::new("a.mkv")), Kind::Video);
         assert_eq!(classify(Path::new("a.rs")), Kind::Other);
         assert_eq!(classify(Path::new("noext")), Kind::Other);
+        assert_eq!(classify(Path::new("paper.PDF")), Kind::Pdf);
+        assert_eq!(classify(Path::new("song.mp3")), Kind::Audio);
+    }
+
+    #[test]
+    fn nothing_runnable_is_ever_handed_to_the_desktop() {
+        // "Open with the default program" runs these, and Enter in a file
+        // browser must not.
+        for name in [
+            "setup.exe",
+            "run.sh",
+            "tool.bat",
+            "Installer.app",
+            "a.command",
+            "x.msi",
+            "p.ps1",
+            "lib.dll",
+            "noext",
+        ] {
+            assert_eq!(classify(Path::new(name)), Kind::Other, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_pdf_is_recognized_by_its_header() {
+        let td = tempfile::tempdir().unwrap();
+        let real = td.path().join("paper.pdf");
+        std::fs::write(&real, b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj").unwrap();
+        assert_eq!(probe(&real, Kind::Pdf), Info::default(), "nothing to say");
+
+        let fake = td.path().join("fake.pdf");
+        std::fs::write(&fake, b"just some words").unwrap();
+        let note = probe(&fake, Kind::Pdf).note.expect("a reason is given");
+        assert!(note.contains("fake.pdf"), "{note}");
     }
 
     #[test]

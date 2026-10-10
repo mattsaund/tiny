@@ -37,6 +37,7 @@ mod search;
 mod settings;
 mod single_file;
 mod source;
+mod update;
 mod watch;
 
 /// A small project with one of each thing the panes have to handle.
@@ -205,21 +206,28 @@ pub(super) fn type_str(app: &mut App, s: &str) {
     }
 }
 
-/// Run a command line through the bar, exactly as a user would.
-/// Run a command from wherever the keyboard happens to be.
+/// Run a command from wherever the keyboard happens to be, exactly as a user
+/// would: `Ctrl+F` for the bar, then a star and the command.
 ///
-/// Ctrl+P rather than `:`, because in the editor a colon is a colon — the
-/// same reason the binding exists at all.
+/// The chord rather than `/`, because in the editor a slash is a slash — the
+/// same reason the chord exists at all.
 pub(super) fn command(app: &mut App, line: &str) {
-    app.on_key(ctrl('p'));
+    command_bar(app);
     type_str(app, line);
     app.on_key(k(KeyCode::Enter));
+}
+
+/// Open the bar as the command line, the way a user does: `Ctrl+F` for the
+/// bar, then the star that makes it one.
+pub(super) fn command_bar(app: &mut App) {
+    app.on_key(ctrl('f'));
+    app.on_key(ch('*'));
 }
 
 /// Type `line` into the command bar, press Tab, and give back what the bar
 /// holds afterwards.
 pub(super) fn completed(app: &mut App, line: &str) -> String {
-    app.on_key(ctrl('p'));
+    command_bar(app);
     type_str(app, line);
     app.on_key(k(KeyCode::Tab));
     let Mode::Bar(b) = &app.mode else {
@@ -255,9 +263,9 @@ pub(super) fn settings(app: &mut App) {
     command(app, "config");
 }
 
-/// Switch to the map window, the way `Ctrl+3` does.
+/// Switch to the map window, the way `Ctrl+L` does.
 pub(super) fn open_map(app: &mut App) {
-    app.on_key(ctrl('3'));
+    app.on_key(ctrl('l'));
 }
 
 pub(super) fn select(app: &mut App, name: &str) {

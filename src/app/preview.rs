@@ -117,8 +117,8 @@ pub enum Preview {
         path: PathBuf,
         kind: TextKind,
     },
-    /// A picture or a video. Described in words, not drawn — Enter hands it
-    /// to the desktop's own viewer. See [`crate::files::media`].
+    /// A picture, a video, a PDF or a sound. Described in words, not drawn —
+    /// Enter hands it to the desktop's own viewer. See [`crate::files::media`].
     Media {
         path: PathBuf,
         kind: media::Kind,
@@ -143,8 +143,9 @@ pub enum Preview {
 /// there is a real ceiling on what can be edited comfortably.
 pub(super) const MAX_EDIT_BYTES: u64 = 8 * 1024 * 1024;
 
-/// A human word for a non-text file, so the preview can say "PDF" or "archive"
-/// instead of just "binary".
+/// A human word for a non-text file, so the preview can say "archive" instead
+/// of just "binary". PDFs and sound are not here: they are media, described
+/// and opened by [`media`].
 pub(super) fn binary_kind(path: &Path) -> &'static str {
     match path
         .extension()
@@ -152,9 +153,7 @@ pub(super) fn binary_kind(path: &Path) -> &'static str {
         .map(str::to_lowercase)
         .as_deref()
     {
-        Some("pdf") => "PDF",
         Some("zip" | "gz" | "tar" | "xz" | "zst" | "7z") => "archive",
-        Some("mp3" | "wav" | "flac" | "ogg") => "audio",
         Some("so" | "dll" | "dylib" | "o" | "a") => "object file",
         _ => "binary",
     }

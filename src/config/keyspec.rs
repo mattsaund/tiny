@@ -12,8 +12,32 @@
 //! no modifier or as `a` with `SHIFT`, and some report both. A comparison
 //! strict about that would work on one terminal and not the next, so [`Key`]
 //! normalizes before comparing.
+//!
+//! # Two spellings of Option and an arrow
+//!
+//! They disagree about `⌥←` too, which is a Mac's "a word left": iTerm2 sends
+//! it as `Alt` with the arrow, and macOS Terminal sends the `Esc b` a shell's
+//! readline expects — which arrives here as `Alt+B`. [`from_terminal`] turns
+//! the second spelling into the first, once, before any handler sees the key.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+/// A keypress as tiny should read it, whichever way the terminal spelled it.
+///
+/// `Alt+B` and `Alt+F` become `Alt+←` and `Alt+→`. On macOS Terminal those
+/// are what `⌥←` and `⌥→` send; everywhere else they are readline's
+/// "back a word" and "forward a word", which is the same thing — so there is
+/// no terminal on which this changes what the key meant.
+pub fn from_terminal(mut ev: KeyEvent) -> KeyEvent {
+    if ev.modifiers == KeyModifiers::ALT {
+        ev.code = match ev.code {
+            KeyCode::Char('b') => KeyCode::Left,
+            KeyCode::Char('f') => KeyCode::Right,
+            other => other,
+        };
+    }
+    ev
+}
 
 /// One key, with the modifiers that have to be held with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

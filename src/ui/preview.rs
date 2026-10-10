@@ -149,7 +149,7 @@ pub(super) fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-/// What a picture or a video *is*, in words.
+/// What a picture, a video, a PDF or a sound *is*, in words.
 ///
 /// tiny stopped drawing media into the terminal — see the [`crate::files::media`]
 /// module docs for why — so this pane is a description and an invitation:
@@ -202,9 +202,12 @@ fn draw_media(
 /// actually is depends on the desktop's own association, and tiny does not
 /// know it and should not claim to.
 fn opener_name(kind: crate::files::media::Kind) -> &'static str {
+    use crate::files::media::Kind;
     match kind {
-        crate::files::media::Kind::Video => "video player",
-        _ => "image viewer",
+        Kind::Video => "video player",
+        Kind::Pdf => "PDF viewer",
+        Kind::Audio => "music player",
+        Kind::Image | Kind::Other => "image viewer",
     }
 }
 

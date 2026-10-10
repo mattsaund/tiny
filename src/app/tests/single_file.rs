@@ -42,7 +42,7 @@ fn the_project_is_one_key_away_from_a_file_opened_on_its_own() {
     )
     .unwrap();
 
-    app.on_key(ctrl(' '));
+    app.on_key(ctrl('t'));
     let out = joined(&mut app);
     assert!(out.contains("BROWSER"), "the tree comes back:\n{out}");
     assert!(out.contains("README.md"), "with the folder in it:\n{out}");

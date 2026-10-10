@@ -189,6 +189,57 @@ jobs:
           sh "$GITHUB_WORKSPACE/install.sh"
           "$TINY_PREFIX/tiny" --version
 
+  install-linux:
+    name: install on Linux
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run install.sh
+        env:
+          TINY_REF: ${{ github.ref_name }}
+          TINY_PREFIX: ${{ runner.temp }}/tinybin
+          # Build rather than download, for the reason above.
+          TINY_FROM_SOURCE: 1
+        run: |
+          cd "$RUNNER_TEMP"
+          sh "$GITHUB_WORKSPACE/install.sh"
+          "$TINY_PREFIX/tiny" --version
+
+  # The install line exactly as the README gives it: nothing forced, so it
+  # takes the newest release for the machine it is on, and builds only where
+  # there is none. The three jobs above test the commit; this one tests the
+  # line on the front page, on all three systems it promises.
+  install-release:
+    name: one-line install on ${{ matrix.os }}
+    if: github.event_name == 'push'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run install.sh
+        if: runner.os != 'Windows'
+        env:
+          TINY_PREFIX: ${{ runner.temp }}/tinybin
+        run: |
+          cd "$RUNNER_TEMP"
+          sh "$GITHUB_WORKSPACE/install.sh"
+          "$TINY_PREFIX/tiny" --version
+      - name: Run install.ps1
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          TINY_PREFIX: ${{ runner.temp }}\tinybin
+        run: |
+          Set-Location $env:RUNNER_TEMP
+          & "$env:GITHUB_WORKSPACE\install.ps1"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "$env:TINY_PREFIX\tiny.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
   # The README leads with screenshots, and a moved file turns them into broken
   # images on the front page of the project — which is the one page everybody
   # sees and nobody tests.

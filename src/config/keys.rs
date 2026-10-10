@@ -4,40 +4,41 @@
 //! [`Keymap`] maps keys onto them, and the handlers in `app` ask the keymap
 //! what a keypress meant instead of matching on the key itself. That
 //! indirection is the whole feature: a binding can then come from a config
-//! file or from the window `?`-then-`k` opens, without a single `match` arm
-//! moving.
+//! file or from the keybinds window, without a single `match` arm moving.
 //!
 //! # What is not bindable
 //!
 //! Keys that put a character into a file or a field are not here, and cannot
 //! be. In the editor, the bar, and every prompt, `n` is the letter n — there is
 //! no binding to change, because the key is not a command. The same goes for
-//! the text-editing primitives beside them: the arrows, `Home`, `End`,
-//! `Backspace`, `Delete`, `Enter` and `Tab` move and edit text while you are
-//! typing into it, and rebinding those would leave a keyboard that cannot type.
+//! the text-editing primitives beside them: the arrows, `Backspace`, `Delete`,
+//! `Enter` and `Tab` move and edit text while you are typing into it, and
+//! rebinding those would leave a keyboard that cannot type.
 //!
-//! Everything else — the tree, a note being read, the project map, and every
-//! chord that reaches out of the pane you are in — is bindable.
+//! Everything else — the browser, a note being read, the project map, the git
+//! window, and every chord that reaches out of the pane you are in — is
+//! bindable.
 //!
 //! # Contexts
 //!
 //! The same key means different things in different panes: `k` is *down* in the
-//! tree and the letter k in the editor. [`Context`] says which set of actions a
-//! keypress is being read against. The chords in [`Context::Global`] are
-//! checked first everywhere, which is why `Ctrl+S` saves from wherever you are.
+//! browser and the letter k in the editor. [`Context`] says which set of
+//! actions a keypress is being read against. The chords in [`Context::Global`]
+//! are checked first everywhere, which is why `Ctrl+S` saves from wherever you
+//! are.
 //!
 //! An action lists the panes it works in, and most movements work in several.
 //! Moving up is one action, `up`, bound to one key; the browser, a note being
-//! read, the map and the change list each answer it in their own way. It was
-//! four actions with four names and four identical bindings, which is four
-//! rows to find and change to rebind one key, and three more chances for them
-//! to drift apart.
+//! read, the map and the git window each answer it in their own way. `open` is
+//! the same idea for Enter: it opens a file in the browser and on the map, and
+//! stages one in the git window — one row to find, and one key to rebind.
 //!
-//! Everything in `Global` is a chord. That is not a style choice: in the editor
-//! a letter is a letter being typed, so a control that has to work while you
-//! are writing has no other shape available. The tree keeps a bare-letter
-//! binding for the common ones beside the chord — `n` as well as `Ctrl+N` —
-//! because there, nothing is being typed and the short one costs nothing.
+//! Everything in `Global` that has to work while you type is a chord. In the
+//! editor a letter is a letter being typed, so a control that must work there
+//! has no other shape available. A global may *also* carry a bare key, like
+//! `/` beside `Ctrl+F`: [`Keymap::resolve_while_typing`] skips the bare one in
+//! a pane that types, so it costs nothing there and saves a chord everywhere
+//! else.
 //!
 //! # What is a key and what is a command
 //!
@@ -46,97 +47,65 @@
 //! of something else, where a key is the only shape fast enough. Deleting a
 //! path, re-reading the disk, opening the settings — those are deliberate acts,
 //! usually with something to type after them, and they are commands (`*delete`,
-//! `*reload`, `*config`). They had keys as well until the two lists were told
-//! apart, and a second way in earned nothing but a row in this table.
+//! `*reload`, `*config`).
 //!
-//! It runs the other way too: saving and quitting are `Ctrl+S` and `Ctrl+Q`,
-//! and the `*w`, `*q` and `*wq` that shadowed them are gone.
+//! # Every key arrives on every terminal
 //!
-//! # Keys a terminal cannot send
+//! A binding that some terminals never deliver is worse than none: the help
+//! window promises it, and on the wrong machine nothing happens — or something
+//! else does. So the shipped keyboard is made only of keys that arrive as
+//! themselves on macOS Terminal, iTerm2, Windows Terminal and the usual Linux
+//! emulators, with their stock settings:
 //!
-//! Four of the shipped chords do not exist in a terminal's legacy encoding.
-//! `Ctrl+.` has no byte at all; `Ctrl+/` arrives as 0x1F, which is
-//! indistinguishable from `Ctrl+7`; `Ctrl` with a digit is not in the encoding
-//! either. `main` asks the terminal for the disambiguating keyboard protocol,
-//! which separates them all, and on a terminal that declines they do not
-//! arrive.
+//! - **Ctrl and a letter.** Every terminal sends these, in raw mode, as
+//!   themselves — except `Ctrl+H`, `Ctrl+I`, `Ctrl+J` and `Ctrl+M`, which *are*
+//!   Backspace, Tab and Enter in the encoding, and `Ctrl+B`, which tmux keeps
+//!   for its prefix. None of those five is bound.
+//! - **Plain keys** — letters, `/`, `?`, `.`, the arrows, Enter, Esc, Tab — in
+//!   the panes where nothing is being typed.
 //!
-//! Where that would leave a function unreachable, the key that always arrives
-//! is the one that is bound: dotfiles are the browser's bare `.` rather than
-//! `Ctrl+.`, and the bar keeps `/` beside `Ctrl+/`. A control that cannot be
-//! reached on a common terminal is not a control.
+//! What is *not* shipped, and why:
 //!
-//! The window switcher takes that further, because `Ctrl` with a digit is not
-//! merely lost — it becomes another key. Rather than binding both and hoping,
-//! tiny asks the terminal what it can send and ships a different keyboard
-//! accordingly: see [`Keyboard`] and [`LEGACY_KEYS`].
+//! - **Ctrl with a digit or a punctuation mark.** Not in a terminal's legacy
+//!   encoding at all: `Ctrl+1` sends nothing, `Ctrl+2` arrives as `Ctrl+Space`
+//!   and `Ctrl+3` as `Esc` — which, in the browser, used to quit.
+//! - **Function keys.** On a Mac they are brightness and Mission Control unless
+//!   Fn is held, and GNOME Terminal keeps `F1` for its own help. `F1` is still
+//!   bound beside `?`, because on a PC keyboard it is where people look first.
+//! - **Ctrl with an arrow.** macOS switches Spaces on `Ctrl+←` and `Ctrl+→`,
+//!   and opens Mission Control on `Ctrl+↑` — the terminal never sees them.
+//!   They stay bound in the editor beside a twin that a Mac does send, for the
+//!   PC keyboards that expect them.
+//! - **Ctrl+Space.** macOS switches input source on it.
+//! - **Home, End, Page Up, Page Down** as the *only* way to do something. A
+//!   MacBook has none of them, and Terminal uses all four to scroll its own
+//!   history unless Shift is held. Each is bound beside a chord that works
+//!   everywhere: `Ctrl+A` and `Ctrl+E` for the ends of a line, the way every
+//!   Mac text field and every shell already does it, and `Ctrl+U` and `Ctrl+D`
+//!   for a screen at a time, the way `less` and `vim` do.
 //!
-//! A key can also fail to arrive because something above the terminal answered
-//! it first. `Ctrl+Shift` with an arrow starts a selection in a good many
-//! emulators, and GNOME and KDE both ship with `Ctrl+Alt` and an arrow bound to
-//! switching workspaces — a desktop shortcut is taken before the terminal sees
-//! the key at all. Neither is used here for that reason.
+//! The one key a terminal takes for itself is `Ctrl+V`: Windows Terminal and
+//! the Windows console paste on it before the program sees anything. That is
+//! the whole of [`Keyboard`] — on Windows, file paste ships on `Ctrl+P`.
 //!
-//! Two of the contexts belong to a window rather than a pane: [`Context::Map`]
-//! and [`Context::Source`] are read when that window is on screen, and the
-//! global chords are checked first there as everywhere — which is how `Ctrl+P`
-//! reaches the command bar from the source window, where `*commit` is typed.
+//! # Option and the arrows
 //!
-//! # Three windows, on Ctrl and a number
-//!
-//! `Ctrl+1` is the browser and the file, `Ctrl+2` is source control, `Ctrl+3`
-//! is the project map. They are windows and not overlays: there is no stack to
-//! pop, so the way out of one is to name another, and Esc returns to the first.
-//!
-//! Numbers rather than initials because the set is small, ordered and unlikely
-//! to grow much — and because `Ctrl+M` (the map's old key) *is* Enter in a
-//! terminal's legacy encoding, which is the sort of collision a number cannot
-//! have.
-//!
-//! What a number costs: `Ctrl` with a digit is not in the legacy encoding
-//! either. `Ctrl+1` sends nothing at all, `Ctrl+2` arrives as `Ctrl+Space` and
-//! `Ctrl+3` as `Esc`. On a terminal that speaks the disambiguating keyboard
-//! protocol all three arrive properly; on one that does not — GNOME Terminal,
-//! macOS Terminal, Konsole — `Ctrl+2` folds the browser and `Ctrl+3` is read
-//! as Escape, which from the browser *quits*. No encoding trick avoids that: a
-//! terminal that cannot say which key was pressed cannot be made to.
-//!
-//! So the keyboard is not fixed. `main` asks the terminal whether it speaks
-//! the disambiguating protocol before the first key is read, and tiny binds
-//! `Ctrl+1` `Ctrl+2` `Ctrl+3` where the answer is yes and `F2` `F3` `F4` —
-//! a row under the `F1` that opens the keys — where it is no. One keyboard or
-//! the other, never both: a key listed in the keybinds window is a key that
-//! works, and the status line names whichever one this terminal has. See
-//! [`Keyboard`].
-//!
-//! # No Alt at all
-//!
-//! There used to be an `Alt` half to the movement keys. There is none now, and
-//! this is the reason: on macOS, Option is not a modifier. Terminal sends `⌥-`
-//! as an en dash and `⌥←` as an escape sequence of its own, so an `Alt`
-//! binding never arrived at all. A key that works on one machine and not
-//! another is worse than no key, and every one of them had a twin that any
-//! terminal can send — `Home`, `End`, `Ctrl+Home`, `Ctrl+End`, `I`, `K`, and
-//! `Ctrl` with an arrow for the browser's width.
-//!
-//! # Shift
-//!
-//! `Shift` with an arrow is not used either, and never was: it is how terminals
-//! have always started a selection, and a key the terminal may act on itself is
-//! a key that works on some machines and not others. The capital letters `I`
-//! and `K` are fine — they are characters, not a modifier, and a terminal
-//! cannot mistake them for anything.
+//! On a Mac, `⌥←` and `⌥→` are how a word is skipped, and the terminals do not
+//! agree on how to say so: iTerm2 sends them as `Alt` with an arrow, and macOS
+//! Terminal sends the `Esc b` and `Esc f` that a shell's readline expects —
+//! `Alt+B` and `Alt+F`. [`super::keyspec::from_terminal`] turns the second
+//! spelling into the first before anything else looks at the key, so one
+//! binding, `alt+left`, answers both.
 //!
 //! # One key per thing
 //!
 //! Two keys that do the same thing are one key and one thing to remember for
-//! nothing, so there are none. The exception is `i` `j` `k` `l`, which stand in
-//! for the four arrows on a keyboard that has none, and `I` / `K` beside `Home`
-//! / `End` for the same reason.
-//!
-//! The width pair is why [`Action::Narrower`] belongs to the panes that have a
-//! left column rather than to `Global`: `Ctrl` with an arrow is a word motion
-//! in the editor, and a global binding would take it from there.
+//! nothing, so the only second keys are ones that stand in for a key some
+//! keyboards lack: `i` `j` `k` `l` for the arrows, `I` and `K` for Home and
+//! End, the chords above for the Mac. And two *actions* that do the same thing
+//! are worse, because each is a row to read past; the browser's Tab, which did
+//! what Enter does, is gone, and so are the five-line jumps that a screen at a
+//! time already covered.
 //!
 //! # Defaults and overrides
 //!
@@ -144,12 +113,13 @@
 //! config file holds *only* what differs from it, so an untouched `tiny.conf`
 //! has no `[keys]` section at all and a new default reaches everyone who has
 //! not overridden that action. Resetting is therefore just dropping the
-//! overrides.
+//! overrides. Names that have changed are carried over by [`migrate`], so a
+//! config written by an older tiny keeps meaning what it meant.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-pub use super::keyspec::{Key, spec_of};
+pub use super::keyspec::{Key, from_terminal, spec_of};
 use crossterm::event::KeyEvent;
 
 /// Which set of actions a keypress is read against.
@@ -172,56 +142,56 @@ impl Context {
     pub fn title(self) -> &'static str {
         match self {
             Context::Global => "ANYWHERE",
-            Context::Tree => "TREE",
+            Context::Tree => "BROWSER",
             Context::View => "VIEWING",
             Context::Editor => "EDITOR",
-            Context::Map => "PROJECT MAP",
-            Context::Source => "SOURCE CONTROL",
+            Context::Map => "MAP",
+            Context::Source => "GIT",
         }
     }
 }
 
-/// What the terminal turned out to be able to send.
+/// Which keys the terminal keeps for itself.
 ///
-/// Not every terminal can deliver every chord, and the ones that cannot do not
-/// fail quietly — see [`LEGACY_KEYS`]. tiny asks at startup and builds the
-/// keyboard around the answer, so what the keybinds window lists is what the
-/// keys in front of you actually do.
+/// One key differs, and only on Windows: Windows Terminal, and the Windows
+/// console with its Ctrl shortcuts on, paste the clipboard on `Ctrl+V` before
+/// tiny sees the key — so a file paste there ships on `Ctrl+P`, which reaches
+/// the program. Everything else is the same keyboard everywhere.
+///
+/// Decided once, by [`Keyboard::detect`] in `main`, and passed in rather than
+/// looked up inside the keymap, so the tests can build either keyboard on any
+/// machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Keyboard {
-    /// The terminal speaks the disambiguating keyboard protocol: every chord
-    /// in [`TABLE`] arrives as itself. kitty, foot, WezTerm, Ghostty.
     #[default]
-    Full,
-    /// The legacy encoding, where `Ctrl` with a digit or a punctuation mark is
-    /// another key's byte or no byte at all. GNOME Terminal, macOS Terminal,
-    /// Konsole.
-    Legacy,
+    Standard,
+    /// Windows Terminal — native, or under WSL — or the Windows console.
+    Windows,
 }
 
-/// What changes on a terminal that cannot send the whole of [`TABLE`].
-///
-/// Substitutions, not additions, which is the point: on such a terminal
-/// `Ctrl+1` arrives as a bare `1`, `Ctrl+2` as `Ctrl+Space` and `Ctrl+3` as
-/// `Esc`. Those three are not merely unreachable — they are *other keys
-/// wearing the wrong name*, and `Ctrl+3` in the browser would quit. Leaving
-/// them bound would have the keybinds window promise a key that does something
-/// else, so on this keyboard they are not bound at all. The function keys
-/// below reach the same three windows through an encoding every terminal has
-/// sent since the 1980s.
-///
-/// Anything not named here is the same on both keyboards.
-const LEGACY_KEYS: &[(Action, &str)] = &[
-    (Action::WindowMain, "f2"),
-    (Action::WindowSource, "f3"),
-    (Action::WindowMap, "f4"),
-];
+/// What changes on [`Keyboard::Windows`]. Substitutions, not additions: the
+/// `Ctrl+V` that would never arrive is not listed, because a key the keybinds
+/// window shows is a key that works.
+const WINDOWS_KEYS: &[(Action, &str)] = &[(Action::Paste, "ctrl+p")];
 
 impl Keyboard {
+    /// Which keyboard this terminal gets.
+    ///
+    /// A native Windows build always runs in a Windows terminal. Under WSL the
+    /// program is a Linux one, so the terminal has to say so itself: Windows
+    /// Terminal sets `WT_SESSION`, and passes it through to WSL.
+    pub fn detect() -> Self {
+        if cfg!(windows) || std::env::var_os("WT_SESSION").is_some() {
+            Keyboard::Windows
+        } else {
+            Keyboard::Standard
+        }
+    }
+
     /// The keys `action` ships with on this keyboard.
     pub fn defaults(self, action: Action) -> &'static str {
-        if self == Keyboard::Legacy
-            && let Some((_, keys)) = LEGACY_KEYS.iter().find(|(a, _)| *a == action)
+        if self == Keyboard::Windows
+            && let Some((_, keys)) = WINDOWS_KEYS.iter().find(|(a, _)| *a == action)
         {
             return keys;
         }
@@ -233,23 +203,21 @@ impl Keyboard {
 ///
 /// The order here is the order the keybinds window lists them in, and the
 /// index into [`Keymap`]'s table — so adding one in the middle is fine, but it
-/// must also gain a row in [`Action::defaults`] and a name in
-/// [`Action::name`]. The `every_action_is_complete` test checks both.
+/// must also gain a row in [`TABLE`]. The `every_action_is_in_the_table` test
+/// checks that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    // Everywhere. Every one of these is a chord, so it works while you are
-    // typing into a file as well as from the tree.
+    // Everywhere. Each of these works while you are typing into a file as
+    // well as from the browser, so each has a chord.
     Save,
     Quit,
     Bar,
-    CommandBar,
+    Help,
+    WindowSource,
+    WindowMap,
     ToggleTreePane,
     Copy,
     Paste,
-    WindowMain,
-    WindowSource,
-    WindowMap,
-    Help,
     // In every pane that has them. One name for one movement, however many
     // panes can make that movement — see the module docs.
     Up,
@@ -258,19 +226,15 @@ pub enum Action {
     Right,
     First,
     Last,
-    JumpUp,
-    JumpDown,
     PageUp,
     PageDown,
+    Open,
     Back,
     Refresh,
     Narrower,
     Wider,
     // The browser alone
-    TreeOpen,
-    TreePreview,
     TreeHidden,
-    TreeQuit,
     // A file being edited
     EditorUndo,
     EditorRedo,
@@ -282,27 +246,24 @@ pub enum Action {
     EditorDocStart,
     EditorDocEnd,
     // The project map
-    MapOpen,
     MapNext,
     MapPrevious,
     MapWikilinks,
     MapLinks,
     MapCalls,
     // Source control
-    SourceEnter,
     SourceOpen,
 }
 
-/// Every action, the panes it works in, its name in the config file, what it
-/// does, and the keys it ships with.
+/// Every action, the panes it works in, its name in the config file, a word
+/// or two on what it does, and the keys it ships with.
 ///
 /// One table rather than five methods: a row that goes missing is a row that
 /// goes missing everywhere at once, which is far easier to notice.
 ///
-/// The contexts are a list because most movements are the same movement in
-/// several panes. `up` is one action bound to one key that four panes each
-/// answer in their own way, rather than four actions, four rows in the
-/// keybinds window, and four lines to change to rebind one key.
+/// The description is a hint, not a sentence: the keybinds window shows it
+/// only beside the row under the cursor, and leaves it empty where the name
+/// already says everything.
 type Row = (
     Action,
     &'static [Context],
@@ -311,330 +272,310 @@ type Row = (
     &'static str,
 );
 
+/// The panes that are navigated rather than typed into.
+const PANES: &[Context] = &[Context::Tree, Context::View, Context::Map, Context::Source];
+
 const TABLE: &[Row] = &[
     (
         Action::Save,
         &[Context::Global],
         "save",
-        "save the open file",
+        "a folder saves all",
         "ctrl+s",
     ),
     (
         Action::Quit,
         &[Context::Global],
         "quit",
-        "leave tiny",
+        "asks if unsaved",
         "ctrl+q",
     ),
     (
         Action::Bar,
         &[Context::Global],
-        "bar",
-        "search — type a star first for a command",
-        "ctrl+/ /",
+        "search",
+        "* for commands",
+        "/ ctrl+f",
+    ),
+    (Action::Help, &[Context::Global], "help", "", "? f1"),
+    (
+        Action::WindowSource,
+        &[Context::Global],
+        "git",
+        "source control",
+        "ctrl+g",
     ),
     (
-        Action::CommandBar,
+        Action::WindowMap,
         &[Context::Global],
-        "command",
-        "the bar, already starred",
-        "ctrl+p",
+        "map",
+        "project map",
+        "ctrl+l",
     ),
     (
         Action::ToggleTreePane,
         &[Context::Global],
-        "fold_tree",
-        "fold the browser away, and back",
-        "ctrl+space",
+        "browser",
+        "hide or show",
+        "ctrl+t",
     ),
     (
         Action::Copy,
         &[Context::Global],
         "copy",
-        "copy what the cursor is on",
+        "this file",
         "ctrl+c",
     ),
     (
         Action::Paste,
         &[Context::Global],
         "paste",
-        "paste into this folder",
+        "into this folder",
         "ctrl+v",
     ),
-    (
-        Action::WindowMain,
-        &[Context::Global],
-        "window_main",
-        "the browser and the file",
-        "ctrl+1",
-    ),
-    (
-        Action::WindowSource,
-        &[Context::Global],
-        "window_source",
-        "git and what has changed",
-        "ctrl+2",
-    ),
-    (
-        Action::WindowMap,
-        &[Context::Global],
-        "window_map",
-        "the project map",
-        "ctrl+3",
-    ),
-    (
-        Action::Help,
-        &[Context::Global],
-        "help",
-        "keys and commands",
-        "f1",
-    ),
-    (
-        Action::Up,
-        &[Context::Tree, Context::View, Context::Map, Context::Source],
-        "up",
-        "move up",
-        "up i",
-    ),
-    (
-        Action::Down,
-        &[Context::Tree, Context::View, Context::Map, Context::Source],
-        "down",
-        "move down",
-        "down k",
-    ),
+    (Action::Up, PANES, "up", "", "up i"),
+    (Action::Down, PANES, "down", "", "down k"),
     (
         Action::Left,
         &[Context::Tree, Context::Map, Context::Source],
         "left",
-        "out of a folder, or one to the left",
+        "out of a folder",
         "left j",
     ),
     (
         Action::Right,
         &[Context::Tree, Context::Map, Context::Source],
         "right",
-        "into a folder, or one to the right",
+        "into a folder",
         "right l",
     ),
     (
         Action::First,
         &[Context::Tree, Context::View],
         "first",
-        "to the first row, or the top",
+        "",
         "home I",
     ),
     (
         Action::Last,
         &[Context::Tree, Context::View],
         "last",
-        "to the last row, or the bottom",
+        "",
         "end K",
     ),
     (
-        Action::JumpUp,
-        &[Context::Tree, Context::Editor, Context::Source],
-        "jump_up",
-        "five at a time, up",
-        "ctrl+up",
-    ),
-    (
-        Action::JumpDown,
-        &[Context::Tree, Context::Editor, Context::Source],
-        "jump_down",
-        "five at a time, down",
-        "ctrl+down",
-    ),
-    (
         Action::PageUp,
-        &[Context::Tree, Context::View, Context::Source],
+        &[
+            Context::Tree,
+            Context::View,
+            Context::Source,
+            Context::Editor,
+        ],
         "page_up",
-        "a screen up",
-        "pageup",
+        "",
+        "pageup ctrl+u",
     ),
     (
         Action::PageDown,
-        &[Context::Tree, Context::View, Context::Source],
+        &[
+            Context::Tree,
+            Context::View,
+            Context::Source,
+            Context::Editor,
+        ],
         "page_down",
-        "a screen down",
-        "pagedown",
+        "",
+        "pagedown ctrl+d",
+    ),
+    (
+        Action::Open,
+        &[Context::Tree, Context::Map, Context::Source],
+        "open",
+        "or stage, in git",
+        "enter",
     ),
     (
         Action::Back,
-        &[Context::Editor, Context::Map, Context::Source],
+        &[
+            Context::Tree,
+            Context::Editor,
+            Context::Map,
+            Context::Source,
+        ],
         "back",
-        "back to the browser",
+        "or quit, from the browser",
         "esc",
     ),
     (
         Action::Refresh,
         &[Context::Map, Context::Source],
         "refresh",
-        "read it from disk again",
+        "",
         "r",
     ),
     (
         Action::Narrower,
         &[Context::Tree, Context::Source],
         "narrower",
-        "a narrower left column",
-        "ctrl+left",
+        "the browser",
+        "<",
     ),
     (
         Action::Wider,
         &[Context::Tree, Context::Source],
         "wider",
-        "a wider left column",
-        "ctrl+right",
-    ),
-    (
-        Action::TreeOpen,
-        &[Context::Tree],
-        "tree.open",
-        "open or close a folder, or edit a file",
-        "enter",
-    ),
-    (
-        Action::TreePreview,
-        &[Context::Tree],
-        "tree.preview",
-        "hand the keyboard to the file",
-        "tab",
+        "the browser",
+        ">",
     ),
     (
         Action::TreeHidden,
         &[Context::Tree],
         "tree.hidden",
-        "show or hide dotfiles",
+        "dotfiles",
         ".",
-    ),
-    (
-        Action::TreeQuit,
-        &[Context::Tree],
-        "tree.quit",
-        "leave tiny",
-        "esc",
     ),
     (
         Action::EditorUndo,
         &[Context::Editor],
         "editor.undo",
-        "undo",
+        "",
         "ctrl+z",
     ),
     (
         Action::EditorRedo,
         &[Context::Editor],
         "editor.redo",
-        "redo",
+        "",
         "ctrl+y",
     ),
     (
         Action::EditorDeleteLine,
         &[Context::Editor],
         "editor.delete_line",
-        "delete this line",
+        "",
         "ctrl+k",
     ),
     (
         Action::EditorWordLeft,
         &[Context::Editor],
         "editor.word_left",
-        "a word left",
-        "ctrl+left",
+        "",
+        "ctrl+left alt+left",
     ),
     (
         Action::EditorWordRight,
         &[Context::Editor],
         "editor.word_right",
-        "a word right",
-        "ctrl+right",
+        "",
+        "ctrl+right alt+right",
     ),
     (
         Action::EditorLineStart,
         &[Context::Editor],
         "editor.line_start",
-        "to the start of the line",
-        "home",
+        "",
+        "home ctrl+a",
     ),
     (
         Action::EditorLineEnd,
         &[Context::Editor],
         "editor.line_end",
-        "to the end of the line",
-        "end",
+        "",
+        "end ctrl+e",
     ),
     (
         Action::EditorDocStart,
         &[Context::Editor],
         "editor.start",
-        "to the first line",
+        "first line",
         "ctrl+home",
     ),
     (
         Action::EditorDocEnd,
         &[Context::Editor],
         "editor.end",
-        "to the last line",
+        "last line",
         "ctrl+end",
     ),
-    (
-        Action::MapOpen,
-        &[Context::Map],
-        "map.open",
-        "open this file",
-        "enter",
-    ),
-    (
-        Action::MapNext,
-        &[Context::Map],
-        "map.next",
-        "step through the files",
-        "tab",
-    ),
+    (Action::MapNext, &[Context::Map], "map.next", "", "tab"),
     (
         Action::MapPrevious,
         &[Context::Map],
         "map.previous",
-        "step back through them",
+        "",
         "backtab",
     ),
     (
         Action::MapWikilinks,
         &[Context::Map],
         "map.wikilinks",
-        "draw wikilinks",
+        "show or hide",
         "1",
     ),
     (
         Action::MapLinks,
         &[Context::Map],
         "map.links",
-        "draw markdown links",
+        "show or hide",
         "2",
     ),
     (
         Action::MapCalls,
         &[Context::Map],
         "map.calls",
-        "draw calls",
+        "show or hide",
         "3",
-    ),
-    (
-        Action::SourceEnter,
-        &[Context::Source],
-        "source.stage",
-        "stage or unstage — a file, or a whole section",
-        "enter",
     ),
     (
         Action::SourceOpen,
         &[Context::Source],
         "source.open",
-        "open this file in the editor",
+        "edit the file",
         "tab",
     ),
 ];
+
+/// Names an older tiny wrote, and what they are called now.
+///
+/// Several old names can land on one new one: `open` is what the browser's,
+/// the map's and the git window's Enter each used to be called on their own.
+const RENAMED: &[(&str, &str)] = &[
+    ("bar", "search"),
+    ("window_source", "git"),
+    ("window_map", "map"),
+    ("fold_tree", "browser"),
+    ("tree.open", "open"),
+    ("map.open", "open"),
+    ("source.stage", "open"),
+];
+
+/// Names an older tiny wrote for actions that are gone. Each was a second way
+/// to do something another key already does — see the module docs — so an
+/// override of one is dropped rather than guessed onto a neighbor, where it
+/// could take a key like Esc away from the action that needs it.
+const RETIRED: &[&str] = &[
+    "command",
+    "window_main",
+    "jump_up",
+    "jump_down",
+    "tree.preview",
+    "tree.quit",
+];
+
+/// Bring a `[keys]` section written by an older tiny up to date, in place.
+///
+/// A renamed action keeps its override under the new name — unless the new
+/// name has one of its own, which is the more recent choice and wins. A retired
+/// one is dropped. Anything else is left alone, including names nobody
+/// answers to: those are typos, and [`Keymap::new`] says so.
+pub fn migrate(keys: &mut BTreeMap<String, String>) {
+    for (old, new) in RENAMED {
+        if let Some(spec) = keys.remove(*old) {
+            keys.entry((*new).to_string()).or_insert(spec);
+        }
+    }
+    keys.retain(|name, _| !RETIRED.contains(&name.as_str()));
+}
 
 impl Action {
     /// Every action, in the order the keybinds window shows them.
@@ -668,21 +609,22 @@ impl Action {
     pub fn group(self) -> &'static str {
         match self.contexts() {
             [one] => one.title(),
-            _ => "IN MORE THAN ONE PANE",
+            _ => "PANES",
         }
     }
 
-    /// The name in the config file, e.g. `tree.down`.
+    /// The name in the config file, e.g. `editor.undo`.
     pub fn name(self) -> &'static str {
         self.row().2
     }
 
+    /// A word or two more than the name says. Often empty.
     pub fn describe(self) -> &'static str {
         self.row().3
     }
 
-    /// The keys this action ships with on a terminal that can send all of
-    /// them, as they would be written in the config.
+    /// The keys this action ships with on a [`Keyboard::Standard`] terminal,
+    /// as they would be written in the config.
     ///
     /// The keyboard someone actually has may differ — see [`Keyboard`] — so
     /// anything comparing against "the shipped key" wants
@@ -770,8 +712,8 @@ impl Keymap {
     /// is what they are for — `Ctrl+S` saves from inside a file and `s` is an
     /// s.
     ///
-    /// This is what lets one `bar` action carry both `ctrl+/` and `/`, instead
-    /// of one action per pane that wanted the short key.
+    /// This is what lets one `search` action carry both `ctrl+f` and `/`,
+    /// instead of one action per pane that wanted the short key.
     pub fn resolve_while_typing(&self, ctx: Context, ev: &KeyEvent) -> Option<Action> {
         self.find_chord(Context::Global, ev)
             .or_else(|| self.find(ctx, ev))
@@ -820,8 +762,8 @@ impl Keymap {
     /// is about to shadow.
     ///
     /// Two actions clash when they share a key *and* a pane. Sharing only a
-    /// key is how `esc` leaves the editor and quits from the browser, and how
-    /// `ctrl+left` is a word in a file and a narrower column beside it.
+    /// key is how Tab steps through the map and opens a file from the git
+    /// window.
     pub fn clashes(&self, action: Action, key: &Key) -> Vec<Action> {
         let contexts = action.contexts();
         TABLE
@@ -861,108 +803,193 @@ mod tests {
 
     #[test]
     fn every_default_is_a_key_that_parses() {
-        for action in Action::all() {
-            let spec = action.defaults();
-            assert!(!spec.is_empty(), "{} ships unbound", action.name());
-            for word in spec.split_whitespace() {
-                assert!(
-                    Key::parse(word).is_some(),
-                    "{}: `{word}` does not parse",
-                    action.name()
-                );
+        for keyboard in [Keyboard::Standard, Keyboard::Windows] {
+            for action in Action::all() {
+                let spec = keyboard.defaults(action);
+                assert!(!spec.is_empty(), "{} ships unbound", action.name());
+                for word in spec.split_whitespace() {
+                    assert!(
+                        Key::parse(word).is_some(),
+                        "{}: `{word}` does not parse",
+                        action.name()
+                    );
+                }
             }
         }
     }
 
     #[test]
     fn no_two_actions_in_one_context_ship_with_the_same_key() {
-        let map = Keymap::default();
-        for action in Action::all() {
-            for key in map.keys(action) {
-                let clash = map.clashes(action, key);
-                assert!(
-                    clash.is_empty(),
-                    "{} and {:?} both ship with {key}",
-                    action.name(),
-                    clash.iter().map(|a| a.name()).collect::<Vec<_>>()
-                );
+        for keyboard in [Keyboard::Standard, Keyboard::Windows] {
+            let map = Keymap::new(&BTreeMap::new(), keyboard).0;
+            for action in Action::all() {
+                for key in map.keys(action) {
+                    let clash = map.clashes(action, key);
+                    assert!(
+                        clash.is_empty(),
+                        "{} and {:?} both ship with {key}",
+                        action.name(),
+                        clash.iter().map(|a| a.name()).collect::<Vec<_>>()
+                    );
+                }
             }
         }
     }
 
     #[test]
-    fn every_window_is_reachable_on_a_terminal_that_cannot_send_ctrl_and_a_digit() {
-        // The failure this exists to stop: on GNOME Terminal `Ctrl+3` arrives
-        // as Escape, which from the browser quits — so the map was not merely
-        // unreachable there, the key for it closed the program.
-        let legacy = Keymap::new(&BTreeMap::new(), Keyboard::Legacy).0;
-        for action in [Action::WindowMain, Action::WindowSource, Action::WindowMap] {
-            let spec = legacy.spec(action);
-            let sendable = spec.split_whitespace().all(|key| {
-                key.strip_prefix('f')
-                    .is_some_and(|n| n.parse::<u8>().is_ok())
-            });
-            assert!(
-                sendable,
-                "{} is on {spec}, which a legacy terminal cannot send",
-                action.name()
-            );
+    fn a_global_chord_never_shadows_a_pane_key() {
+        // Globals are checked first, so a pane binding on the same key would
+        // be listed in the keybinds window and never fire.
+        let map = Keymap::default();
+        let globals: Vec<&Key> = Action::all()
+            .filter(|a| a.contexts() == [Context::Global])
+            .flat_map(|a| map.keys(a))
+            .collect();
+        for action in Action::all().filter(|a| a.contexts() != [Context::Global]) {
+            for key in map.keys(action) {
+                assert!(
+                    !globals.contains(&key),
+                    "{} ships with {key}, which a global answers first",
+                    action.name()
+                );
+            }
         }
-        // And they actually answer.
-        for (key, action) in [
-            (KeyCode::F(2), Action::WindowMain),
-            (KeyCode::F(3), Action::WindowSource),
-            (KeyCode::F(4), Action::WindowMap),
-        ] {
-            assert_eq!(
-                legacy.resolve(Context::Tree, &ev(key, KeyModifiers::NONE)),
-                Some(action)
+    }
+
+    /// The keys a stock macOS Terminal never delivers, or delivers as
+    /// something else — see the module docs.
+    fn reaches_a_mac(key: &str) -> bool {
+        let key = key.to_ascii_lowercase();
+        let dead = key.starts_with('f') && key.len() > 1 && key[1..].parse::<u8>().is_ok()
+            || matches!(
+                key.as_str(),
+                "home" | "end" | "pageup" | "pagedown" | "ctrl+space"
+            )
+            || key.starts_with("ctrl+") && {
+                let rest = &key["ctrl+".len()..];
+                matches!(rest, "up" | "down" | "left" | "right" | "home" | "end")
+                    || rest.len() == 1 && !rest.chars().all(|c| c.is_ascii_alphabetic())
+            };
+        !dead
+    }
+
+    #[test]
+    fn every_action_has_a_key_that_reaches_a_mac() {
+        let map = Keymap::default();
+        // The two ends of a document are the honest exception: there is no
+        // chord a stock Mac terminal sends for them that is not already
+        // something else. A screen at a time, and `*line`, cover the distance.
+        let allowed = [Action::EditorDocStart, Action::EditorDocEnd];
+        for action in Action::all().filter(|a| !allowed.contains(a)) {
+            let spec = map.spec(action);
+            assert!(
+                spec.split_whitespace().any(reaches_a_mac),
+                "{} is only on `{spec}`, which macOS Terminal does not send",
+                action.name()
             );
         }
     }
 
     #[test]
-    fn one_keyboard_or_the_other_and_never_both() {
-        let full = Keymap::new(&BTreeMap::new(), Keyboard::Full).0;
-        let legacy = Keymap::new(&BTreeMap::new(), Keyboard::Legacy).0;
-        assert_eq!(full.spec(Action::WindowMap), "ctrl+3");
-        assert_eq!(legacy.spec(Action::WindowMap), "f4");
+    fn nothing_ships_on_a_chord_a_terminal_cannot_spell() {
+        // Ctrl with a digit or punctuation, and the five Ctrl letters that are
+        // other keys or tmux's: each arrives as something else, or not at all.
+        let map = Keymap::default();
+        for action in Action::all() {
+            for key in map.spec(action).split_whitespace() {
+                if let Some(rest) = key.strip_prefix("ctrl+")
+                    && rest.chars().count() == 1
+                {
+                    let c = rest.chars().next().unwrap();
+                    assert!(
+                        c.is_ascii_alphabetic() && !"bhijm".contains(c),
+                        "{} ships on {key}",
+                        action.name()
+                    );
+                }
+            }
+        }
+    }
 
-        // A key listed in the keybinds window is a key that works here, so the
-        // one belonging to the other keyboard is not bound at all.
-        let f4 = ev(KeyCode::F(4), KeyModifiers::NONE);
-        let ctrl3 = ev(KeyCode::Char('3'), KeyModifiers::CONTROL);
-        assert_eq!(full.resolve(Context::Tree, &f4), None, "no spare key");
-        assert_eq!(legacy.resolve(Context::Tree, &ctrl3), None, "nor here");
-
+    #[test]
+    fn windows_pastes_on_a_key_its_terminal_lets_through() {
+        let windows = Keymap::new(&BTreeMap::new(), Keyboard::Windows).0;
+        let standard = Keymap::default();
+        assert_eq!(standard.spec(Action::Paste), "ctrl+v");
+        assert_eq!(windows.spec(Action::Paste), "ctrl+p");
+        assert_eq!(
+            windows.resolve(
+                Context::Tree,
+                &ev(KeyCode::Char('p'), KeyModifiers::CONTROL)
+            ),
+            Some(Action::Paste)
+        );
         // Everything else is the same keyboard either way.
-        for action in Action::all().filter(|a| {
-            !matches!(
-                a,
-                Action::WindowMain | Action::WindowSource | Action::WindowMap
-            )
-        }) {
-            assert_eq!(full.spec(action), legacy.spec(action), "{}", action.name());
+        for action in Action::all().filter(|a| *a != Action::Paste) {
+            assert_eq!(
+                windows.spec(action),
+                standard.spec(action),
+                "{}",
+                action.name()
+            );
         }
     }
 
     #[test]
     fn a_rebinding_wins_on_either_keyboard() {
         let mut over = BTreeMap::new();
-        over.insert("window_map".to_string(), "ctrl+g".to_string());
-        for keyboard in [Keyboard::Full, Keyboard::Legacy] {
+        over.insert("paste".to_string(), "ctrl+o".to_string());
+        for keyboard in [Keyboard::Standard, Keyboard::Windows] {
             let (map, warning) = Keymap::new(&over, keyboard);
             assert!(warning.is_none());
-            assert_eq!(map.spec(Action::WindowMap), "ctrl+g", "{keyboard:?}");
+            assert_eq!(map.spec(Action::Paste), "ctrl+o", "{keyboard:?}");
             // What it would go back to still depends on the terminal, which is
             // what `shipped` is for.
-            let shipped = if keyboard == Keyboard::Full {
-                "ctrl+3"
+            let shipped = if keyboard == Keyboard::Standard {
+                "ctrl+v"
             } else {
-                "f4"
+                "ctrl+p"
             };
-            assert_eq!(map.shipped(Action::WindowMap), shipped);
+            assert_eq!(map.shipped(Action::Paste), shipped);
         }
+    }
+
+    #[test]
+    fn an_older_config_keeps_meaning_what_it_meant() {
+        let mut keys = BTreeMap::new();
+        keys.insert("bar".to_string(), "ctrl+o".to_string());
+        keys.insert("window_map".to_string(), "ctrl+w".to_string());
+        keys.insert("tree.open".to_string(), "o".to_string());
+        keys.insert("jump_up".to_string(), "ctrl+up".to_string());
+        keys.insert("editor.undo".to_string(), "ctrl+u".to_string());
+        migrate(&mut keys);
+
+        assert_eq!(keys.get("search").map(String::as_str), Some("ctrl+o"));
+        assert_eq!(keys.get("map").map(String::as_str), Some("ctrl+w"));
+        assert_eq!(keys.get("open").map(String::as_str), Some("o"));
+        assert_eq!(keys.get("editor.undo").map(String::as_str), Some("ctrl+u"));
+        assert!(!keys.contains_key("jump_up"), "a retired action is dropped");
+        assert!(!keys.contains_key("bar"), "the old name is gone");
+
+        let (map, warning) = Keymap::new(&keys, Keyboard::Standard);
+        assert!(warning.is_none(), "nothing left to complain about");
+        assert_eq!(
+            map.resolve(
+                Context::Tree,
+                &ev(KeyCode::Char('w'), KeyModifiers::CONTROL)
+            ),
+            Some(Action::WindowMap)
+        );
+    }
+
+    #[test]
+    fn a_new_name_written_alongside_an_old_one_wins() {
+        let mut keys = BTreeMap::new();
+        keys.insert("search".to_string(), "ctrl+o".to_string());
+        keys.insert("bar".to_string(), "ctrl+n".to_string());
+        migrate(&mut keys);
+        assert_eq!(keys.get("search").map(String::as_str), Some("ctrl+o"));
+        assert_eq!(keys.len(), 1);
     }
 
     #[test]
@@ -984,6 +1011,7 @@ mod tests {
             "delete",
             ".",
             "?",
+            "<",
             "i",
             "I",
             "1",
@@ -1042,20 +1070,52 @@ mod tests {
     }
 
     #[test]
-    fn a_key_can_mean_different_things_in_different_panes() {
+    fn esc_is_back_everywhere_and_back_from_the_browser_is_out() {
         let map = Keymap::default();
-        // What the contexts are actually for: `esc` leaves the file, and
-        // quits from the browser. `ctrl+left` is a word in a file, and a
-        // narrower column beside it.
         let esc = ev(KeyCode::Esc, KeyModifiers::NONE);
-        assert_eq!(map.resolve(Context::Editor, &esc), Some(Action::Back));
-        assert_eq!(map.resolve(Context::Tree, &esc), Some(Action::TreeQuit));
-        let left = ev(KeyCode::Left, KeyModifiers::CONTROL);
+        for ctx in [
+            Context::Tree,
+            Context::Editor,
+            Context::Map,
+            Context::Source,
+        ] {
+            assert_eq!(map.resolve(ctx, &esc), Some(Action::Back), "{ctx:?}");
+        }
+    }
+
+    #[test]
+    fn enter_is_one_action_in_every_pane_that_opens_things() {
+        let map = Keymap::default();
+        let enter = ev(KeyCode::Enter, KeyModifiers::NONE);
+        for ctx in [Context::Tree, Context::Map, Context::Source] {
+            assert_eq!(map.resolve(ctx, &enter), Some(Action::Open), "{ctx:?}");
+        }
         assert_eq!(
-            map.resolve(Context::Editor, &left),
+            map.resolve_while_typing(Context::Editor, &enter),
+            None,
+            "in a file, Enter is a new line"
+        );
+    }
+
+    #[test]
+    fn a_word_is_ctrl_and_an_arrow_or_option_and_one() {
+        let map = Keymap::default();
+        for (code, mods) in [
+            (KeyCode::Left, KeyModifiers::CONTROL),
+            (KeyCode::Left, KeyModifiers::ALT),
+        ] {
+            assert_eq!(
+                map.resolve_while_typing(Context::Editor, &ev(code, mods)),
+                Some(Action::EditorWordLeft)
+            );
+        }
+        // macOS Terminal's spelling of ⌥← arrives as Alt+B, and is turned into
+        // the arrow before the keymap is asked.
+        let terminal = from_terminal(ev(KeyCode::Char('b'), KeyModifiers::ALT));
+        assert_eq!(
+            map.resolve_while_typing(Context::Editor, &terminal),
             Some(Action::EditorWordLeft)
         );
-        assert_eq!(map.resolve(Context::Tree, &left), Some(Action::Narrower));
     }
 
     #[test]

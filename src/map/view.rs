@@ -300,7 +300,7 @@ impl ProjectMap {
         };
         match action {
             Action::Back => return Intent::Close,
-            Action::MapOpen => {
+            Action::Open => {
                 if let Some(n) = self.selected_node() {
                     return Intent::Open(n.path.clone());
                 }

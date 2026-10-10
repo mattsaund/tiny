@@ -34,11 +34,11 @@ fn linked_fixture() -> (tempfile::TempDir, App) {
 fn the_bottom_bar_says_only_what_is_not_already_on_screen() {
     let (_td, mut app) = fixture();
     let bar = screen(&mut app, 96, 14).pop().expect("a status line");
-    assert!(bar.contains("| Ctrl+3 map"), "dividers are pipes:\n{bar}");
+    assert!(bar.contains("| Ctrl+L map"), "dividers are pipes:\n{bar}");
     assert!(!bar.contains('·'), "{bar}");
     assert!(
-        !bar.contains("F1 help"),
-        "the status already opens with `F1 for help`:\n{bar}"
+        !bar.contains("| ? help"),
+        "the status already opens with `? for help`:\n{bar}"
     );
     assert!(
         !bar.contains(": commands"),
@@ -370,52 +370,50 @@ fn a_command_still_runs_from_over_the_map() {
     assert!(joined(&mut app).contains("fromthemap.md") || app.window == Window::Main);
 }
 
-// ---- the keyboard this terminal actually has -------------------------------
+// ---- the window keys ------------------------------------------------------
 
 #[test]
-fn a_terminal_that_cannot_send_ctrl_and_a_digit_gets_the_function_keys() {
+fn the_window_keys_are_letters_every_terminal_sends() {
     let (_td, mut app) = fixture();
-    // What `main` does once the terminal has answered.
-    app.set_keyboard(Keyboard::Legacy);
+    app.on_key(ctrl('l'));
+    assert_eq!(app.window, Window::Map, "Ctrl+L is the map");
+    app.on_key(ctrl('l'));
+    assert_eq!(app.window, Window::Main, "and the same key puts it away");
 
-    app.on_key(k(KeyCode::F(4)));
-    assert_eq!(app.window, Window::Map, "F4 reaches the map here");
+    app.on_key(ctrl('g'));
+    assert_eq!(app.window, Window::Source, "Ctrl+G is git");
+    app.on_key(ctrl('l'));
+    assert_eq!(app.window, Window::Map, "one window straight to the other");
+    app.on_key(k(KeyCode::Esc));
+    assert_eq!(app.window, Window::Main, "Esc comes back from either");
 
-    app.on_key(ctrl('1'));
-    assert_eq!(
-        app.window,
-        Window::Map,
-        "and the chord is not bound at all — on this terminal it is not a \
-         chord, it is a bare 1"
-    );
-
-    app.on_key(k(KeyCode::F(2)));
-    assert_eq!(app.window, Window::Main, "F2 comes back");
+    // Ctrl with a digit is not in a terminal's legacy encoding — `Ctrl+3`
+    // arrives as Esc on most of them — so it is not bound to anything.
+    app.on_key(ctrl('3'));
+    assert_eq!(app.window, Window::Main);
 }
 
 #[test]
-fn the_hint_names_the_key_this_terminal_actually_has() {
+fn the_hint_names_the_window_keys_the_keymap_has() {
     let (_td, mut app) = fixture();
     let bar = screen(&mut app, 96, 14).pop().expect("a status line");
-    assert!(bar.contains("Ctrl+3 map"), "a whole keyboard:\n{bar}");
+    assert!(bar.contains("Ctrl+G git | Ctrl+L map"), "{bar}");
 
-    app.set_keyboard(Keyboard::Legacy);
+    app.config.keys.insert("map".into(), "ctrl+o".into());
+    app.apply_config();
     let bar = screen(&mut app, 96, 14).pop().expect("a status line");
-    assert!(bar.contains("F4 map"), "and a legacy one:\n{bar}");
-    assert!(
-        !bar.contains("Ctrl+3"),
-        "which never names a key that would quit:\n{bar}"
-    );
+    assert!(bar.contains("Ctrl+O map"), "a rebinding shows:\n{bar}");
 }
 
 #[test]
 fn a_rebinding_survives_the_terminal_being_asked() {
     let (_td, mut app) = fixture();
-    app.config.keys.insert("window_map".into(), "ctrl+g".into());
+    app.config.keys.insert("map".into(), "ctrl+o".into());
     app.apply_config();
-    app.set_keyboard(Keyboard::Legacy);
+    // What `main` does once it knows the terminal is Windows'.
+    app.set_keyboard(Keyboard::Windows);
 
-    app.on_key(ctrl('g'));
+    app.on_key(ctrl('o'));
     assert_eq!(
         app.window,
         Window::Map,

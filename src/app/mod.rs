@@ -28,6 +28,7 @@
 //! | [`parts`] | small helpers more than one of the above needs |
 //! | [`source`] | the git window: what has changed, and what to do about it |
 //! | [`watch`] | noticing files another program changed |
+//! | [`update`] | asking whether to install a newer tiny |
 //!
 //! They are all `impl App` blocks on the same struct. Splitting an impl across
 //! files means anything used by a sibling has to say so with `pub(super)`,
@@ -53,7 +54,7 @@
 //! Everywhere a pane is being navigated rather than typed into, `i j k l` do
 //! what the four arrows do — up, left, down, right, in the inverted-T anyone
 //! who has held a keyboard sideways already knows. `I` and `K` go all the way,
-//! the same as Alt with an arrow. They exist for keyboards with no cursor
+//! the same as Home and End. They exist for keyboards with no cursor
 //! cluster, and they are deliberately *not* the vim `h j k l`: `j` and `k`
 //! cannot mean both left-down and down-up at once, and a layout that matches
 //! the arrows is the one that needs no explaining.
@@ -117,10 +118,13 @@ mod preview;
 mod prompt;
 mod settings;
 mod source;
+mod update;
 mod watch;
 
 pub use self::bar::completion_for;
-pub use self::mode::{BUTTONS, Bar, Focus, KEYBIND_BUTTONS, Keybinds, Mode, Settings, Window};
+pub use self::mode::{
+    BUTTONS, Bar, ConfirmKind, Focus, KEYBIND_BUTTONS, Keybinds, Mode, Settings, Window,
+};
 pub use self::preview::{Preview, TextKind};
 pub use self::source::{BUTTONS as GIT_BUTTONS, GitFocus, GitPane, Row as GitRow};
 use self::watch::Watch;
@@ -173,7 +177,6 @@ pub struct App {
     /// it again. Emptied by [`App::rebuild_rows`] — every way the tree can
     /// change goes through it, and any of them can change what a folder holds.
     size_cache: HashMap<PathBuf, Size>,
-    /// Markdown opens rendered; `e` drops into raw editing.
     /// Open files, keyed by path. Outlives the selection so unsaved edits
     /// survive arrowing away and back — see the module docs.
     pub buffers: HashMap<PathBuf, Editor>,
@@ -199,7 +202,8 @@ pub struct App {
     /// it on every keystroke. Written by `ui` while drawing, like the media
     /// cache and for the same reason — see the module docs.
     pub highlight_cache: Resume,
-    /// Which of the three windows is on screen. `Ctrl+1`, `Ctrl+2`, `Ctrl+3`.
+    /// Which of the three windows is on screen. `Ctrl+G` and `Ctrl+L` switch
+    /// to the other two, and back.
     pub window: Window,
     /// Everything the source-control window draws — see [`source`].
     pub git: GitPane,
@@ -210,10 +214,21 @@ pub struct App {
     /// the bytes: the file is read at paste time, so editing it in between
     /// pastes what is there now rather than a stale snapshot.
     pub clipboard: Option<PathBuf>,
-    /// `Ctrl+Space` folds the tree away to give the whole window to the file.
+    /// `Ctrl+T` folds the tree away to give the whole window to the file.
     /// Purely a view state — nothing about the tree itself changes, so
     /// bringing it back costs no reading.
     pub tree_hidden: bool,
+    /// The release check, while it is out asking — see [`update`].
+    update_check: Option<crate::update::Check>,
+    /// A newer version the check found, waiting for a moment it can be asked
+    /// about without catching a keystroke meant for something else.
+    update_found: Option<String>,
+    /// The check was asked for with `*update`, so its answer is reported
+    /// whatever it is, and the question goes up wherever you are.
+    update_by_hand: bool,
+    /// The version to install once tiny has quit — set by a `y` to the update
+    /// question, and read by `main` after the terminal is handed back.
+    pub update_on_exit: Option<String>,
     /// Which pane had the keyboard when the tree was folded away, so unfolding
     /// puts it back and the key is a true toggle.
     focus_before_hide: Focus,
@@ -241,7 +256,7 @@ impl App {
     ///
     /// The startup warning, if any, is shown in place of the usual greeting —
     /// a broken config file should be the first thing you see, not something
-    /// buried behind an "F1 for help".
+    /// buried behind a "? for help".
     ///
     /// When the target named a file, the cursor is revealed onto it and the
     /// editor is focused straight away: that is the entire point of writing
@@ -259,9 +274,9 @@ impl App {
         let palette = Palette::from_theme(&config.theme);
 
         let opening = if target.created {
-            "new project — F1 for help".to_string()
+            "new project — ? for help".to_string()
         } else {
-            "F1 for help".to_string()
+            "? for help".to_string()
         };
         let mut app = Self {
             tree,
@@ -287,6 +302,10 @@ impl App {
             project_map: None,
             clipboard: None,
             tree_hidden: false,
+            update_check: None,
+            update_found: None,
+            update_by_hand: false,
+            update_on_exit: None,
             focus_before_hide: Focus::Tree,
             status: warning
                 .or(keys_warning)
