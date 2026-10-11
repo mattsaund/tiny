@@ -115,9 +115,11 @@ mod fileops;
 mod input;
 mod mode;
 mod parts;
+mod plan;
 mod plugins;
 mod preview;
 mod prompt;
+mod sentence;
 mod settings;
 mod source;
 mod update;
@@ -231,6 +233,16 @@ pub struct App {
     /// The version to install once tiny has quit — set by a `y` to the update
     /// question, and read by `main` after the terminal is handed back.
     pub update_on_exit: Option<String>,
+    /// The project's files and folders, listed for looking up the names a
+    /// command says. Kept while the bar is open, so it is not walked again on
+    /// every keystroke; dropped when a command runs — see `plan`.
+    names: Option<plan::Names>,
+    /// The last `goto` that went somewhere, and which of its places it went
+    /// to, so running it again goes on to the next one.
+    last_jump: Option<(String, usize)>,
+    /// A plan is being made to describe under the bar, not to be carried
+    /// out: anything too slow to do on a keystroke can say so and wait.
+    planning_for_preview: bool,
     /// Every plugin, loaded — see [`crate::plugins`].
     pub plugins: crate::plugins::Plugins,
     /// Where plugins are loaded from. `None` until `main` says — so a test,
@@ -314,6 +326,9 @@ impl App {
             update_found: None,
             update_by_hand: false,
             update_on_exit: None,
+            names: None,
+            last_jump: None,
+            planning_for_preview: false,
             plugins: crate::plugins::Plugins::default(),
             plugins_dir: None,
             focus_before_hide: Focus::Tree,

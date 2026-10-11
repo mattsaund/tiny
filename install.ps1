@@ -391,6 +391,9 @@
         Install-Extras
         Write-Host ''
         Write-Host "installed $binary"
+        # tiny updating itself already knows where it is and how to start; it
+        # says so itself, straight after this.
+        if ($env:TINY_UPDATE) { return }
         Write-Host 'run it with:      tiny ~\notes'
         Write-Host 'remove it with:   tiny --uninstall'
     }

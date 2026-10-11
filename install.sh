@@ -208,6 +208,9 @@ finish() {
     offer_extras
     say ""
     say "installed $PREFIX/tiny"
+    # tiny updating itself already knows where it is and how to start; it
+    # says so itself, straight after this.
+    [ -z "${TINY_UPDATE:-}" ] || return 0
     case ":$PATH:" in
         *":$PREFIX:"*)
             say "run it with:      tiny ~/notes"

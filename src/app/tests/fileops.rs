@@ -156,7 +156,11 @@ fn deleting_the_file_being_edited_hands_the_keyboard_back_to_the_tree() {
 fn the_delete_command_reports_a_path_that_is_not_there() {
     let (_td, mut app) = fixture();
     command(&mut app, "delete notes/nope.md");
-    assert!(app.status.contains("cannot delete"), "{}", app.status);
+    assert!(
+        app.status.contains("no file or folder called"),
+        "{}",
+        app.status
+    );
     assert!(
         matches!(app.mode, Mode::Normal),
         "nothing to confirm, so nothing is armed"

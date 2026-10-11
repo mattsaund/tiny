@@ -61,6 +61,9 @@ pub struct Bar {
     /// not per keystroke, so a burst of typing costs one search, not one a
     /// letter. See `App::settle`.
     pub(super) stale: bool,
+    /// What Enter would do with the command typed so far, in words — or why
+    /// it cannot. Worked out with the search, once typing pauses.
+    pub plan: Option<Result<String, String>>,
     /// Highlighted result. Moving it previews that hit without leaving the bar.
     pub selected: usize,
     /// Set when a search found nothing, so the bar can say so.
@@ -84,6 +87,7 @@ impl Bar {
             selected: 0,
             searched: false,
             stale: false,
+            plan: None,
             home,
         }
     }
@@ -132,7 +136,10 @@ pub enum ConfirmKind {
     /// Leave with unsaved buffers open: `y` writes them first, `n` does not.
     QuitUnsaved,
     /// Rewrite every occurrence across the project.
-    Replace { find: String, replace: String },
+    Replace {
+        find: crate::text::search::Needle,
+        replace: String,
+    },
     /// Throw away every setting and go back to the shipped ones.
     ResetSettings,
     /// Throw away every rebinding and go back to the shipped keyboard.

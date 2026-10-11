@@ -343,7 +343,7 @@ fn saving_and_quitting_are_keys_and_not_commands() {
 
     // `*w` and `*q` were a second way to do what two chords already did.
     command(&mut app, "w");
-    assert!(app.status.contains("unknown command"), "{}", app.status);
+    assert!(app.status.contains("not a command"), "{}", app.status);
     assert!(
         !fs::read_to_string(td.path().join("src/main.py"))
             .unwrap()

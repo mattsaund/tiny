@@ -24,9 +24,11 @@
 //! # Smart case
 //!
 //! `widget` matches `Widget`; `Widget` matches only `Widget`. This applies to
-//! [`search`] alone. [`count`] and [`replace_all`] are always case-sensitive
-//! and always literal, because a find-replace that guessed at your intent
-//! across a whole project would be a very bad afternoon.
+//! [`search`] and to the `goto` commands. [`count`] and [`replace_all`] are
+//! always case-sensitive and always literal — a [`Needle`] — because a
+//! find-replace that guessed at your intent across a whole project would be a
+//! very bad afternoon. The one thing a needle may ask for is whole words, so
+//! that replacing `hi` leaves `this` alone.
 //!
 //! # Shared with the graph
 //!
@@ -43,6 +45,7 @@
 //! an allocation per line of every file, on every keystroke.
 
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -196,6 +199,121 @@ pub fn search(root: &Path, query: &str, opts: &Opts) -> Vec<Hit> {
     names
 }
 
+/// Every line in the project where `at` finds something, as content hits in
+/// walk order, stopping at `cap`.
+///
+/// What `goto word` and `goto text` look through when no file is named.
+/// `in_file` is asked first, of the whole file, so a file with nothing in it
+/// is never split into lines; `at` gives the character column of the first
+/// match in a line. Read in parallel batches taken in order, like [`search`].
+pub fn lines_where(
+    root: &Path,
+    opts: &Opts,
+    cap: usize,
+    in_file: impl Fn(&str) -> bool + Sync,
+    at: impl Fn(&str) -> Option<usize>,
+) -> Vec<Hit> {
+    let files = walk(root, opts);
+    let mut out = Vec::new();
+    let batch = parallel::threads() * 32;
+    for chunk in files.chunks(batch) {
+        let texts = par_map(
+            chunk,
+            || (),
+            |_, _, path| read_text(path).ok().filter(|text| in_file(text)),
+        );
+        for (path, text) in chunk.iter().zip(texts) {
+            let Some(text) = text else { continue };
+            for (line, col) in lines_in(&text, &at) {
+                out.push(Hit {
+                    path: path.clone(),
+                    kind: HitKind::Content,
+                    line,
+                    col,
+                    text: truncate(text.lines().nth(line).unwrap_or(""), MAX_LINE_DISPLAY),
+                });
+                if out.len() >= cap {
+                    return out;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `(line, column)` of the first match on every line of `text` that has one.
+pub fn lines_in(text: &str, at: impl Fn(&str) -> Option<usize>) -> Vec<(usize, usize)> {
+    text.lines()
+        .enumerate()
+        .filter_map(|(n, line)| at(line).map(|col| (n, col)))
+        .collect()
+}
+
+/// What a replace looks for: exact text, case and all, and whether it has to
+/// stand as a word of its own.
+///
+/// Whole words is what a sentence means — `replace hi with hello` is about the
+/// word, and leaves `this` and `high` alone. A needle that starts or ends with
+/// something that is not a letter, digit or underscore only checks the ends
+/// that are, so `replace -> with →` still finds every arrow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Needle {
+    pub text: String,
+    pub whole_words: bool,
+}
+
+impl Needle {
+    pub fn new(text: &str, whole_words: bool) -> Self {
+        Self {
+            text: text.to_string(),
+            whole_words,
+        }
+    }
+
+    /// Byte ranges of every place it sits in `hay`, left to right, never
+    /// overlapping.
+    pub fn find_in(&self, hay: &str) -> Vec<Range<usize>> {
+        if self.text.is_empty() {
+            return Vec::new();
+        }
+        hay.match_indices(&self.text)
+            .map(|(at, m)| at..at + m.len())
+            .filter(|r| !self.whole_words || self.stands_alone(hay, r))
+            .collect()
+    }
+
+    /// `hay` with every occurrence replaced, and how many there were.
+    pub fn replace_in(&self, hay: &str, with: &str) -> (String, usize) {
+        let found = self.find_in(hay);
+        let mut out = String::with_capacity(hay.len());
+        let mut from = 0;
+        for r in &found {
+            out.push_str(&hay[from..r.start]);
+            out.push_str(with);
+            from = r.end;
+        }
+        out.push_str(&hay[from..]);
+        (out, found.len())
+    }
+
+    /// Whether the match at `r` is a word on its own: nothing word-like
+    /// running into it at either end that is itself word-like.
+    fn stands_alone(&self, hay: &str, r: &Range<usize>) -> bool {
+        let starts_word = self.text.chars().next().is_some_and(is_word_char);
+        let ends_word = self.text.chars().next_back().is_some_and(is_word_char);
+        let before = hay[..r.start].chars().next_back();
+        let after = hay[r.end..].chars().next();
+        !(starts_word && before.is_some_and(is_word_char))
+            && !(ends_word && after.is_some_and(is_word_char))
+    }
+}
+
+/// Letters, digits and the underscore: what a word, or a name in code, is
+/// made of.
+pub fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
 /// How many occurrences a `*replace` would rewrite, without touching anything.
 ///
 /// Runs before the confirmation prompt so the user is told the real scale of
@@ -203,15 +321,15 @@ pub fn search(root: &Path, query: &str, opts: &Opts) -> Vec<Hit> {
 /// dry-run flag on [`replace_all`]: the two are read by different code paths
 /// and keeping them apart makes it impossible to accidentally write during a
 /// count.
-pub fn count(root: &Path, needle: &str, opts: &Opts) -> Report {
-    if needle.is_empty() {
+pub fn count(root: &Path, needle: &Needle, opts: &Opts) -> Report {
+    if needle.text.is_empty() {
         return Report::default();
     }
     let files = walk(root, opts);
     let counts = par_map(
         &files,
         || (),
-        |_, _, path| read_text(path).map_or(0, |text| text.matches(needle).count()),
+        |_, _, path| read_text(path).map_or(0, |text| needle.find_in(&text).len()),
     );
     let mut report = Report::default();
     for n in counts.into_iter().filter(|n| *n > 0) {
@@ -225,25 +343,25 @@ pub fn count(root: &Path, needle: &str, opts: &Opts) -> Report {
 /// Files that fail to write are reported rather than silently skipped.
 ///
 /// There is no undo for this — it edits files on disk, not buffers. The
-/// confirmation prompt in `App::cmd_replace` is the only guard, which is why
-/// it quotes the exact counts from [`count`].
+/// question a replace puts up first (see `app::plan`) is the only guard,
+/// which is why it quotes the exact counts from [`count`].
 ///
 /// On partial failure it keeps going and returns an error naming every file it
 /// could not write, so the user knows exactly what state the project is in.
 /// `App::do_replace` then drops clean buffers so open files re-read from disk.
-pub fn replace_all(root: &Path, needle: &str, replacement: &str, opts: &Opts) -> Result<Report> {
-    if needle.is_empty() {
+pub fn replace_all(root: &Path, needle: &Needle, replacement: &str, opts: &Opts) -> Result<Report> {
+    if needle.text.is_empty() {
         return Ok(Report::default());
     }
     let mut report = Report::default();
     let mut failures: Vec<String> = Vec::new();
     for path in walk(root, opts) {
         let Ok(text) = read_text(&path) else { continue };
-        let n = text.matches(needle).count();
+        let (changed, n) = needle.replace_in(&text, replacement);
         if n == 0 {
             continue;
         }
-        match fs::write(&path, text.replace(needle, replacement)) {
+        match fs::write(&path, changed) {
             Ok(()) => {
                 report.files += 1;
                 report.occurrences += n;
@@ -316,6 +434,22 @@ impl Matcher {
             }
         };
         Some(haystack[..byte].chars().count())
+    }
+
+    /// Character column of the first place the query stands as a word of its
+    /// own — the same match as [`Matcher::first`], with the ones inside a
+    /// longer word passed over. What `goto word` looks for.
+    pub fn first_word(&self, haystack: &str) -> Option<usize> {
+        let chars: Vec<char> = haystack.chars().collect();
+        let starts_word = self.pat.first().is_some_and(|c| is_word_char(*c));
+        let ends_word = self.pat.last().is_some_and(|c| is_word_char(*c));
+        self.all(haystack).into_iter().find_map(|(start, end)| {
+            let before = start.checked_sub(1).map(|i| chars[i]);
+            let after = chars.get(end).copied();
+            let alone = !(starts_word && before.is_some_and(is_word_char))
+                && !(ends_word && after.is_some_and(is_word_char));
+            alone.then_some(start)
+        })
     }
 
     /// Whether the query is anywhere in `haystack`: [`Matcher::first`]
@@ -439,9 +573,27 @@ fn read_text(path: &Path) -> Result<String> {
 /// Directories are pushed reversed so the stack pops them in sorted order,
 /// which is what makes results stable between runs.
 pub fn walk(root: &Path, opts: &Opts) -> Vec<PathBuf> {
-    let mut out = Vec::new();
+    walk_all(root, opts).files
+}
+
+/// Everything [`walk`] finds, with the folders it went through as well.
+#[derive(Debug, Default)]
+pub struct Walked {
+    pub files: Vec<PathBuf>,
+    /// Every folder under the root, empty ones included, in the same sorted
+    /// order. The root itself is not one of them.
+    pub folders: Vec<PathBuf>,
+}
+
+/// [`walk`], keeping the folders: what a command looks a name up in, since
+/// `goto folder notes` has to find a folder with nothing in it too.
+pub fn walk_all(root: &Path, opts: &Opts) -> Walked {
+    let mut out = Walked::default();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if dir != root {
+            out.folders.push(dir.clone());
+        }
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
@@ -467,7 +619,7 @@ pub fn walk(root: &Path, opts: &Opts) -> Vec<PathBuf> {
             }
         }
         files.sort();
-        out.extend(files);
+        out.files.extend(files);
         dirs.sort();
         // Pushed reversed so the stack pops them in sorted order.
         for d in dirs.into_iter().rev() {
@@ -629,7 +781,7 @@ mod tests {
     fn count_reports_files_and_occurrences_without_changing_anything() {
         let td = fixture();
         let before = fs::read_to_string(td.path().join("notes/design.md")).unwrap();
-        let report = count(td.path(), "widget", &Opts::default());
+        let report = count(td.path(), &Needle::new("widget", false), &Opts::default());
         assert_eq!(report.files, 1, "only the lowercase spelling, in one file");
         assert_eq!(report.occurrences, 1);
         assert_eq!(
@@ -641,7 +793,13 @@ mod tests {
     #[test]
     fn replace_rewrites_every_occurrence_across_the_project() {
         let td = fixture();
-        let report = replace_all(td.path(), "widget", "gadget", &Opts::default()).unwrap();
+        let report = replace_all(
+            td.path(),
+            &Needle::new("widget", false),
+            "gadget",
+            &Opts::default(),
+        )
+        .unwrap();
         assert_eq!(report.occurrences, 1);
         let design = fs::read_to_string(td.path().join("notes/design.md")).unwrap();
         assert!(design.contains("gadget again"));
@@ -654,7 +812,13 @@ mod tests {
     #[test]
     fn replace_leaves_ignored_and_binary_files_alone() {
         let td = fixture();
-        replace_all(td.path(), "widget", "gadget", &Opts::default()).unwrap();
+        replace_all(
+            td.path(),
+            &Needle::new("widget", false),
+            "gadget",
+            &Opts::default(),
+        )
+        .unwrap();
         assert_eq!(
             fs::read_to_string(td.path().join("target/widget.o")).unwrap(),
             "widget widget widget\n",
@@ -670,9 +834,16 @@ mod tests {
     #[test]
     fn replacing_nothing_is_a_no_op() {
         let td = fixture();
-        let report = replace_all(td.path(), "", "x", &Opts::default()).unwrap();
+        let report =
+            replace_all(td.path(), &Needle::new("", false), "x", &Opts::default()).unwrap();
         assert_eq!(report, Report::default());
-        let report = replace_all(td.path(), "absent-string", "x", &Opts::default()).unwrap();
+        let report = replace_all(
+            td.path(),
+            &Needle::new("absent-string", false),
+            "x",
+            &Opts::default(),
+        )
+        .unwrap();
         assert_eq!(report.files, 0);
     }
 
@@ -685,5 +856,98 @@ mod tests {
         std::os::unix::fs::symlink(root, root.join("loop")).unwrap();
         let hits = search(root, "needle", &Opts::default());
         assert_eq!(hits.len(), 1);
+    }
+
+    // ---- whole words -------------------------------------------------------
+
+    #[test]
+    fn a_whole_word_needle_leaves_longer_words_alone() {
+        let n = Needle::new("hi", true);
+        let (out, count) = n.replace_in("hi there, this is high. Hi! (hi)", "hello");
+        assert_eq!(out, "hello there, this is high. Hi! (hello)");
+        assert_eq!(count, 2, "case-sensitive, and only where it stands alone");
+    }
+
+    #[test]
+    fn a_needle_of_symbols_still_matches_between_words() {
+        let n = Needle::new("->", true);
+        let (out, count) = n.replace_in("a->b and c -> d", "→");
+        assert_eq!(out, "a→b and c → d");
+        assert_eq!(count, 2, "only the word-like ends are held to a boundary");
+    }
+
+    #[test]
+    fn a_text_needle_matches_inside_words() {
+        let n = Needle::new("ing", false);
+        assert_eq!(n.replace_in("sing a song of singing", "ung").1, 3);
+    }
+
+    #[test]
+    fn a_whole_word_count_and_replace_agree() {
+        let td = fixture();
+        fs::write(td.path().join("notes/words.md"), "hi this hi\nhigh hi\n").unwrap();
+        let n = Needle::new("hi", true);
+        let report = count(td.path(), &n, &Opts::default());
+        assert_eq!((report.files, report.occurrences), (1, 3));
+        replace_all(td.path(), &n, "hey", &Opts::default()).unwrap();
+        assert_eq!(
+            fs::read_to_string(td.path().join("notes/words.md")).unwrap(),
+            "hey this hey\nhigh hey\n"
+        );
+    }
+
+    #[test]
+    fn a_word_is_found_on_its_own_and_not_inside_another() {
+        let m = Matcher::new("test").unwrap();
+        assert_eq!(m.first_word("testing the test"), Some(12));
+        assert_eq!(m.first_word("attest, contest"), None);
+        assert_eq!(m.first_word("Test it"), Some(0), "smart case still applies");
+    }
+
+    #[test]
+    fn walking_with_folders_lists_empty_ones_too() {
+        let td = fixture();
+        fs::create_dir_all(td.path().join("empty/inner")).unwrap();
+        let walked = walk_all(td.path(), &Opts::default());
+        let names: Vec<String> = walked
+            .folders
+            .iter()
+            .map(|p| {
+                p.strip_prefix(td.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert!(names.contains(&"empty".to_string()), "{names:?}");
+        assert!(names.contains(&"empty/inner".to_string()), "{names:?}");
+        assert!(
+            !names.contains(&"target".to_string()),
+            "ignored stays ignored"
+        );
+    }
+
+    #[test]
+    fn lines_where_finds_every_line_with_a_match() {
+        let td = fixture();
+        let m = Matcher::new("widget").unwrap();
+        let hits = lines_where(
+            td.path(),
+            &Opts::default(),
+            100,
+            |t| m.is_in(t),
+            |l| m.first(l),
+        );
+        let lines: Vec<(String, usize)> = hits
+            .iter()
+            .map(|h| {
+                (
+                    h.path.file_name().unwrap().to_string_lossy().into_owned(),
+                    h.line,
+                )
+            })
+            .collect();
+        assert!(lines.contains(&("design.md".to_string(), 2)), "{lines:?}");
+        assert!(lines.contains(&("design.md".to_string(), 3)), "{lines:?}");
     }
 }

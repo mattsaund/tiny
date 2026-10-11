@@ -107,7 +107,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let bar_open = matches!(app.mode, Mode::Bar(_));
     let mut order: Vec<(Slot, u16)> = Vec::new();
     if bar_open {
-        order.push((Slot::Bar, 1));
+        order.push((Slot::Bar, bar::bar_height(app)));
     }
     order.push((Slot::Main, 0));
     order.push((Slot::Status, 1));

@@ -67,7 +67,7 @@ static JAVASCRIPT: LazyLock<Option<TagsConfiguration>> = LazyLock::new(|| {
 /// Languages with a tree-sitter grammar compiled in. Adding one means adding
 /// a variant here and wiring it through [`lang_of`] and [`tags_for`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Lang {
+pub(crate) enum Lang {
     Python,
     Rust,
     JavaScript,
@@ -76,7 +76,7 @@ pub(super) enum Lang {
 /// Map a file extension to a parseable language, or `None` for everything
 /// else. TypeScript is absent deliberately — it needs its own grammar, and
 /// falling back to the JavaScript one mis-parses type annotations.
-pub(super) fn lang_of(path: &Path) -> Option<Lang> {
+pub(crate) fn lang_of(path: &Path) -> Option<Lang> {
     match path
         .extension()
         .and_then(|e| e.to_str())
@@ -199,7 +199,7 @@ pub(super) fn facts_of(ctx: &mut TagsContext, path: &Path, kind: NodeKind) -> Fa
 /// One open, and the size taken from it rather than from a second lookup by
 /// path. The read stops one byte past the limit, so a file that grew after it
 /// was measured is still refused rather than read whole.
-pub(super) fn read_text(path: &Path) -> Option<String> {
+pub(crate) fn read_text(path: &Path) -> Option<String> {
     let file = std::fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     if len > MAX_PARSE_BYTES {
@@ -308,12 +308,7 @@ pub(super) fn collect_symbols(ctx: &mut TagsContext, lang: Lang, text: &str, f: 
         }
         let syntax = config.syntax_type_name(tag.syntax_type_id);
         if tag.is_definition {
-            // `mod x;` and `X = 1` are definitions, but nothing calls them.
-            // Counting them makes every `mod` line look like a function.
-            if matches!(
-                syntax,
-                "function" | "method" | "class" | "interface" | "macro" | "struct" | "enum"
-            ) {
+            if is_callable(syntax) {
                 f.defines.insert(name.to_string());
             }
         } else {
@@ -324,6 +319,47 @@ pub(super) fn collect_symbols(ctx: &mut TagsContext, lang: Lang, text: &str, f: 
             }
         }
     }
+}
+
+/// Whether a definition is of something you can call or build — what the
+/// map links calls to, and what `goto function` goes to.
+///
+/// `mod x;` and `X = 1` are definitions too, but nothing calls them, and
+/// counting them makes every `mod` line look like a function.
+fn is_callable(syntax: &str) -> bool {
+    matches!(
+        syntax,
+        "function" | "method" | "class" | "interface" | "macro" | "struct" | "enum"
+    )
+}
+
+/// Every callable thing defined in `text`, as its name, line and character
+/// column — where `goto function` lands.
+///
+/// The same definitions [`collect_symbols`] counts for the map, so the two
+/// agree on what a function is. Test code is included here: jumping to a test
+/// is a perfectly good thing to want, where linking to one was not.
+pub(crate) fn definitions(
+    ctx: &mut TagsContext,
+    lang: Lang,
+    text: &str,
+) -> Vec<(String, usize, usize)> {
+    let Some(config) = tags_for(lang) else {
+        return Vec::new();
+    };
+    let Ok((tags, _)) = ctx.generate_tags(config, text.as_bytes(), None) else {
+        return Vec::new();
+    };
+    tags.flatten()
+        .filter(|t| t.is_definition && is_callable(config.syntax_type_name(t.syntax_type_id)))
+        .filter_map(|t| {
+            let name = text.get(t.name_range.clone())?;
+            // `span` is the name's own position; its column is in bytes.
+            let line_start = t.name_range.start.checked_sub(t.span.start.column)?;
+            let col = text.get(line_start..t.name_range.start)?.chars().count();
+            Some((name.to_string(), t.span.start.row, col))
+        })
+        .collect()
 }
 
 /// Rust calls written through a path — `helpers::compute()`, `Config::load()`.

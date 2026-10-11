@@ -52,6 +52,7 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
             app.tree.root_path(),
             app.config.show_hidden,
             &app.plugins.commands(),
+            &app.known_names(),
         )
         .unwrap_or_default()
     } else {
@@ -84,7 +85,30 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(ghost, pal.dim),
         Span::styled(hint, pal.dim),
     ]);
-    f.render_widget(Paragraph::new(line), area);
+    // Under a command, what Enter would do with it — or why it would not.
+    // Read off the same plan Enter carries out, so the two cannot differ.
+    let said = match &b.plan {
+        Some(Ok(does)) => Some(Line::from(vec![
+            Span::styled("   ↳ ", pal.dim),
+            Span::styled(does.clone(), pal.text),
+        ])),
+        Some(Err(why)) => Some(Line::from(vec![
+            Span::styled("   ? ", pal.dim),
+            Span::styled(why.clone(), pal.marker),
+        ])),
+        None => None,
+    };
+    let lines: Vec<Line> = std::iter::once(line).chain(said).collect();
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+/// How many rows the bar wants: one for the line, and one more under a
+/// command for what it would do.
+pub(super) fn bar_height(app: &App) -> u16 {
+    match &app.mode {
+        Mode::Bar(b) if b.is_command() && b.plan.is_some() => 2,
+        _ => 1,
+    }
 }
 
 // ---- status line ----------------------------------------------------------

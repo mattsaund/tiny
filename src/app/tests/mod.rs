@@ -35,6 +35,7 @@ mod plugins;
 mod preview;
 mod scrolling;
 mod search;
+mod sentences;
 mod settings;
 mod single_file;
 mod source;

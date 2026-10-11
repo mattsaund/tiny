@@ -94,7 +94,7 @@ impl App {
     /// and will re-read from disk on next view. Dirty ones are kept — their
     /// unsaved edits are worth more than consistency with a file the user has
     /// already diverged from.
-    fn do_replace(&mut self, find: &str, replace: &str) {
+    fn do_replace(&mut self, find: &search::Needle, replace: &str) {
         let opts = self.search_opts();
         match search::replace_all(self.tree.root_path(), find, replace, &opts) {
             Ok(report) => {

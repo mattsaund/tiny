@@ -181,28 +181,35 @@ fn key_rows(keymap: &Keymap) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The right half of the `?` window: every command, in the form you type it.
+/// The right half of the `?` window: every command, as an example of saying it.
 ///
 /// Written with the star, because that is what reaches them — there is one bar
-/// and this is how you tell it you meant a command. Anything added to
-/// `App::run_command` belongs here, and in `complete_command`'s list too.
+/// and this is how you tell it you meant a command. Examples rather than
+/// templates, because a command is a sentence and a sentence is learned from
+/// one: the other ways of saying each (`go to`, `open`, `cp`, `remove`...)
+/// work too, and the line under the bar says what any of them will do.
 ///
-/// Everything here is a deliberate act with something to type after it, or a
-/// thing done rarely enough that a key would be one more key to remember. A
-/// command whose words already say what it does has no description: the
-/// column is for the few that need one.
+/// A command whose words already say what it does has no description: the
+/// column is for the few that need one. A new verb belongs here as well as in
+/// `sentence`.
 const COMMANDS: &[(&str, &str)] = &[
     ("", "COMMANDS"),
-    ("*new [file]", ""),
-    ("*mkdir [folder]", ""),
-    ("*rename [old] to [new]", ""),
-    ("*copy [from] to [to]", ""),
-    ("*delete [path]", ""),
-    ("*replace [old] [new]", "every file"),
-    ("*line [42]", ""),
+    ("*goto line 42", ""),
+    ("*goto function main", "or word, text"),
+    ("*goto heading install", ""),
+    ("*goto file notes.md", "or folder"),
+    ("*goto word todo in a.md", "in: just there"),
+    ("*copy temp.txt to notes", ""),
+    ("*move temp.txt to notes", ""),
+    ("*rename old.md to new.md", ""),
+    ("*new notes/today.md", ""),
+    ("*new folder ideas", ""),
+    ("*delete old.md", ""),
+    ("*replace hi with hello", "every file"),
+    ("*replace hi with hey in a.md", "one file"),
     ("*reload", ""),
     ("*commit [message]", "what is staged"),
-    ("*set [setting] [value]", ""),
+    ("*set tab_width to 2", ""),
     ("*config", "settings · keys"),
     ("*update", "newest tiny"),
 ];

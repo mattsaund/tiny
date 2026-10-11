@@ -53,7 +53,7 @@ fn set_rejects_nonsense_without_changing_anything() {
 fn an_unknown_command_says_so() {
     let (_td, mut app) = fixture();
     command(&mut app, "frobnicate");
-    assert!(app.status.contains("unknown command"), "{}", app.status);
+    assert!(app.status.contains("not a command"), "{}", app.status);
 }
 
 #[test]
@@ -98,7 +98,11 @@ fn replace_asks_first_then_rewrites_the_whole_project() {
 fn replace_needs_both_halves_and_reports_a_miss() {
     let (_td, mut app) = fixture();
     command(&mut app, "replace onlyone");
-    assert!(app.status.contains(":replace"), "{}", app.status);
+    assert!(
+        app.status.contains("replace hi with hello"),
+        "{}",
+        app.status
+    );
     command(&mut app, "replace absent-word x");
     assert!(app.status.contains("not in this project"), "{}", app.status);
 }
@@ -232,11 +236,11 @@ fn help_lists_the_commands_as_well_as_the_keys() {
     app.on_key(ch('?'));
     let out = screen(&mut app, 90, 70).join("\n");
     assert!(
-        out.contains("*copy [from] to [to]"),
+        out.contains("*copy temp.txt to notes"),
         "commands are in it:\n{out}"
     );
-    assert!(out.contains("*line [42]"), "{out}");
-    assert!(out.contains("*replace [old] [new]"), "{out}");
+    assert!(out.contains("*goto line 42"), "{out}");
+    assert!(out.contains("*replace hi with hello"), "{out}");
     assert!(
         // Keys read as they would be written in the config, which is what
         // the keybinds window shows too.
@@ -332,7 +336,7 @@ fn a_narrow_window_stacks_them_into_one_column() {
     );
     assert!(out.contains("ends"), "{out}");
     assert!(
-        out.contains("*copy [from] to [to]"),
+        out.contains("*copy temp.txt to notes"),
         "both are still listed:\n{out}"
     );
 }

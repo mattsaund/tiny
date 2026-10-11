@@ -3,6 +3,23 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.5.0 — unreleased
+
+- **Commands are sentences.** `*copy temp.txt to notes`, `*goto function
+  main`, `*goto word todo in notes.md`, `*replace hi with hello`. Many ways to
+  say each (`go to`, `open`, `jump to`; `remove`, `rm`; `change … to`), and
+  every older spelling still works.
+- **The bar says what Enter will do** on the line under it, with counts —
+  before anything happens.
+- **Names from anywhere.** `notes` is the folder called notes wherever it is;
+  `readme` finds README.md. Two with one name are listed, not guessed.
+- **goto** a line, function, word, text, heading, file or folder — in one file
+  with `in a.md`, otherwise across the project. Again goes to the next one.
+- **replace** is whole words. With no `in` it does the whole project and asks
+  first; `in a.md` changes that file, and `Ctrl+Z` undoes it.
+- `*open map`, `*show git`, `*help` open those windows.
+- Updating no longer prints the first-install advice.
+
 ## 0.4.6 — 2026-10-11
 
 - **A much faster project map.** Opening it reads files on every core and

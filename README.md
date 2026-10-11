@@ -82,11 +82,19 @@ open in your own viewer.
 
 ## Commands
 
+Say it in words. The line under the bar says what Enter will do.
+
 ```
-*new [file]       *rename [old] to [new]   *delete [path]   *line [42]
-*mkdir [folder]   *copy [from] to [to]     *replace [old] [new]
-*commit [message] *set [setting] [value]   *config   *reload   *update
+*goto line 42                 *copy temp.txt to notes
+*goto function main           *move temp.txt to notes
+*goto word todo in a.md       *rename old.md to new.md
+*goto file notes.md           *new notes/today.md
+*replace hi with hello        *delete old.md
+*replace hi with hey in a.md  *set tab_width to 2
 ```
+
+Names are found anywhere in the project. No `in` means everywhere. `go to`,
+`open`, `cp`, `rm`, `*42` and the rest work too.
 
 ## Plugins
 
