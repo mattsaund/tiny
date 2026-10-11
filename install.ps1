@@ -397,6 +397,11 @@
 
     try {
         Install-Tiny
+        # And a clean code when it worked. The download path runs no program
+        # of its own, so without this anything checking $LASTEXITCODE reads
+        # whatever was there before - often $null, which PowerShell holds to
+        # be "not 0".
+        $global:LASTEXITCODE = 0
     }
     catch {
         Write-Host ''

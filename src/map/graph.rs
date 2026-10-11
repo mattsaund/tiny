@@ -50,8 +50,9 @@
 //! - `max_ambiguity` — a name defined in more than N files says nothing about
 //!   which one was meant, so it produces no edge at all. Without this, `new`
 //!   and `main` connect the entire project to itself.
-//! - [`is_test_file`] and [`strip_tests`] — test helpers are named `fixture`,
-//!   `render`, `setup`, and collide with real code everywhere.
+//! - [`is_test_file`](super::scan::is_test_file) and
+//!   [`strip_tests`](super::scan::strip_tests) — test helpers are named
+//!   `fixture`, `render`, `setup`, and collide with real code everywhere.
 //! - Only tags typed `call` become edges, and only definitions of callable
 //!   things become definitions. A `mod x;` is a definition to tree-sitter but
 //!   nothing ever calls it.
