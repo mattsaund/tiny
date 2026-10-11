@@ -118,13 +118,14 @@ jobs:
 
       # The names here are what the installers ask for — `tiny-<target>.zip` on
       # Windows, `tiny-<target>.tar.gz` everywhere else — so change them in both
-      # places or neither.
+      # places or neither. The notices go beside the license: the binary
+      # carries other people's work, and theirs travel with it.
       - name: Package for Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $bin = "target/${{ matrix.target }}/release/tiny.exe"
-          Compress-Archive -Path $bin, README.md, LICENSE `
+          Compress-Archive -Path $bin, README.md, LICENSE, THIRD-PARTY-NOTICES.txt `
             -DestinationPath "tiny-${{ matrix.target }}.zip"
 
       - name: Package for macOS and Linux
@@ -132,7 +133,7 @@ jobs:
         run: |
           tar -czf "tiny-${{ matrix.target }}.tar.gz" \
             -C "target/${{ matrix.target }}/release" tiny \
-            -C "$GITHUB_WORKSPACE" README.md LICENSE
+            -C "$GITHUB_WORKSPACE" README.md LICENSE THIRD-PARTY-NOTICES.txt
 
       - uses: actions/upload-artifact@v7
         with:

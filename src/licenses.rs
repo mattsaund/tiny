@@ -4,19 +4,33 @@
 //!
 //! - tiny itself, MIT, reproduced from the `LICENSE` file beside this source
 //!   so the two can never drift apart.
-//! - The Rust crates it is compiled with. Their code is *inside* the binary,
-//!   which is what makes this a redistribution and their terms tiny's problem
-//!   rather than only the builder's. Every one of them is permissive; nothing
-//!   here is copyleft, which is what keeps the MIT above honest.
+//! - Everything it is compiled with, in `THIRD-PARTY-NOTICES.txt`: each crate
+//!   with its copyright lines and the license it is offered under, Lua (which
+//!   is built from source into the binary), and the color themes syntect
+//!   bundles — then the text of each license once. Their code is *inside*
+//!   the binary, which is what makes this a redistribution and their notices
+//!   tiny's to carry. Every one is permissive; nothing here is copyleft,
+//!   which is what keeps the MIT above honest.
 //! - The syntax definitions, which are third-party data files and carry their
 //!   own notices — see [`crate::text::highlight::acknowledgments`].
 //!
-//! # Keeping [`CRATES`] true
+//! The notices file goes into every release download beside `LICENSE` too,
+//! for anyone reading them without running tiny.
 //!
-//! It is a written-down list, so it can go stale. What stops it is the test
-//! below: every crate in `Cargo.lock` that is not a test-only dependency has
-//! to appear here, and nothing may appear here that is not in the lockfile.
-//! Add a dependency without listing it and the suite says so.
+//! # Keeping it true
+//!
+//! The notices are generated, from the crates' own license files, by a test
+//! that is skipped unless asked for:
+//!
+//! ```text
+//! cargo test write_third_party_notices -- --ignored
+//! ```
+//!
+//! What it documents is `CRATES`, the written-down list of every crate in the
+//! binary, in the tests below. Two tests keep both honest: every crate in
+//! `Cargo.lock` that ships has to be in the list, and every crate in the list
+//! has to be in the notices — so a new dependency fails the suite until it is
+//! listed and the notices are written again.
 //!
 //! To rebuild the list after changing dependencies, take every target a
 //! release is built for (see `release.yml`) — Windows compiles in crates the
@@ -31,13 +45,27 @@
 //!
 //! and take each crate's `license` field from `cargo metadata`.
 
+/// tiny's own terms, everything it is compiled with, and the grammars it
+/// bundles — the whole of what `tiny --licenses` prints.
+pub fn notice() -> String {
+    let mut out = String::new();
+    out.push_str(concat!("tiny ", env!("CARGO_PKG_VERSION"), "\n\n"));
+    out.push_str(include_str!("../LICENSE"));
+    out.push('\n');
+    out.push_str(include_str!("../THIRD-PARTY-NOTICES.txt"));
+    out.push('\n');
+    out.push_str(&crate::text::highlight::acknowledgments());
+    out
+}
+
 /// Every crate compiled into tiny, on any platform it is released for, with
-/// the license expression it declares.
+/// the license expression it declares — what the notices are written from.
 ///
 /// Spelled exactly as each crate spells it — `MIT/Apache-2.0` and
 /// `MIT OR Apache-2.0` are the same permission and different strings, and
 /// reproducing a notice means reproducing it.
-pub const CRATES: &[(&str, &str)] = &[
+#[cfg(test)]
+const CRATES: &[(&str, &str)] = &[
     ("adler2", "0BSD OR MIT OR Apache-2.0"),
     ("aho-corasick", "Unlicense OR MIT"),
     ("allocator-api2", "MIT OR Apache-2.0"),
@@ -176,25 +204,6 @@ pub const CRATES: &[(&str, &str)] = &[
     ("zmij", "MIT"),
 ];
 
-/// tiny's own terms, everything it is compiled with, and the grammars it
-/// bundles — the whole of what `tiny --licenses` prints.
-pub fn notice() -> String {
-    let mut out = String::new();
-    out.push_str(concat!("tiny ", env!("CARGO_PKG_VERSION"), "\n\n"));
-    out.push_str(include_str!("../LICENSE"));
-    out.push_str(
-        "\ntiny is compiled with the crates below, whose code is part of the\n\
-         binary. Each is under the permissive terms it declares here; none of\n\
-         them is copyleft. Full texts come with each crate's own source.\n\n",
-    );
-    for (name, license) in CRATES {
-        out.push_str(&format!("  {name:<22}  {license}\n"));
-    }
-    out.push('\n');
-    out.push_str(&crate::text::highlight::acknowledgments());
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +284,358 @@ mod tests {
         let out = notice();
         assert!(out.contains("MIT License"), "tiny's own terms");
         assert!(out.contains("ratatui"), "the crates it is built from");
+        assert!(
+            out.contains("Lua.org, PUC-Rio"),
+            "Lua, built in from source"
+        );
         assert!(out.contains("syntax definitions"), "the bundled grammars");
+    }
+
+    // ---- the notices file --------------------------------------------------
+
+    const NOTICES: &str = include_str!("../THIRD-PARTY-NOTICES.txt");
+
+    /// Each crate's entry in the notices: its name, and the license line under
+    /// it. An entry is a line with nothing in front of it, in the crates part.
+    fn entries() -> Vec<(String, String)> {
+        let crates = NOTICES
+            .split("---- crates ")
+            .nth(1)
+            .expect("a crates part")
+            .split("\n---- ")
+            .next()
+            .expect("it ends");
+        let lines: Vec<&str> = crates.lines().skip(1).collect();
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| !l.is_empty() && !l.starts_with(' '))
+            .map(|(i, l)| {
+                let name = l.split_whitespace().next().unwrap_or("").to_string();
+                let license = lines
+                    .get(i + 1)
+                    .and_then(|l| l.trim().strip_prefix("license: "))
+                    .unwrap_or("")
+                    .to_string();
+                (name, license)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_notices_name_every_crate_and_nothing_else() {
+        let entries = entries();
+        let named: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        let listed: Vec<&str> = CRATES.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            named, listed,
+            "THIRD-PARTY-NOTICES.txt is out of date — run \
+             `cargo test write_third_party_notices -- --ignored`"
+        );
+        for ((name, said), (_, declared)) in entries.iter().zip(CRATES) {
+            assert!(
+                said.starts_with(declared),
+                "{name}: the notices say `{said}`, the crate says `{declared}`"
+            );
+        }
+    }
+
+    #[test]
+    fn every_license_taken_has_its_text_in_the_notices() {
+        for (name, said) in entries() {
+            let taken = said.rsplit("taken as ").next().unwrap_or(&said).to_string();
+            for id in taken.split(" and ") {
+                assert!(
+                    NOTICES.contains(&format!("\n---- {id} ")),
+                    "{name} is taken under {id}, whose text is not in the notices"
+                );
+            }
+        }
+    }
+
+    // ---- writing it -------------------------------------------------------
+
+    /// Which of the licenses a crate offers tiny takes.
+    ///
+    /// MIT wherever it is offered: the shortest text, and the one tiny is
+    /// under itself. Otherwise anything but Apache-2.0, whose text is longer
+    /// than most of the crates it would cover. An `AND` takes every part.
+    fn taken(expression: &str) -> Vec<String> {
+        expression
+            .split(" AND ")
+            .map(|part| {
+                let part = part.trim().trim_start_matches('(').trim_end_matches(')');
+                let offered: Vec<&str> = part
+                    .split(" OR ")
+                    .flat_map(|o| o.split('/'))
+                    .map(str::trim)
+                    .collect();
+                let pick = if offered.contains(&"MIT") {
+                    "MIT"
+                } else {
+                    offered
+                        .iter()
+                        .find(|o| !o.starts_with("Apache-2.0"))
+                        .unwrap_or(&offered[0])
+                };
+                pick.to_string()
+            })
+            .collect()
+    }
+
+    /// The file in a crate's folder that holds the text of `license`.
+    fn license_file(dir: &std::path::Path, license: &str) -> Option<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| {
+                let u = n.to_uppercase();
+                u.starts_with("LICEN") || u.starts_with("COPYING")
+            })
+            .collect();
+        names.sort();
+        let marker = match license {
+            "MIT" => "MIT",
+            "BSL-1.0" => "BOOST",
+            "Zlib" => "ZLIB",
+            "Unicode-3.0" => "UNICODE",
+            other => other,
+        };
+        let read = |n: &String| std::fs::read_to_string(dir.join(n)).ok();
+        // A file named for the license, or the one plain LICENSE when that is
+        // the license it holds.
+        names
+            .iter()
+            .find(|n| n.to_uppercase().contains(marker))
+            .and_then(read)
+            .or_else(|| {
+                names
+                    .iter()
+                    .filter(|n| {
+                        let u = n.to_uppercase();
+                        matches!(
+                            u.as_str(),
+                            "LICENSE" | "LICENCE" | "LICENSE.MD" | "LICENSE.TXT"
+                        )
+                    })
+                    .filter_map(read)
+                    .find(|text| license != "MIT" || text.contains("Permission is hereby granted"))
+            })
+    }
+
+    /// The copyright lines in a license's text, as written there.
+    fn copyright_lines(text: &str) -> Vec<String> {
+        text.lines()
+            .map(|l| l.trim().trim_start_matches(['>', '*', '#', ' ']).trim())
+            .filter(|l| {
+                let lower = l.to_lowercase();
+                lower.starts_with("copyright") || lower.starts_with("(c)") || l.starts_with('©')
+            })
+            // `[Name](https://...)` reads as `Name`.
+            .map(|l| {
+                let mut out = String::new();
+                let mut rest = l;
+                while let Some(open) = rest.find('[') {
+                    match (rest[open..].find("]("), rest[open..].find(')')) {
+                        (Some(mid), Some(close)) if mid < close => {
+                            out.push_str(&rest[..open]);
+                            out.push_str(&rest[open + 1..open + mid]);
+                            rest = &rest[open + close + 1..];
+                        }
+                        _ => break,
+                    }
+                }
+                out.push_str(rest);
+                out
+            })
+            .collect()
+    }
+
+    /// One line, ruled out to a fixed width, that starts a part of the file.
+    fn rule(title: &str) -> String {
+        let head = format!("---- {title} ");
+        let dashes = 76usize.saturating_sub(head.chars().count());
+        format!("{head}{}\n", "-".repeat(dashes))
+    }
+
+    /// Rebuild `THIRD-PARTY-NOTICES.txt` from the crates' own license files.
+    ///
+    /// Skipped unless asked for, because it reads cargo's copy of every
+    /// crate's source and writes into this one. Run it after changing
+    /// dependencies and commit what it writes;
+    /// `the_notices_name_every_crate_and_nothing_else` says when it is due.
+    #[test]
+    #[ignore]
+    fn write_third_party_notices() {
+        use std::collections::BTreeMap;
+        use std::path::Path;
+
+        let out = std::process::Command::new(env!("CARGO"))
+            .args(["metadata", "--format-version", "1", "--locked"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("cargo metadata runs");
+        let meta: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("cargo metadata speaks JSON");
+        let packages = meta["packages"].as_array().expect("a list of packages");
+
+        // tiny's own LICENSE, from the permission on: the MIT text, once, for
+        // every crate taken under MIT.
+        let own = include_str!("../LICENSE");
+        let mit = &own[own
+            .find("Permission is hereby granted")
+            .expect("tiny is MIT")..];
+
+        let mut texts: BTreeMap<String, Vec<(String, Vec<String>)>> = BTreeMap::new();
+        let mut body = String::new();
+        for (name, declared) in CRATES {
+            let found: Vec<&serde_json::Value> =
+                packages.iter().filter(|p| p["name"] == *name).collect();
+            assert!(!found.is_empty(), "{name} is not in cargo metadata");
+            let mut versions: Vec<&str> =
+                found.iter().filter_map(|p| p["version"].as_str()).collect();
+            versions.sort();
+            let licenses = taken(declared);
+
+            let mut copyright: Vec<String> = Vec::new();
+            for p in &found {
+                let dir = Path::new(p["manifest_path"].as_str().unwrap())
+                    .parent()
+                    .unwrap()
+                    .to_path_buf();
+                // The people the crate names as its authors, which is who holds
+                // it when its own notice does not say.
+                let authors: Vec<String> = p["authors"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|a| a.as_str())
+                    .map(|a| a.split('<').next().unwrap_or(a).trim().to_string())
+                    .filter(|a| !a.is_empty())
+                    .collect();
+                for license in &licenses {
+                    let Some(text) = license_file(&dir, license) else {
+                        continue;
+                    };
+                    // A line with a year and no one in it keeps its words and
+                    // gains the crate's authors after them.
+                    copyright.extend(copyright_lines(&text).into_iter().map(|line| {
+                        let holder = line
+                            .to_lowercase()
+                            .replace("copyright", "")
+                            .replace("(c)", "")
+                            .replace(['©', '-', ',', ' '], "");
+                        if !holder.chars().all(|c| c.is_ascii_digit()) {
+                            line
+                        } else if authors.is_empty() {
+                            format!("{line} — the {name} developers")
+                        } else {
+                            format!("{line} — {}", authors.join(", "))
+                        }
+                    }));
+                    if license != "MIT" {
+                        let crates = texts.entry(license.clone()).or_default();
+                        let same = |t: &String| t.split_whitespace().eq(text.split_whitespace());
+                        match crates.iter_mut().find(|(t, _)| same(t)) {
+                            Some((_, users)) => users.push(name.to_string()),
+                            None => crates.push((text.trim().to_string(), vec![name.to_string()])),
+                        }
+                    }
+                }
+                if copyright.is_empty() {
+                    copyright.push(if authors.is_empty() {
+                        format!("Copyright (c) the {name} developers")
+                    } else {
+                        format!("Copyright (c) {}", authors.join(", "))
+                    });
+                }
+            }
+            copyright.dedup();
+            let mut seen = Vec::new();
+            copyright.retain(|c| {
+                let fresh = !seen.contains(c);
+                seen.push(c.clone());
+                fresh
+            });
+
+            body.push_str(&format!("{name} {}\n", versions.join(", ")));
+            let taken_as = licenses.join(" and ");
+            if taken_as == *declared {
+                body.push_str(&format!("    license: {declared}\n"));
+            } else {
+                body.push_str(&format!("    license: {declared}, taken as {taken_as}\n"));
+            }
+            for c in &copyright {
+                body.push_str(&format!("    {c}\n"));
+            }
+            body.push('\n');
+        }
+
+        // Lua is C, built into the binary from the source lua-src carries,
+        // and its notice is in that source rather than in any crate's file.
+        let lua_src = packages
+            .iter()
+            .find(|p| p["name"] == "lua-src")
+            .expect("lua-src builds Lua");
+        let lua_dir = Path::new(lua_src["manifest_path"].as_str().unwrap())
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let lua54 = std::fs::read_dir(&lua_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("lua-5.4"))
+            .max()
+            .expect("lua-src carries Lua 5.4");
+        let lua_h = std::fs::read_to_string(lua_dir.join(&lua54).join("lua.h")).unwrap();
+        let lua_copyright = copyright_lines(&lua_h)
+            .into_iter()
+            .find(|l| l.contains("Lua.org"))
+            .expect("lua.h carries its notice");
+
+        let mut file = String::new();
+        file.push_str(
+            "THIRD-PARTY NOTICES\n\n\
+             tiny carries the work below inside its binary. Each crate is listed with\n\
+             its copyright and the license it is offered under; where it offers a\n\
+             choice, the one tiny takes is named. The text of each license follows\n\
+             the list, once: the copyright notices above it are the ones it refers to.\n\n\
+             Written from each crate's own license files by\n\
+             `cargo test write_third_party_notices -- --ignored`.\n\n",
+        );
+        file.push_str(&rule("crates"));
+        file.push('\n');
+        file.push_str(&body);
+        file.push_str(&rule("built in from source"));
+        file.push('\n');
+        file.push_str(&format!(
+            "Lua {} (built by lua-src)\n    license: MIT\n    {lua_copyright}\n\n",
+            lua54.trim_start_matches("lua-")
+        ));
+        // The themes syntect compiles in. Their notices are not in the crate;
+        // these are from each theme's own LICENSE upstream: base16-textmate,
+        // altercation/solarized and sethlopezme/InspiredGitHub.tmtheme.
+        file.push_str(
+            "Color themes bundled by syntect\n    license: MIT\n    \
+             base16 (ocean, eighties, mocha): Copyright (C) 2012 Chris Kempson\n    \
+             Solarized: Copyright (c) 2011 Ethan Schoonover\n    \
+             InspiredGitHub: Copyright (c) 2015 Seth Lopez\n\n",
+        );
+        file.push_str(&rule("MIT"));
+        file.push('\n');
+        file.push_str(mit.trim());
+        file.push_str("\n\n");
+        for (license, versions) in &texts {
+            for (text, users) in versions {
+                file.push_str(&rule(&format!("{license} ({})", users.join(", "))));
+                file.push('\n');
+                file.push_str(text);
+                file.push_str("\n\n");
+            }
+        }
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("THIRD-PARTY-NOTICES.txt");
+        std::fs::write(&path, file.trim_end().to_string() + "\n").unwrap();
     }
 }

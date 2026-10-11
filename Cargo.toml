@@ -30,6 +30,9 @@ two-face = { version = "0.5.2", default-features = false, features = ["syntect-f
 unicode-width = "0.2.2"
 
 [dev-dependencies]
+# Reads `cargo metadata` when the third-party notices are written — see
+# `licenses`. Already in the build for other crates; never in the binary.
+serde_json = "1.0.151"
 tempfile = "3.27.0"
 
 # Release is what people install, and they wait for it: `install.sh` builds

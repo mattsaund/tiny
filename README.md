@@ -143,7 +143,8 @@ Linux, macOS and Windows. A version is released by tagging it; see
 
 Created by Matthew Saunders — https://msaunders.dev
 
-MIT. See [LICENSE](LICENSE). `tiny --licenses` lists every crate compiled in —
-all permissive — and the syntax definitions, from
-[bat](https://github.com/sharkdp/bat) via
+MIT. See [LICENSE](LICENSE). Everything compiled in — every crate, Lua, the
+color themes — is permissive, with its copyright and license in
+[THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt); `tiny --licenses` prints
+it, with the syntax definitions from [bat](https://github.com/sharkdp/bat) via
 [two-face](https://codeberg.org/CosmicHarper/two-face).
