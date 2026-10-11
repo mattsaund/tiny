@@ -351,7 +351,9 @@ mod tests {
             let taken = said.rsplit("taken as ").next().unwrap_or(&said).to_string();
             for id in taken.split(" and ") {
                 assert!(
-                    NOTICES.replace("\r\n", "\n").contains(&format!("\n---- {id} ")),
+                    NOTICES
+                        .replace("\r\n", "\n")
+                        .contains(&format!("\n---- {id} ")),
                     "{name} is taken under {id}, whose text is not in the notices"
                 );
             }
