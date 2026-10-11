@@ -3,7 +3,7 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
-## 0.5.0 — unreleased
+## 0.5.0 — 2026-10-11
 
 - **Commands are sentences.** `*copy temp.txt to notes`, `*goto function
   main`, `*goto word todo in notes.md`, `*replace hi with hello`. Many ways to
