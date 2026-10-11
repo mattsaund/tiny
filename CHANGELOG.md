@@ -19,6 +19,9 @@ Each version is a `v` tag, with ready-made binaries on its
   first; `in a.md` changes that file, and `Ctrl+Z` undoes it.
 - `*open map`, `*show git`, `*help` open those windows.
 - Updating no longer prints the first-install advice.
+- **Third-party notices.** `tiny --licenses`, and every download, carry the
+  copyright and license of everything compiled in: each crate, Lua, and the
+  color themes.
 
 ## 0.4.6 — 2026-10-11
 
