@@ -297,8 +297,13 @@ mod tests {
 
     /// Each crate's entry in the notices: its name, and the license line under
     /// it. An entry is a line with nothing in front of it, in the crates part.
+    ///
+    /// Line endings are made one kind first: git on Windows checks the file
+    /// out with `\r\n`, and a `\r` left at the end of the part was read as
+    /// one more crate, with no name.
     fn entries() -> Vec<(String, String)> {
-        let crates = NOTICES
+        let notices = NOTICES.replace("\r\n", "\n");
+        let crates = notices
             .split("---- crates ")
             .nth(1)
             .expect("a crates part")
@@ -309,7 +314,7 @@ mod tests {
         lines
             .iter()
             .enumerate()
-            .filter(|(_, l)| !l.is_empty() && !l.starts_with(' '))
+            .filter(|(_, l)| !l.trim().is_empty() && !l.starts_with(' '))
             .map(|(i, l)| {
                 let name = l.split_whitespace().next().unwrap_or("").to_string();
                 let license = lines
@@ -346,7 +351,7 @@ mod tests {
             let taken = said.rsplit("taken as ").next().unwrap_or(&said).to_string();
             for id in taken.split(" and ") {
                 assert!(
-                    NOTICES.contains(&format!("\n---- {id} ")),
+                    NOTICES.replace("\r\n", "\n").contains(&format!("\n---- {id} ")),
                     "{name} is taken under {id}, whose text is not in the notices"
                 );
             }
