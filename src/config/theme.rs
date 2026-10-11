@@ -73,7 +73,7 @@ impl Default for Theme {
 /// `Copy`, and deliberately so — `ui` passes it around by value on every line
 /// it draws, and threading a reference through would add lifetimes to most of
 /// that module for no benefit. Rebuilt by `App::apply_config` whenever the
-/// theme changes, which is how `:set theme.heading cyan bold` repaints without
+/// theme changes, which is how `*set theme.heading cyan bold` repaints without
 /// a restart.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {

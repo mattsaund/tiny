@@ -21,12 +21,12 @@
 //!
 //! 1. A field on [`Config`], with a doc comment.
 //! 2. A default in `impl Default for Config`.
-//! 3. A row in [`Config::settings_index`] — this drives both `:set` completion
+//! 3. A row in [`Config::settings_index`] — this drives both `*set` completion
 //!    and the in-program settings area.
 //! 4. Arms in [`Config::get`] and [`Config::set`].
 //!
 //! Miss (3) and the setting works from a config file but is invisible in the
-//! UI; miss (4) and `:set` reports it as unknown. The
+//! UI; miss (4) and `*set` reports it as unknown. The
 //! `every_setting_round_trips` test in this file catches most of this.
 //!
 //! # Nothing here fails hard
@@ -230,7 +230,7 @@ impl Config {
     /// Clamp every numeric field into a range that cannot break the layout,
     /// and bring key names written by an older tiny up to date.
     ///
-    /// Run after loading a file and after every `:set`, so there is no path by
+    /// Run after loading a file and after every `*set`, so there is no path by
     /// which a hand-edited `tree_width = 40` produces a tree wider than the
     /// window or a `tab_width = 0` produces an infinite loop.
     fn sanitized(mut self) -> Self {
@@ -240,7 +240,7 @@ impl Config {
         self
     }
 
-    /// Every key `:set` accepts, with a hint of a word or two. Also what the
+    /// Every key `*set` accepts, with a hint of a word or two. Also what the
     /// in-program settings area lists, so the two can never drift apart.
     ///
     /// A hint says what the name does not — the values a setting takes, or
@@ -317,7 +317,7 @@ impl Config {
         })
     }
 
-    /// Apply one `:set key value`. Rejects unknown keys and unparseable
+    /// Apply one `*set key value`. Rejects unknown keys and unparseable
     /// values rather than silently doing nothing.
     ///
     /// Note that theme entries are stored as raw strings without validation —
@@ -383,10 +383,10 @@ fn parse_bool(v: &str) -> Result<bool> {
     }
 }
 
-/// A whitespace- or comma-separated list, as typed into `:set` or the
+/// A whitespace- or comma-separated list, as typed into `*set` or the
 /// settings area. Leading dots on extensions are forgiven.
 ///
-/// So `:set prose_extensions md,.txt rst` and `:set prose_extensions md txt
+/// So `*set prose_extensions md,.txt rst` and `*set prose_extensions md txt
 /// rst` mean the same thing. Never fails — an unparseable list is an empty
 /// one, which is a legal value.
 fn parse_list(v: &str) -> Vec<String> {

@@ -22,6 +22,15 @@
 //! asking [`ProjectMap::node_visible`] and [`ProjectMap::edge_visible`] at
 //! draw time, so toggling an edge kind is instant and reversible.
 //!
+//! # Every frame is per file, never per file per edge
+//!
+//! A frame asks, for every file, whether anything reaches it, and draws the
+//! selected file's lines. Scanning the whole edge list to answer either is
+//! quadratic, and on a vault of twenty thousand notes that was two seconds a
+//! keypress. So the answers are indexed once, at build time: `touching` lists
+//! each file's edges, and `shown` holds the filter's verdict on each file
+//! until the filter changes.
+//!
 //! # Coordinates
 //!
 //! `pos` is written by [`super::layout`] in **grid** units — one per box, not
@@ -29,10 +38,12 @@
 //! `move_towards(0.0, 1.0)`. Navigation then walks the picture exactly as it
 //! is drawn.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::keys::Action;
 use crate::map::graph::{self, Edge, EdgeKind, Graph, Node};
+use crate::map::layout::{self, Link};
 
 /// What a keypress asked the app to do. Named for the request rather than
 /// the key, since `keys::Action` is now what a key resolves to.
@@ -70,8 +81,22 @@ pub struct ProjectMap {
     /// [`kind_index`], and bound to the `1`-`3` keys.
     pub kinds: [bool; 3],
     /// Substring matched against each node's relative path, case-insensitively.
-    /// Empty means no filtering.
-    pub filter: String,
+    /// Empty means no filtering. Changed only through
+    /// [`ProjectMap::set_filter`], which keeps `shown` in step with it.
+    filter: String,
+    /// Whether each node passes the filter, parallel to `graph.nodes`.
+    shown: Vec<bool>,
+    /// The edges touching each node, as indices into `graph.edges` in edge
+    /// order. What a file connects to costs that file's edges to find, not
+    /// the whole graph's.
+    touching: Vec<Vec<usize>>,
+    /// Each file's name as drawn in its box — see [`layout::label_of`].
+    pub(super) labels: Vec<String>,
+    /// The folder each file sits in, as an index into `folders`.
+    pub(super) folder: Vec<usize>,
+    /// Every folder holding a file, in path order, without a trailing slash.
+    /// The project root is `""`, so it comes first.
+    pub(super) folders: Vec<String>,
 }
 
 /// Position of an edge kind in [`ProjectMap::kinds`], and in the `1`-`3` key
@@ -88,17 +113,33 @@ impl ProjectMap {
     /// Build the graph and put the cursor somewhere sensible. Laying it out
     /// is `place`'s job, and happens per frame against the pane it has.
     ///
-    /// Everything expensive happens here, synchronously — this is what `w`
-    /// costs.
+    /// Everything expensive happens here, synchronously — this is what
+    /// opening the map costs.
     pub fn build(root: &Path, opts: &graph::Options) -> Self {
         let graph = graph::build(root, opts);
+        let mut touching = vec![Vec::new(); graph.nodes.len()];
+        for (n, e) in graph.edges.iter().enumerate() {
+            touching[e.from].push(n);
+            touching[e.to].push(n);
+        }
+        let labels = graph
+            .nodes
+            .iter()
+            .map(|n| layout::label_of(&n.name))
+            .collect();
+        let (folder, folders) = layout::folders_of(&graph.nodes);
         let mut view = Self {
             pos: vec![(0.0, 0.0); graph.nodes.len()],
+            shown: vec![true; graph.nodes.len()],
             graph,
             root: root.to_path_buf(),
             selected: 0,
             kinds: [true; 3],
             filter: String::new(),
+            touching,
+            labels,
+            folder,
+            folders,
         };
         view.select_busiest();
         // `pos` is written by `place`, which only runs when a frame is drawn.
@@ -111,10 +152,6 @@ impl ProjectMap {
 
     // ---- what is on screen ------------------------------------------------
 
-    /// Whether a node is currently drawn.
-    ///
-    /// Two independent tests: it must match the filter, and — unless orphans
-    /// are shown — it must touch at least one edge of a kind still switched
     /// Whether a file is drawn at all.
     ///
     /// Only the bar's filter can hide one. A file that links to nothing is still
@@ -122,10 +159,17 @@ impl ProjectMap {
     /// left out, because a map that quietly omits things is a map you cannot
     /// trust to tell you what is there. See [`ProjectMap::connected`].
     pub fn node_visible(&self, i: usize) -> bool {
-        let Some(n) = self.graph.nodes.get(i) else {
-            return false;
-        };
-        self.filter.is_empty() || n.rel.to_lowercase().contains(&self.filter.to_lowercase())
+        self.shown.get(i).copied().unwrap_or(false)
+    }
+
+    /// What the map is narrowed to, as typed. Empty when it is not.
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// A file's name as it is written in its box.
+    pub fn label(&self, i: usize) -> &str {
+        &self.labels[i]
     }
 
     /// Whether any connection reaches this file, in either direction.
@@ -138,15 +182,10 @@ impl ProjectMap {
     /// looking at; it does not change what a file is joined to, and filing
     /// every file as unconnected the moment you type into the box would be
     /// telling you something untrue about your project.
-    ///
-    /// Scans every edge, and is called per node, so this is quadratic. Fine at
-    /// the scale a terminal can draw; the place to start if a huge project
-    /// ever feels sluggish.
     pub(super) fn connected(&self, i: usize) -> bool {
-        self.graph
-            .edges
+        self.touching[i]
             .iter()
-            .any(|e| self.kind_on(e) && (e.from == i || e.to == i))
+            .any(|&e| self.kind_on(&self.graph.edges[e]))
     }
 
     /// Whether this edge's kind is switched on, ignoring everything else.
@@ -163,7 +202,7 @@ impl ProjectMap {
     /// Every drawn node, in index order. Also the order `Tab` steps through.
     pub fn visible_indices(&self) -> Vec<usize> {
         (0..self.graph.nodes.len())
-            .filter(|i| self.node_visible(*i))
+            .filter(|i| self.shown[*i])
             .collect()
     }
 
@@ -174,22 +213,51 @@ impl ProjectMap {
         self.node_visible(i).then(|| self.graph.nodes.get(i))?
     }
 
+    /// The drawn edges touching a file, in edge order.
+    fn edges_of(&self, i: usize) -> impl Iterator<Item = &Edge> {
+        self.touching
+            .get(i)
+            .into_iter()
+            .flatten()
+            .map(|&e| &self.graph.edges[e])
+            .filter(|e| self.edge_visible(e))
+    }
+
     /// Edges touching a node, split into the ones it points at and the ones
     /// that point at it.
     pub fn connections(&self, i: usize) -> (Vec<&Edge>, Vec<&Edge>) {
-        let mut out = Vec::new();
-        let mut incoming = Vec::new();
-        for e in &self.graph.edges {
-            if !self.edge_visible(e) {
-                continue;
-            }
-            if e.from == i {
-                out.push(e);
-            } else if e.to == i {
-                incoming.push(e);
-            }
-        }
-        (out, incoming)
+        self.edges_of(i).partition(|e| e.from == i)
+    }
+
+    /// The files drawn joined to this one, each once however many edges run
+    /// between them — the far ends of the lines the map draws for it.
+    pub fn neighbors(&self, i: usize) -> Vec<usize> {
+        let mut seen = HashSet::new();
+        self.edges_of(i)
+            .map(|e| if e.from == i { e.to } else { e.from })
+            .filter(|other| seen.insert(*other))
+            .collect()
+    }
+
+    /// Every drawn connection, with all the edges between a pair of files
+    /// merged into one.
+    ///
+    /// Two files that share a dozen function names are one connection, not a
+    /// dozen parallel lines. The lines were the tangle: the graph is keyed per
+    /// symbol so that the detail strip can name them, but the picture only has
+    /// to say *that* they are connected.
+    pub fn links(&self) -> Vec<Link> {
+        let mut seen = HashSet::new();
+        self.graph
+            .edges
+            .iter()
+            .filter(|e| self.edge_visible(e))
+            .map(|e| Link {
+                a: e.from.min(e.to),
+                b: e.from.max(e.to),
+            })
+            .filter(|l| seen.insert((l.a, l.b)))
+            .collect()
     }
 
     // ---- layout -----------------------------------------------------------
@@ -197,8 +265,8 @@ impl ProjectMap {
     /// Park the cursor on the first drawn node, used at build time and
     /// whenever a filter change strands it.
     fn select_first_visible(&mut self) {
-        if let Some(i) = self.visible_indices().first() {
-            self.selected = *i;
+        if let Some(i) = self.shown.iter().position(|s| *s) {
+            self.selected = i;
         }
     }
 
@@ -212,10 +280,9 @@ impl ProjectMap {
     /// before you have asked for anything in particular.
     fn select_busiest(&mut self) {
         let degree = |i: usize| {
-            self.graph
-                .edges
+            self.touching[i]
                 .iter()
-                .filter(|e| self.kind_on(e) && (e.from == i || e.to == i))
+                .filter(|&&e| self.kind_on(&self.graph.edges[e]))
                 .count()
         };
         if let Some(i) = self
@@ -329,6 +396,10 @@ impl ProjectMap {
     /// field in the same place on screen — see `App::open_bar`.
     pub fn set_filter(&mut self, query: &str) {
         self.filter = query.trim().to_string();
+        let wanted = self.filter.to_lowercase();
+        for (shown, n) in self.shown.iter_mut().zip(&self.graph.nodes) {
+            *shown = wanted.is_empty() || n.rel.to_lowercase().contains(&wanted);
+        }
         self.ensure_selection();
     }
 
@@ -348,7 +419,7 @@ impl ProjectMap {
 
     /// One-line summary for the pane title.
     pub fn summary(&self) -> String {
-        let shown = self.visible_indices().len();
+        let shown = self.shown.iter().filter(|s| **s).count();
         // Connections, not edges: the picture draws one line per pair of
         // files, so counting per-symbol edges here would promise lines that
         // are not there.
@@ -399,7 +470,7 @@ mod tests {
     #[test]
     fn the_filter_narrows_to_matching_paths() {
         let (_td, mut view) = fixture();
-        view.filter = "src/".into();
+        view.set_filter("src/");
         let shown = visible_names(&view);
         assert!(shown.iter().all(|r| r.starts_with("src/")), "{shown:?}");
         assert!(!shown.is_empty());

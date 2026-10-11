@@ -46,9 +46,9 @@
 //!   the search or command bar, the settings area, the help overlay, or
 //!   `Normal` for none of them.
 //!
-//! [`App::on_key`] dispatches on `Mode` first and only falls through to `Focus`
-//! when the mode is `Normal`. The map is checked before either, because it
-//! takes the whole screen and every key with it.
+//! [`App::handle_key`] dispatches on `Mode` first and only falls through to
+//! `Focus` when the mode is `Normal`. The map is checked before either,
+//! because it takes the whole screen and every key with it.
 //!
 //! # `i j k l` are the arrow keys
 //!
@@ -78,13 +78,13 @@
 //!
 //! # The mode take-and-replace pattern
 //!
-//! `on_key` does `std::mem::replace(&mut self.mode, Mode::Normal)` and hands
-//! the owned mode to a handler. This is not a borrow-checker workaround so much
-//! as a useful default: a handler that does nothing leaves `Normal` behind, so
-//! **closing is the default and staying open is explicit**. Every handler that
-//! wants its mode to persist has to put it back — which is why you see
-//! `self.mode = Mode::Bar(b)` at the end of so many branches. Forget it and the
-//! overlay closes; that is the intended failure direction.
+//! `handle_key` does `std::mem::replace(&mut self.mode, Mode::Normal)` and
+//! hands the owned mode to a handler. This is not a borrow-checker workaround
+//! so much as a useful default: a handler that does nothing leaves `Normal`
+//! behind, so **closing is the default and staying open is explicit**. Every
+//! handler that wants its mode to persist has to put it back — which is why
+//! you see `self.mode = Mode::Bar(b)` at the end of so many branches. Forget
+//! it and the overlay closes; that is the intended failure direction.
 //!
 //! # Buffers outlive the selection
 //!
@@ -150,7 +150,7 @@ use crate::text::highlight::{Highlighter, Resume};
 use crate::text::search::{self};
 
 /// Everything mutable. One of these exists for the life of the program;
-/// `ui::draw` reads it and `on_key` writes it.
+/// `ui::draw` reads it and `handle_key` writes it.
 pub struct App {
     pub tree: Tree,
     /// Flattened tree, rebuilt after every structural change. The cursor

@@ -28,7 +28,6 @@
 //! one of them has a new modification time. There is still no inotify and no
 //! background thread; see `app::watch` for why polling was the cheaper answer.
 
-use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -235,7 +234,7 @@ impl Tree {
 
     /// Re-read every directory that has been loaded so far.
     ///
-    /// The blunt instrument behind `R`, `:reload`, and every file operation.
+    /// The blunt instrument behind `*reload` and every file operation.
     /// Cost is one `read_dir` per open directory — fine for a project you are
     /// looking at, and the reason unopened directories are skipped entirely.
     pub fn refresh_all(&mut self) {
@@ -361,15 +360,11 @@ fn read_dir_sorted(dir: &Path, show_hidden: bool) -> std::io::Result<Vec<Node>> 
         };
         out.push(Node::new(entry.path(), is_dir));
     }
-    out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-        (true, false) => Ordering::Less,
-        (false, true) => Ordering::Greater,
-        _ => a
-            .name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| a.name.cmp(&b.name)),
-    });
+    // Folders first, then by name ignoring case, then exactly. Each name is
+    // lowercased once rather than once per comparison, which in a folder of
+    // ten thousand files is the difference between ten thousand allocations
+    // and a few hundred thousand.
+    out.sort_by_cached_key(|n| (!n.is_dir, n.name.to_lowercase(), n.name.clone()));
     Ok(out)
 }
 

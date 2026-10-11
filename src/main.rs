@@ -13,14 +13,15 @@
 //!    to a plain blocking event loop.
 //! 2. **State** — [`app`]. One `App` struct owns everything mutable: the tree
 //!    cursor, the open buffers, the current mode, the status line. Every
-//!    keypress goes through `App::on_key`.
+//!    keypress goes through `App::handle_key`.
 //! 3. **Drawing** — [`ui`]. Reads `App` and paints a frame. It is deliberately
 //!    the only module that knows about ratatui widgets.
 //! 4. **Support** — three folders of self-contained machinery that `app` and
 //!    `ui` call into: [`text`] (the buffer, markdown, highlighting, search),
 //!    [`files`] (the tree, project resolution, media), and [`map`] (the link
-//!    graph and the view of it). [`config`] holds the settings and the key
-//!    bindings, and is read once before any of them. Beside them,
+//!    graph and the view of it), with [`parallel`] spreading the two
+//!    whole-project jobs over every core. [`config`] holds the settings and
+//!    the key bindings, and is read once before any of them. Beside them,
 //!    [`plugins`] runs the Lua ones, [`update`] knows about new releases,
 //!    and [`terminal`] opens another tiny in a window of its own.
 //!
@@ -48,7 +49,8 @@
 //!
 //! Everything is still synchronous: a slow search or a big graph build freezes
 //! the UI while it runs, so anything expensive needs its own budget (see the
-//! size caps in `text::search`, `map::graph`, and `text::highlight`).
+//! size caps in `text::search`, `map::graph`, and `text::highlight`) — and the
+//! two that touch every file in the project use every core to do it.
 
 mod app;
 mod config;
@@ -56,6 +58,7 @@ mod files;
 mod git;
 mod licenses;
 mod map;
+mod parallel;
 mod plugins;
 mod terminal;
 mod text;
@@ -295,27 +298,40 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                 }
                 continue;
             }
-            match event::read()? {
-                // Windows terminals report releases too; only presses, and the
-                // repeats from holding a key down, should reach the app.
-                Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
-                    app.on_key(k)
-                }
-                // One notch, one line. Everything else the mouse reports —
-                // moves, clicks, drags — is deliberately ignored: tiny is a
-                // keyboard program, and the wheel is only here because
-                // three-line jumps make a page hard to read.
-                Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollDown => app.on_scroll(true, m.column),
-                    MouseEventKind::ScrollUp => app.on_scroll(false, m.column),
-                    _ => {}
-                },
-                // A resize, a paste, a key release: nothing to handle, but the
-                // screen is redrawn for it exactly as it always was.
-                _ => {}
-            }
+            dispatch(app, event::read()?);
             break;
         }
+        // Whatever else arrived while that was being handled — fast typing, a
+        // paste — is taken now, before the one frame it will all appear in.
+        // Each key is cheap on its own; what is not, a search of the whole
+        // project, waits for `settle` and happens once for the lot.
+        while !app.should_quit && event::poll(Duration::ZERO)? {
+            dispatch(app, event::read()?);
+        }
+        app.settle();
+    }
+}
+
+/// Hand one terminal event to the app.
+fn dispatch(app: &mut App, event: Event) {
+    match event {
+        // Windows terminals report releases too; only presses, and the
+        // repeats from holding a key down, should reach the app.
+        Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+            app.handle_key(k)
+        }
+        // One notch, one line. Everything else the mouse reports — moves,
+        // clicks, drags — is deliberately ignored: tiny is a keyboard program,
+        // and the wheel is only here because three-line jumps make a page hard
+        // to read.
+        Event::Mouse(m) => match m.kind {
+            MouseEventKind::ScrollDown => app.on_scroll(true, m.column),
+            MouseEventKind::ScrollUp => app.on_scroll(false, m.column),
+            _ => {}
+        },
+        // A resize, a paste, a key release: nothing to handle, but the screen
+        // is redrawn for it exactly as it always was.
+        _ => {}
     }
 }
 

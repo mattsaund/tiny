@@ -222,7 +222,7 @@ impl App {
     }
 
     /// `.`: show or hide dotfiles. Writes through to the config so the setting
-    /// is consistent with `:set show_hidden`, but does not persist it — that
+    /// is consistent with `*set show_hidden`, but does not persist it — that
     /// still needs an explicit save.
     pub(super) fn toggle_hidden(&mut self) {
         let next = !self.tree.show_hidden();

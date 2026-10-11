@@ -258,9 +258,9 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
                 .find(|l| l.kind != LineKind::Filler)
                 .map(|l| l.text.as_str())
                 .unwrap_or("");
-            app.highlighter.syntax_for_path(path, first).clone()
+            app.highlighter.syntax_for_path(path, first)
         })
-        .unwrap_or_else(|| app.highlighter.syntax_for_token("").clone());
+        .unwrap_or_else(|| app.highlighter.syntax_for_token(""));
 
     for (i, half) in halves.iter().enumerate() {
         let side = if i == 0 { "before" } else { "after" };
@@ -305,7 +305,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
         let plain: Vec<String> = lines.iter().map(|l| l.text.clone()).collect();
         let colored = app.highlighter.highlight_window(
             &plain,
-            &syntax,
+            syntax,
             git.diff_scroll,
             inner.height as usize,
         );

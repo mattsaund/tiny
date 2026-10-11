@@ -124,10 +124,10 @@ impl App {
         }
     }
 
-    /// `:set key value`, or `:set key` to report the current value.
+    /// `*set key value`, or `*set key` to report the current value.
     ///
     /// Remaining arguments are rejoined with spaces, so a style spec like
-    /// `:set theme.heading cyan bold` arrives intact.
+    /// `*set theme.heading cyan bold` arrives intact.
     fn cmd_set(&mut self, args: &[String]) -> Result<String> {
         let key = args
             .first()
@@ -157,7 +157,7 @@ impl App {
         Ok(format!("{key} = {value}"))
     }
 
-    /// `:replace find replace`. Counts first and asks before writing anything —
+    /// `*replace find replace`. Counts first and asks before writing anything —
     /// this rewrites files on disk and cannot be undone.
     fn cmd_replace(&mut self, args: &[String]) -> Result<String> {
         if args.len() < 2 {
@@ -193,7 +193,7 @@ impl App {
         self.create_entry(&base, name, is_dir)
     }
 
-    /// `:copy <src> to <dst>` — `:cp` is the same command.
+    /// `*copy <src> to <dst>` — `*cp` is the same command.
     ///
     /// The word `to` is the separator, and everything on each side of it is one
     /// path, so a name with spaces in it needs no quoting: `copy my notes to
@@ -284,16 +284,16 @@ impl App {
         Ok(format!("line {}", line + 1))
     }
 
-    /// `:delete`, or `:delete <path>`; `:rm` is the same command.
+    /// `*delete`, or `*delete <path>`; `*rm` is the same command.
     ///
     /// With no argument it takes whatever the tree cursor is on, which is what
-    /// `d` does. Opening a file moves that cursor onto it, so a bare `:delete`
+    /// `d` does. Opening a file moves that cursor onto it, so a bare `*delete`
     /// from inside the editor removes the file being edited — which is most of
     /// why this exists as a command as well as a key, since `d` in the editor
     /// is just the letter d.
     ///
     /// An argument is a path relative to the *project root*, not to the cursor,
-    /// so `:delete notes/old.md` means the same thing wherever it is typed.
+    /// so `*delete notes/old.md` means the same thing wherever it is typed.
     /// [`safe_join`] keeps it inside the project.
     ///
     /// Like `d`, this only asks the question. Nothing is removed until `y`.

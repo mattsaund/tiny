@@ -28,13 +28,15 @@
 //!    uses, so the two always agree on what the project contains.
 //! 2. **Collect.** Each file becomes a [`Node`] plus a private `Facts` record:
 //!    what it defines, what it calls, and what it links to. Notes are
-//!    scanned for links; source is parsed for symbols.
+//!    scanned for links; source is parsed for symbols. Files are independent
+//!    of each other here, so this runs on every core — see `parallel`.
 //! 3. **Index.** Two lookup tables are built — `by_rel` (path to node) and
 //!    `by_stem` (bare filename to nodes) — plus `definers`, mapping each
 //!    symbol to the files that define it.
 //! 4. **Resolve.** Every recorded link and call is turned into an
-//!    [`Edge`] where a target can be found. Identical edges are merged and
-//!    counted, which is why the map is keyed by `(from, to, kind, label)`.
+//!    [`Edge`] where a target can be found — per file, on every core again.
+//!    Identical edges are merged and counted, which is why the map is keyed
+//!    by `(from, to, kind, label)`.
 //!
 //! # Exact edges and guessed ones
 //!
@@ -70,12 +72,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use super::scan::{
-    Facts, Lang, collect_links, collect_path_calls, collect_symbols, is_test_file, lang_of,
-    node_kind, read_text, resolve_link, strip_tests,
-};
+use super::scan::{Facts, facts_of, node_kind, resolve_link};
 use tree_sitter_tags::TagsContext;
 
+use crate::parallel::par_map;
 use crate::text::search;
 
 /// What a file is, which decides how it is scanned and how it is labeled.
@@ -142,8 +142,6 @@ pub struct Graph {
     pub edges: Vec<Edge>,
 }
 
-/// Build settings, derived from the live config by `App::graph_options` so a
-/// `:set` is reflected the next time the graph is opened.
 /// How many files may define a name before a call to it links to nothing.
 ///
 /// Three. It was a setting, and a setting is a question — this one asked the
@@ -152,6 +150,8 @@ pub struct Graph {
 /// places is not evidence about any of them.
 pub const MAX_AMBIGUITY: usize = 3;
 
+/// Build settings, derived from the live config by `App::graph_options` so a
+/// `*set` is reflected the next time the map is opened.
 #[derive(Debug, Clone)]
 pub struct Options {
     /// Directory names never walked into. Shared with search.
@@ -183,14 +183,15 @@ impl Default for Options {
 /// Build the whole graph for a project. See the module docs for the four
 /// phases; the code below follows them in order.
 ///
-/// Cost is one read and one parse per file, so this is the single most
-/// expensive thing tiny does. It runs synchronously when you press `w`, which
-/// is why `scan::MAX_PARSE_BYTES` and the `ignore` list exist.
+/// Cost is one read and one parse per file that has anything to find in it,
+/// so this is the single most expensive thing tiny does. It runs
+/// synchronously when the map is opened, which is why it is spread over
+/// every core, and why `scan::MAX_PARSE_BYTES` and the `ignore` list exist.
 ///
 /// Edges accumulate into a `BTreeMap` keyed by `(from, to, kind, label)` so
 /// repeats merge into a count rather than stacking up as duplicate lines —
 /// and so the output order is deterministic, which keeps the layout stable
-/// between runs.
+/// between runs however the work was shared out.
 pub fn build(root: &Path, opts: &Options) -> Graph {
     let walk_opts = search::Opts {
         max_results: usize::MAX,
@@ -199,14 +200,19 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
     };
     let files = search::walk(root, &walk_opts);
 
-    let mut nodes: Vec<Node> = Vec::new();
-    let mut facts: Vec<Facts> = Vec::new();
-    let mut by_rel: HashMap<String, usize> = HashMap::new();
+    let kinds: Vec<NodeKind> = files
+        .iter()
+        .map(|path| node_kind(path, &opts.prose_extensions))
+        .collect();
+    let facts: Vec<Facts> = par_map(&files, TagsContext::new, |ctx, i, path| {
+        facts_of(ctx, path, kinds[i])
+    });
+
+    let mut nodes: Vec<Node> = Vec::with_capacity(files.len());
+    let mut by_rel: HashMap<String, usize> = HashMap::with_capacity(files.len());
     // Several files can share a stem (`mod.rs`, `index.js`), so this is a list.
     let mut by_stem: HashMap<String, Vec<usize>> = HashMap::new();
-
-    let mut ctx = TagsContext::new();
-    for path in files {
+    for ((path, kind), f) in files.into_iter().zip(kinds).zip(&facts) {
         let rel = path
             .strip_prefix(root)
             .unwrap_or(&path)
@@ -216,27 +222,6 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| rel.clone());
-        let kind = node_kind(&path, &opts.prose_extensions);
-
-        let mut f = Facts::default();
-        if let Some(text) = read_text(&path) {
-            match kind {
-                NodeKind::Note | NodeKind::Prose => collect_links(&text, kind, &mut f),
-                NodeKind::Code => {
-                    if let Some(lang) = lang_of(&path)
-                        && !is_test_file(&path)
-                    {
-                        let body = strip_tests(lang, &text);
-                        collect_symbols(&mut ctx, lang, body, &mut f);
-                        if lang == Lang::Rust {
-                            collect_path_calls(body, &mut f);
-                        }
-                    }
-                }
-                NodeKind::Other => {}
-            }
-        }
-
         let id = nodes.len();
         by_rel.insert(rel.clone(), id);
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -252,7 +237,6 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
             defines: f.defines.iter().cloned().collect(),
             path,
         });
-        facts.push(f);
     }
 
     // Which files define each symbol.
@@ -263,35 +247,46 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
         }
     }
 
-    let mut edges: BTreeMap<(usize, usize, EdgeKind, String), usize> = BTreeMap::new();
-    for (from, f) in facts.iter().enumerate() {
-        let from_dir = nodes[from].path.parent().map(Path::to_path_buf);
+    // Each file's edges on their own, then all of them merged.
+    let found = par_map(
+        &facts,
+        || (),
+        |_, from, f| {
+            let mut out: Vec<(EdgeKind, usize, String, usize)> = Vec::new();
+            let from_dir = nodes[from].path.parent();
 
-        for (target, kind) in &f.links {
-            if let Some(to) = resolve_link(target, root, from_dir.as_deref(), &by_rel, &by_stem)
-                && to != from
-            {
-                *edges.entry((from, to, *kind, target.clone())).or_insert(0) += 1;
-            }
-        }
-
-        for (sym, count) in &f.calls {
-            let Some(defs) = definers.get(sym.as_str()) else {
-                continue;
-            };
-            // Too many definitions means the name says nothing about which
-            // file was meant, so it produces no edge at all.
-            if defs.len() > opts.max_ambiguity {
-                continue;
-            }
-            for &to in defs {
-                if to == from {
-                    continue; // calling your own function is not a link
+            for (target, kind) in &f.links {
+                if let Some(to) = resolve_link(target, root, from_dir, &by_rel, &by_stem)
+                    && to != from
+                {
+                    out.push((*kind, to, target.clone(), 1));
                 }
-                *edges
-                    .entry((from, to, EdgeKind::Call, sym.clone()))
-                    .or_insert(0) += count;
             }
+
+            for (sym, count) in &f.calls {
+                let Some(defs) = definers.get(sym.as_str()) else {
+                    continue;
+                };
+                // Too many definitions means the name says nothing about which
+                // file was meant, so it produces no edge at all.
+                if defs.len() > opts.max_ambiguity {
+                    continue;
+                }
+                for &to in defs {
+                    if to == from {
+                        continue; // calling your own function is not a link
+                    }
+                    out.push((EdgeKind::Call, to, sym.clone(), *count));
+                }
+            }
+            out
+        },
+    );
+
+    let mut edges: BTreeMap<(usize, usize, EdgeKind, String), usize> = BTreeMap::new();
+    for (from, out) in found.into_iter().enumerate() {
+        for (kind, to, label, count) in out {
+            *edges.entry((from, to, kind, label)).or_insert(0) += count;
         }
     }
 

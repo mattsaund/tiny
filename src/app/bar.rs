@@ -229,8 +229,8 @@ impl App {
     /// Two structural things to know when editing this:
     ///
     /// - Branches that end with `return` leave `self.mode` as the `Normal` that
-    ///   `on_key` swapped in — that is how Esc and Enter close the bar. Every
-    ///   other branch has to put the bar back.
+    ///   `handle_key` swapped in — that is how Esc and Enter close the bar.
+    ///   Every other branch has to put the bar back.
     /// - Ctrl chords are handled up front and never fall through, so a chord
     ///   cannot leak its letter into the query.
     ///
@@ -247,6 +247,11 @@ impl App {
                 self.mode = Mode::Bar(b);
             }
             return;
+        }
+        // Moving through the results, or taking one, needs them to be the
+        // results for what is typed.
+        if b.stale && matches!(key.code, KeyCode::Enter | KeyCode::Up | KeyCode::Down) {
+            self.refresh_search(&mut b);
         }
         match key.code {
             KeyCode::Esc => {
@@ -354,10 +359,31 @@ impl App {
         } else if self.window == Window::Map {
             self.filter_map(&b.input);
         } else {
-            self.run_search(&mut b);
-            self.preview_hit(&b);
+            b.stale = true;
         }
         self.mode = Mode::Bar(b);
+    }
+
+    /// Search for what the bar says now, if it has changed since the last
+    /// search. The event loop calls this before every frame, and `on_key`
+    /// after every key a test sends, so nothing ever draws or reads stale
+    /// results.
+    pub fn settle(&mut self) {
+        if !matches!(&self.mode, Mode::Bar(b) if b.stale) {
+            return;
+        }
+        // Taken out while it runs, the same as while a key is handled.
+        if let Mode::Bar(mut b) = std::mem::replace(&mut self.mode, Mode::Normal) {
+            self.refresh_search(&mut b);
+            self.mode = Mode::Bar(b);
+        }
+    }
+
+    /// The search and its first hit in the preview, for the query as typed.
+    fn refresh_search(&mut self, b: &mut Bar) {
+        b.stale = false;
+        self.run_search(b);
+        self.preview_hit(b);
     }
 
     /// Whether what is being typed is narrowing the map rather than searching
@@ -379,8 +405,9 @@ impl App {
         }
     }
 
-    /// Re-run the query from scratch and reset the result cursor. Called on
-    /// every keystroke — see `search`'s module docs for why that is fine.
+    /// Re-run the query from scratch and reset the result cursor. Called once
+    /// the query has stopped changing for the moment — see [`App::settle`],
+    /// and `search`'s module docs for why from scratch is fine.
     ///
     /// A search started from inside a file lists that file's hits first. When
     /// you search while writing, the word you are looking for is usually one

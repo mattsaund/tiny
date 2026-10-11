@@ -108,7 +108,7 @@ impl App {
 
     /// `Ctrl+V`: drop the clipboard into the folder the cursor is in.
     ///
-    /// Where `:copy` refuses to write over something — you named that
+    /// Where `*copy` refuses to write over something — you named that
     /// destination, so a collision means you were wrong about it — a paste
     /// picks the next free name instead. The destination here is implied
     /// rather than stated, and pasting into the folder you copied from is the
@@ -427,7 +427,7 @@ impl App {
                     self.selected = self.selected.min(self.rows.len().saturating_sub(1));
                 }
                 self.sync_preview();
-                // `:delete` can be run from the editor. If the pane holding the
+                // `*delete` can be run from the editor. If the pane holding the
                 // keyboard just lost its file, the tree is the only place left
                 // with something to point at.
                 if self.focus == Focus::Editor && !matches!(self.preview, Preview::Buffer { .. }) {

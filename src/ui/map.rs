@@ -23,7 +23,6 @@ use super::ink::{Glyphs, Ink, InkStyle, route};
 
 use crate::app::App;
 use crate::map::graph::EdgeKind;
-use crate::map::layout;
 use crate::map::view::ProjectMap;
 
 /// The project map: every file as a box, every connection as a line, and a
@@ -97,10 +96,10 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     // What the filter is, while it is on. Typing it happens in the bar, which
     // draws its own line; this is the reminder that the map you are looking at
     // is not all of it.
-    if !view.filter.is_empty() {
+    if !view.filter().is_empty() {
         block = block.title_bottom(Line::from(vec![
             Span::styled(" / ", pal.text.add_modifier(Modifier::REVERSED)),
-            Span::styled(format!("{} ", view.filter), pal.text),
+            Span::styled(format!("{} ", view.filter()), pal.text),
         ]));
     }
     if placement.offscreen > 0 {
@@ -140,14 +139,9 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     // touch?* — and the arrow keys are how you ask it about another. Every
     // file is still drawn, the strip below still names every connection, and
     // the summary still counts them all.
-    for l in view.links() {
-        // Orient every line out of the selected file, so they can share one
+    for them in view.neighbors(selected) {
+        // Every line runs out of the selected file, so they can share one
         // trunk.
-        let them = match (l.a == selected, l.b == selected) {
-            (true, _) => l.b,
-            (_, true) => l.a,
-            _ => continue,
-        };
         let (Some(&us), Some(&them)) = (slot_of.get(&selected), slot_of.get(&them)) else {
             continue;
         };
@@ -174,12 +168,7 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             InkStyle::Far
         };
-        ink.draw_box(
-            p,
-            &layout::label_of(&view.graph.nodes[p.node].name),
-            style,
-            &glyphs,
-        );
+        ink.draw_box(p, view.label(p.node), style, &glyphs);
     }
 
     for g in &placement.folders {

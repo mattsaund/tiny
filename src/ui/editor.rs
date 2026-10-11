@@ -108,7 +108,8 @@ pub(super) fn draw_editor(
         .filter_map(Row::raw_line)
         .collect();
     let first_line = ed.lines().first().map(String::as_str).unwrap_or("");
-    let syntax = app.highlighter.syntax_for_path(path, first_line).clone();
+    // Borrowed, not cloned — see `highlight::Highlighter::syntax_for_path`.
+    let syntax = app.highlighter.syntax_for_path(path, first_line);
     let highlighted = match (raw.first(), raw.last()) {
         (Some(&a), Some(&b)) => {
             // Resume from the last saved state above the window rather than
@@ -119,7 +120,7 @@ pub(super) fn draw_editor(
             app.highlighter.highlight_cached(
                 &mut app.highlight_cache,
                 ed.lines(),
-                &syntax,
+                syntax,
                 a,
                 b + 1 - a,
             )
@@ -285,7 +286,7 @@ fn live_rows(
     (rows, top)
 }
 
-/// Apply the horizontal scroll to one highlighted line and clip it to width./// Apply the horizontal scroll to one highlighted line and clip it to width.
+/// Apply the horizontal scroll to one highlighted line and clip it to width.
 ///
 /// Walks the styled pieces twice over: first discarding `scroll_x` characters
 /// from the left, then accumulating until the display width runs out. Both

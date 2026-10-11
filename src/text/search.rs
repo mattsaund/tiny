@@ -1,8 +1,10 @@
-//! Project-wide search, and the find-replace behind `:replace`.
+//! Project-wide search, and the find-replace behind `*replace`.
 //!
 //! Deliberately plain: a literal substring scan over the text files in the
 //! project, no index and no regex. For a folder of notes and source that is
-//! fast enough to run on every keystroke, and it never goes stale.
+//! fast enough to run on every keystroke, and it never goes stale. The files
+//! are read on every core at once, in batches taken in order, so a big
+//! project costs its disk rather than one core's patience — see [`search`].
 //!
 //! Matching is smart-cased — an all-lowercase query ignores case, a query
 //! with any capital in it does not. Replace is always case-sensitive, because
@@ -45,6 +47,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use crate::parallel::{self, par_map};
+
 /// Whether a hit came from a file's name or from a line inside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HitKind {
@@ -77,7 +81,7 @@ pub struct Hit {
 pub const MAX_RESULTS: usize = 500;
 
 /// Traversal limits, built from the live config by `App::search_opts` so
-/// `:set search_ignore ...` takes effect on the next keystroke.
+/// `*set search_ignore ...` takes effect on the next keystroke.
 #[derive(Debug, Clone)]
 pub struct Opts {
     /// Stop collecting past this many hits. The search box runs on every
@@ -140,38 +144,50 @@ pub fn search(root: &Path, query: &str, opts: &Opts) -> Vec<Hit> {
     let mut names = Vec::new();
     let mut contents = Vec::new();
 
-    for path in files {
-        if names.len() + contents.len() >= opts.max_results {
-            break;
-        }
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if let Some(col) = matcher.first(&name) {
-            names.push(Hit {
-                path: path.clone(),
-                kind: HitKind::Name,
-                line: 0,
-                col,
-                text: name,
-            });
-        }
-
-        let Ok(text) = read_text(&path) else { continue };
-        for (lineno, line) in text.lines().enumerate() {
-            let Some(col) = matcher.first(line) else {
-                continue;
-            };
-            contents.push(Hit {
-                path: path.clone(),
-                kind: HitKind::Content,
-                line: lineno,
-                col,
-                text: truncate(line, MAX_LINE_DISPLAY),
-            });
+    // Read a batch on every core, then go through it in order exactly as a
+    // plain loop would — so the results are the same, and the cap still stops
+    // the reading one batch after it is reached rather than at the end of the
+    // project. A file only comes back when the query is somewhere in it, so
+    // splitting into lines happens only where there is something to find.
+    let batch = parallel::threads() * 32;
+    'files: for chunk in files.chunks(batch) {
+        let texts = par_map(
+            chunk,
+            || (),
+            |_, _, path| read_text(path).ok().filter(|text| matcher.is_in(text)),
+        );
+        for (path, text) in chunk.iter().zip(texts) {
             if names.len() + contents.len() >= opts.max_results {
-                break;
+                break 'files;
+            }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if let Some(col) = matcher.first(&name) {
+                names.push(Hit {
+                    path: path.clone(),
+                    kind: HitKind::Name,
+                    line: 0,
+                    col,
+                    text: name,
+                });
+            }
+            let Some(text) = text else { continue };
+            for (lineno, line) in text.lines().enumerate() {
+                let Some(col) = matcher.first(line) else {
+                    continue;
+                };
+                contents.push(Hit {
+                    path: path.clone(),
+                    kind: HitKind::Content,
+                    line: lineno,
+                    col,
+                    text: truncate(line, MAX_LINE_DISPLAY),
+                });
+                if names.len() + contents.len() >= opts.max_results {
+                    break;
+                }
             }
         }
     }
@@ -180,7 +196,7 @@ pub fn search(root: &Path, query: &str, opts: &Opts) -> Vec<Hit> {
     names
 }
 
-/// How many occurrences a `:replace` would rewrite, without touching anything.
+/// How many occurrences a `*replace` would rewrite, without touching anything.
 ///
 /// Runs before the confirmation prompt so the user is told the real scale of
 /// what they are about to do. Deliberately a separate pass rather than a
@@ -191,14 +207,16 @@ pub fn count(root: &Path, needle: &str, opts: &Opts) -> Report {
     if needle.is_empty() {
         return Report::default();
     }
+    let files = walk(root, opts);
+    let counts = par_map(
+        &files,
+        || (),
+        |_, _, path| read_text(path).map_or(0, |text| text.matches(needle).count()),
+    );
     let mut report = Report::default();
-    for path in walk(root, opts) {
-        let Ok(text) = read_text(&path) else { continue };
-        let n = text.matches(needle).count();
-        if n > 0 {
-            report.files += 1;
-            report.occurrences += n;
-        }
+    for n in counts.into_iter().filter(|n| *n > 0) {
+        report.files += 1;
+        report.occurrences += n;
     }
     report
 }
@@ -244,10 +262,6 @@ pub fn replace_all(root: &Path, needle: &str, replacement: &str, opts: &Opts) ->
     Ok(report)
 }
 
-/// Character index of the first match, honoring case folding.
-///
-/// Returns a *character* index, not a byte offset, because it ends up as an
-/// `Editor` cursor column — see the note on character indexing in `editor`.
 /// A prepared literal query.
 ///
 /// Built once per search and reused for every line. That is the whole reason
@@ -263,6 +277,10 @@ pub struct Matcher {
     /// The query as it was written, for the case-sensitive path, where
     /// `str::find` beats anything character-by-character and allocates nothing.
     needle: String,
+    /// The query as bytes, when it is ASCII — nearly always. Folding case is
+    /// then a byte comparison rather than a Unicode lowercasing per
+    /// character, which was most of what a lowercase search cost.
+    ascii: Option<Vec<u8>>,
     fold: bool,
 }
 
@@ -277,20 +295,53 @@ impl Matcher {
         Some(Self {
             pat: query.chars().collect(),
             needle: query.to_string(),
+            ascii: query.is_ascii().then(|| query.as_bytes().to_vec()),
             fold: folds_case(query),
         })
     }
 
     /// Character index of the first match, if there is one.
+    ///
+    /// A *character* index, not a byte offset, because it ends up as an
+    /// `Editor` cursor column — see the note on character indexing in
+    /// `editor`.
     pub fn first(&self, haystack: &str) -> Option<usize> {
-        if !self.fold {
-            let byte = haystack.find(&self.needle)?;
-            // A character index, so it can drive a cursor directly.
-            return Some(haystack[..byte].chars().count());
+        let byte = match self.folded_ascii(haystack) {
+            _ if !self.fold => haystack.find(&self.needle)?,
+            Some(pat) => find_folded(haystack.as_bytes(), pat)?,
+            None => {
+                return haystack
+                    .char_indices()
+                    .position(|(byte, _)| self.at(haystack, byte));
+            }
+        };
+        Some(haystack[..byte].chars().count())
+    }
+
+    /// Whether the query is anywhere in `haystack`: [`Matcher::first`]
+    /// without the counting of characters up to it. How a whole file is
+    /// checked before it is split into lines.
+    pub fn is_in(&self, haystack: &str) -> bool {
+        match self.folded_ascii(haystack) {
+            _ if !self.fold => haystack.contains(&self.needle),
+            Some(pat) => find_folded(haystack.as_bytes(), pat).is_some(),
+            None => haystack
+                .char_indices()
+                .any(|(byte, _)| self.at(haystack, byte)),
         }
-        haystack
-            .char_indices()
-            .position(|(byte, _)| self.at(haystack, byte))
+    }
+
+    /// The query's bytes, when folding case can be done on bytes.
+    ///
+    /// That takes an ASCII query, and nothing else: an ASCII byte never
+    /// appears inside a longer UTF-8 character, so a byte-wise match is a
+    /// character-wise one, whatever else the text has in it. The one thing
+    /// outside ASCII that lowercases *into* it is the Kelvin sign, `K` → `k`,
+    /// and text with one in it takes the long way round so it still matches.
+    fn folded_ascii(&self, haystack: &str) -> Option<&[u8]> {
+        self.ascii
+            .as_deref()
+            .filter(|_| !haystack.contains('\u{212A}'))
     }
 
     /// Every non-overlapping match, as character ranges.
@@ -326,6 +377,17 @@ impl Matcher {
             None => false,
         })
     }
+}
+
+/// Byte offset of the first place `pat` sits in `hay`, ignoring ASCII case.
+/// `pat` is lowercase already: a query that folds has no capitals in it.
+fn find_folded(hay: &[u8], pat: &[u8]) -> Option<usize> {
+    let (&first, rest) = pat.split_first()?;
+    let upper = first.to_ascii_uppercase();
+    let last = hay.len().checked_sub(pat.len())?;
+    (0..=last).find(|&i| {
+        (hay[i] == first || hay[i] == upper) && hay[i + 1..i + pat.len()].eq_ignore_ascii_case(rest)
+    })
 }
 
 /// Whether a query is matched case-insensitively.

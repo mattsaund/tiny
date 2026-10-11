@@ -63,7 +63,7 @@ pub(super) fn char_byte(s: &str, ci: usize) -> usize {
 }
 
 /// Split a command line on whitespace, keeping double-quoted runs together so
-/// `:replace "old thing" "new thing"` works.
+/// `*replace "old thing" "new thing"` works.
 ///
 /// The `any` flag tracks whether the current argument was *started*, which is
 /// what lets `""` produce a deliberate empty argument rather than being

@@ -1,17 +1,17 @@
 //! Every keypress, and where it goes.
 //!
-//! [`App::on_key`] is the whole of tiny's input handling, and it dispatches on
-//! [`Mode`] first and [`Focus`] second — see the folder's docs for why those
-//! two answer almost every "why did that key do that".
+//! [`App::handle_key`] is the whole of tiny's input handling, and it
+//! dispatches on [`Mode`] first and [`Focus`] second — see the folder's docs
+//! for why those two answer almost every "why did that key do that".
 //!
 //! # The mode take-and-replace pattern
 //!
-//! `on_key` does `std::mem::replace(&mut self.mode, Mode::Normal)` and hands
-//! the owned mode to a handler. That is not only a borrow-checker workaround:
-//! it makes **closing the default and staying open explicit**. A handler that
-//! does nothing leaves `Normal` behind, so every handler that wants its
-//! overlay to persist has to put it back. Forget it and the overlay closes,
-//! which is the right direction for that mistake to fail in.
+//! `handle_key` does `std::mem::replace(&mut self.mode, Mode::Normal)` and
+//! hands the owned mode to a handler. That is not only a borrow-checker
+//! workaround: it makes **closing the default and staying open explicit**. A
+//! handler that does nothing leaves `Normal` behind, so every handler that
+//! wants its overlay to persist has to put it back. Forget it and the overlay
+//! closes, which is the right direction for that mistake to fail in.
 //!
 //! # The wheel
 //!
@@ -110,13 +110,29 @@ pub(super) fn edit_with_key(
 impl App {
     // ---- key dispatch -----------------------------------------------------
 
+    /// One key, and everything it leads to, done before this returns — how
+    /// the tests type.
+    ///
+    /// The event loop does not use this: with several keys already waiting it
+    /// hands each to [`App::handle_key`] and calls [`App::settle`] once, so a
+    /// burst of typing into the bar is searched for once rather than once a
+    /// letter.
+    #[cfg(test)]
+    pub fn on_key(&mut self, key: KeyEvent) {
+        self.handle_key(key);
+        self.settle();
+    }
+
     /// The single entry point for input. Dispatches in strict priority order:
     /// map, then mode, then focus.
     ///
     /// See the module docs for the take-and-replace pattern: the mode is moved
     /// out and `Normal` left in its place, so a handler that does nothing
     /// closes its overlay, and one that wants to stay open has to say so.
-    pub fn on_key(&mut self, key: KeyEvent) {
+    ///
+    /// Work that only matters to what is drawn next — a search of the
+    /// project — is left for [`App::settle`].
+    pub fn handle_key(&mut self, key: KeyEvent) {
         // One spelling per key, before anything reads it: macOS Terminal's
         // `⌥←` arrives as `Alt+B`, and becomes the arrow it was.
         let key = from_terminal(key);
@@ -298,7 +314,7 @@ impl App {
     /// editor disagreed about would not be global. Returns whether the action
     /// was one of them; [`Action::Save`] is deliberately not, since what it
     /// saves depends on where you are. The two window keys are not either:
-    /// [`App::on_key`] answers them before any pane is asked.
+    /// [`App::handle_key`] answers them before any pane is asked.
     fn on_global_action(&mut self, action: Action) -> bool {
         match action {
             Action::Quit => self.request_quit(),

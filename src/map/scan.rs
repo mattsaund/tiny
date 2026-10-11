@@ -8,11 +8,12 @@
 //!
 //! # The budget
 //!
-//! Building the graph reads every file in the project, synchronously, while
-//! the user waits — see the event loop's docs in `main`. So every read here
-//! is capped at [`MAX_PARSE_BYTES`], and a file over the line is skipped
-//! rather than truncated: half a parse produces confidently wrong symbols,
-//! where no parse produces none.
+//! Building the graph reads every file it can find something in, while the
+//! user waits — see the event loop's docs in `main`. So every read here is
+//! capped at [`MAX_PARSE_BYTES`], and a file over the line is skipped rather
+//! than truncated: half a parse produces confidently wrong symbols, where no
+//! parse produces none. A file with nothing to find — a picture, a binary, a
+//! language with no grammar here — is never opened at all; see [`facts_of`].
 //!
 //! # Test code is not the project
 //!
@@ -22,6 +23,7 @@
 //! that are not there.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -63,8 +65,7 @@ static JAVASCRIPT: LazyLock<Option<TagsConfiguration>> = LazyLock::new(|| {
 });
 
 /// Languages with a tree-sitter grammar compiled in. Adding one means adding
-/// a variant here and wiring it through [`lang_of`], [`tags_for`] and
-/// [`tags_for`].
+/// a variant here and wiring it through [`lang_of`] and [`tags_for`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Lang {
     Python,
@@ -160,17 +161,55 @@ pub(super) fn is_sourcelike(ext: &str) -> bool {
     )
 }
 
+/// What one file contributes, read only when there is something to find in
+/// it: links in prose, definitions and calls in a language with a grammar.
+/// Everything else is a node and nothing more, so it is never opened —
+/// reading every picture in a folder to throw it away was most of what a
+/// media-heavy project cost the map.
+pub(super) fn facts_of(ctx: &mut TagsContext, path: &Path, kind: NodeKind) -> Facts {
+    let mut f = Facts::default();
+    match kind {
+        NodeKind::Note | NodeKind::Prose => {
+            if let Some(text) = read_text(path) {
+                collect_links(&text, kind, &mut f);
+            }
+        }
+        NodeKind::Code => {
+            if let Some(lang) = lang_of(path)
+                && !is_test_file(path)
+                && let Some(text) = read_text(path)
+            {
+                let body = strip_tests(lang, &text);
+                collect_symbols(ctx, lang, body, &mut f);
+                if lang == Lang::Rust {
+                    collect_path_calls(body, &mut f);
+                }
+            }
+        }
+        NodeKind::Other => {}
+    }
+    f
+}
+
 /// Read a file if it is small enough and looks like text. Deliberately a
 /// local copy of `search::read_text` rather than a shared helper: the two have
 /// different size limits, and the graph swallows errors as `None` where search
 /// wants a `Result`.
+///
+/// One open, and the size taken from it rather than from a second lookup by
+/// path. The read stops one byte past the limit, so a file that grew after it
+/// was measured is still refused rather than read whole.
 pub(super) fn read_text(path: &Path) -> Option<String> {
-    let meta = std::fs::metadata(path).ok()?;
-    if meta.len() > MAX_PARSE_BYTES {
+    let file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    if len > MAX_PARSE_BYTES {
         return None;
     }
-    let bytes = std::fs::read(path).ok()?;
-    if bytes.contains(&0) {
+    let mut bytes = Vec::with_capacity(len as usize);
+    file.take(MAX_PARSE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_PARSE_BYTES || bytes.contains(&0) {
         return None;
     }
     String::from_utf8(bytes).ok()

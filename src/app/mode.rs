@@ -53,9 +53,14 @@ pub struct Bar {
     pub input: String,
     /// Character index into `input`.
     pub cursor: usize,
-    /// Re-run from scratch on every keystroke. See the module docs in `search`
-    /// for why that is affordable.
+    /// Re-run from scratch whenever the query changes. See the module docs in
+    /// `search` for why that is affordable.
     pub results: Vec<Hit>,
+    /// The query has been typed into since `results` were found. They are
+    /// found again before the next frame, or before a key that reads them —
+    /// not per keystroke, so a burst of typing costs one search, not one a
+    /// letter. See `App::settle`.
+    pub(super) stale: bool,
     /// Highlighted result. Moving it previews that hit without leaving the bar.
     pub selected: usize,
     /// Set when a search found nothing, so the bar can say so.
@@ -78,6 +83,7 @@ impl Bar {
             results: Vec::new(),
             selected: 0,
             searched: false,
+            stale: false,
             home,
         }
     }
@@ -146,7 +152,8 @@ pub struct Confirm {
 }
 
 /// What is layered over the normal two-pane view. Checked before [`Focus`] in
-/// [`App::on_key`](super::App::on_key), so an open overlay owns the keyboard.
+/// [`App::handle_key`](super::App::handle_key), so an open overlay owns the
+/// keyboard.
 #[derive(Debug, Clone)]
 pub enum Mode {
     /// No overlay; keys go to whichever pane has focus.

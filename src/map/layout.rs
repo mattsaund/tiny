@@ -32,6 +32,9 @@
 //! to see — a note you meant to link and did not is exactly what you would
 //! open the map to find.
 
+use std::collections::BTreeMap;
+
+use super::graph::Node;
 use super::view::ProjectMap;
 
 /// Where one file's box goes on the character grid.
@@ -67,14 +70,15 @@ impl Placed {
 /// Which heading a file is filed under.
 ///
 /// The order of the variants is the order the headings appear in, and that is
-/// deliberate rather than incidental: `Root` first because a project's front
-/// door is its top-level files, then folders by path so `src` is always in the
-/// same place, and `Unconnected` last because it is the pile of things the
-/// picture has nothing to say about.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// deliberate rather than incidental: folders by path, so the project's own
+/// files (the root, `""`) come first and `src` is always in the same place,
+/// then `Unconnected` last because it is the pile of things the picture has
+/// nothing to say about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Group {
-    Root,
-    Folder(String),
+    /// An index into `ProjectMap::folders`, which is in path order — so
+    /// ordering by index is ordering by path.
+    Folder(usize),
     /// Files nothing drawn reaches. Kept on screen — a map that omits files is
     /// a map you have to remember the gaps in — but out of the way of the part
     /// that has structure in it.
@@ -107,7 +111,6 @@ pub struct Link {
     pub b: usize,
 }
 
-/// Everything `ui` needs to draw one frame of the map.
 /// Where a line may travel without ever crossing a box.
 ///
 /// The layout is a grid of slots, and a box sits in the top-left corner of its
@@ -138,6 +141,7 @@ impl Channels {
     }
 }
 
+/// Everything `ui` needs to draw one frame of the map.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Placement {
     pub boxes: Vec<Placed>,
@@ -159,6 +163,24 @@ fn folder_of(rel: &str) -> &str {
     }
 }
 
+/// Every file's folder as an index into a list of folders in path order, and
+/// that list. Worked out once when the map is built, so laying out a frame
+/// compares numbers rather than paths.
+pub(super) fn folders_of(nodes: &[Node]) -> (Vec<usize>, Vec<String>) {
+    let mut folders: Vec<&str> = nodes.iter().map(|n| folder_of(&n.rel)).collect();
+    folders.sort_unstable();
+    folders.dedup();
+    let index = nodes
+        .iter()
+        .map(|n| {
+            folders
+                .binary_search(&folder_of(&n.rel))
+                .expect("every file's folder was listed")
+        })
+        .collect();
+    (index, folders.into_iter().map(str::to_string).collect())
+}
+
 /// Longest file name drawn inside a box before it is shortened.
 ///
 /// Every slot on the grid is the same size, so one very long name would
@@ -177,6 +199,16 @@ pub fn label_of(name: &str) -> String {
     }
     let tail: String = name.chars().skip(count - (MAX_LABEL - 1)).collect();
     format!("…{tail}")
+}
+
+/// A box or a heading before the pane is applied. Rows are counted in `u32`
+/// here: the whole layout of a big project is taller than a `u16` reaches,
+/// and only what lands on the pane is narrowed back down.
+struct Unbounded<T> {
+    item: T,
+    row: u32,
+    /// The heading it sits under, for a box; its own index, for a heading.
+    group: usize,
 }
 
 impl ProjectMap {
@@ -212,12 +244,12 @@ impl ProjectMap {
         // having grown a tail.
         let widest = visible
             .iter()
-            .map(|i| label_of(&self.graph.nodes[*i].name).chars().count())
+            .map(|i| self.labels[*i].chars().count())
             .max()
             .unwrap_or(1);
         let slot_w = (widest + 6).max(8) as u16;
         let slot_h = Placed::HEIGHT + 2;
-        let cols = (width / slot_w).max(1);
+        let cols = (width / slot_w).max(1) as usize;
         // Three in from the right of the slot: past `widest + 2`, which is as
         // wide as a box in it can be, and still inside the slot. Measured from
         // the widest name rather than from each box, so the column is clear in
@@ -230,86 +262,84 @@ impl ProjectMap {
 
         // Walk the whole layout first, unbounded by the pane, so scrolling has
         // something to scroll through.
-        let mut boxes: Vec<Placed> = Vec::new();
-        let mut folders: Vec<Folder> = Vec::new();
-        // Which heading each box belongs to, so a heading whose files all fall
-        // off the bottom goes with them instead of standing over nothing.
-        let mut under: Vec<usize> = Vec::new();
-        let groups = self.folder_groups(&visible);
-        let mut row: u16 = 0;
+        let mut boxes: Vec<Unbounded<Placed>> = Vec::with_capacity(visible.len());
+        let mut headings: Vec<Unbounded<(Group, usize)>> = Vec::new();
+        let mut row: u32 = 0;
         let mut slot_row: usize = 0;
 
-        for (group, members) in &groups {
+        for (group, members) in self.folder_groups(&visible) {
             // Always headed, even when there is only one: the top heading names
             // the project folder, which is where the map starts and how far it
             // goes. A picture with no heading would not say either.
-            folders.push(Folder {
-                label: self.group_label(group),
+            headings.push(Unbounded {
+                item: (group, members.len()),
                 row,
-                files: members.len(),
+                group: headings.len(),
             });
             // Two rows, not one. The blank is what makes the row above every
             // box a row no heading occupies, which is where lines arriving
             // from above have to land — see the routing in `ui`.
             row += 2;
             for (n, &i) in members.iter().enumerate() {
-                let (c, r) = ((n % cols as usize) as u16, (n / cols as usize) as u16);
-                let name = label_of(&self.graph.nodes[i].name);
-                boxes.push(Placed {
-                    node: i,
-                    col: c * slot_w,
-                    row: row + r * slot_h,
-                    width: name.chars().count() as u16 + 2,
+                let (c, r) = (n % cols, n / cols);
+                boxes.push(Unbounded {
+                    item: Placed {
+                        node: i,
+                        col: c as u16 * slot_w,
+                        row: 0, // set once the pane is applied
+                        width: self.labels[i].chars().count() as u16 + 2,
+                    },
+                    row: row + r as u32 * u32::from(slot_h),
+                    group: headings.len() - 1,
                 });
-                under.push(folders.len() - 1);
                 // Grid coordinates, not character ones: navigation should step
                 // box to box, and a box is far wider than it is tall.
-                self.pos[i] = (c as f64, -((slot_row + r as usize) as f64));
+                self.pos[i] = (c as f64, -((slot_row + r) as f64));
             }
-            let used = members.len().div_ceil(cols as usize) as u16;
+            let used = members.len().div_ceil(cols);
             // No extra gap: the slot already carries two rows of gutter under
             // its bottom row, which is the space between one folder and the
             // next heading.
-            row += used * slot_h;
-            slot_row += used as usize + 1;
+            row += used as u32 * u32::from(slot_h);
+            slot_row += used + 1;
         }
 
         // Follow the cursor rather than offering a scroll key: the arrow keys
         // already walk the map, so the view goes where the cursor goes.
-        let total = row;
+        let height = u32::from(height);
+        let scroll = self.scroll_to(&boxes, height, row);
         let wanted = boxes.len();
-        let scroll = self.scroll_to(&boxes, height, total);
-        let mut kept = vec![false; folders.len()];
-        let mut n = 0;
-        boxes.retain_mut(|p| {
-            let group = under[n];
-            n += 1;
-            match p.row.checked_sub(scroll) {
-                Some(r) if r + Placed::HEIGHT <= height => {
-                    p.row = r;
-                    kept[group] = true;
-                    true
-                }
-                _ => false,
-            }
-        });
-        let mut group = 0;
-        folders.retain_mut(|g| {
-            let showing = kept[group];
-            group += 1;
-            match g.row.checked_sub(scroll) {
-                Some(r) if r < height && showing => {
-                    g.row = r;
-                    true
-                }
-                _ => false,
-            }
-        });
-        let offscreen = wanted - boxes.len();
+        let mut kept = vec![false; headings.len()];
+        let boxes: Vec<Placed> = boxes
+            .into_iter()
+            .filter_map(|b| {
+                let r = b.row.checked_sub(scroll)?;
+                (r + u32::from(Placed::HEIGHT) <= height).then(|| {
+                    kept[b.group] = true;
+                    Placed {
+                        row: r as u16,
+                        ..b.item
+                    }
+                })
+            })
+            .collect();
+        let folders = headings
+            .into_iter()
+            .filter(|h| kept[h.group])
+            .filter_map(|h| {
+                let r = h.row.checked_sub(scroll).filter(|r| *r < height)?;
+                let (group, files) = h.item;
+                Some(Folder {
+                    label: self.group_label(group),
+                    row: r as u16,
+                    files,
+                })
+            })
+            .collect();
         Placement {
+            offscreen: wanted - boxes.len(),
             boxes,
             folders,
-            offscreen,
             channels,
         }
     }
@@ -327,17 +357,18 @@ impl ProjectMap {
     /// pane never scrolls, so the top of the map does not float away from the
     /// top of the window; and the heading above the cursor stays visible,
     /// because a box with no folder over it is a box you cannot place.
-    fn scroll_to(&self, boxes: &[Placed], height: u16, total: u16) -> u16 {
+    fn scroll_to(&self, boxes: &[Unbounded<Placed>], height: u32, total: u32) -> u32 {
         if total <= height {
             return 0;
         }
-        let Some(p) = boxes.iter().find(|p| p.node == self.selected) else {
+        let Some(b) = boxes.iter().find(|b| b.item.node == self.selected) else {
             return 0;
         };
-        p.middle()
+        // The row the name sits on, as `Placed::middle` has it.
+        (b.row + 1)
             .saturating_sub(height / 2)
             .min(total.saturating_sub(height))
-            .min(p.row.saturating_sub(2))
+            .min(b.row.saturating_sub(2))
     }
 
     /// The visible files, split by heading. Never empty when `visible` is not.
@@ -347,32 +378,24 @@ impl ProjectMap {
     /// the `1`-`3` toggles change what counts as a connection. That is the
     /// honest arrangement: the picture should say which files it is actually
     /// telling you something about.
-    fn folder_groups(&self, visible: &[usize]) -> Vec<(Group, Vec<usize>)> {
-        let mut groups: Vec<(Group, Vec<usize>)> = Vec::new();
+    fn folder_groups(&self, visible: &[usize]) -> BTreeMap<Group, Vec<usize>> {
+        let mut groups: BTreeMap<Group, Vec<usize>> = BTreeMap::new();
         for &i in visible {
-            let key = if !self.connected(i) {
-                Group::Unconnected
+            let key = if self.connected(i) {
+                Group::Folder(self.folder[i])
             } else {
-                match folder_of(&self.graph.nodes[i].rel) {
-                    "" => Group::Root,
-                    dir => Group::Folder(dir.to_string()),
-                }
+                Group::Unconnected
             };
-            match groups.iter_mut().find(|(k, _)| *k == key) {
-                Some((_, members)) => members.push(i),
-                None => groups.push((key, vec![i])),
-            }
+            groups.entry(key).or_default().push(i);
         }
-        // Ordering is the enum's own — see [`Group`].
-        groups.sort_by(|a, b| a.0.cmp(&b.0));
         groups
     }
 
     /// The heading text for a group, which is the only place its name appears.
-    fn group_label(&self, group: &Group) -> String {
+    fn group_label(&self, group: Group) -> String {
         match group {
-            Group::Root => format!("{}/", self.root_label()),
-            Group::Folder(dir) => format!("{dir}/"),
+            Group::Folder(f) if self.folders[f].is_empty() => format!("{}/", self.root_label()),
+            Group::Folder(f) => format!("{}/", self.folders[f]),
             Group::Unconnected => "unconnected".to_string(),
         }
     }
@@ -384,29 +407,6 @@ impl ProjectMap {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| ".".to_string())
     }
-
-    /// Every drawn connection, with all the edges between a pair of files
-    /// merged into one.
-    ///
-    /// Two files that share a dozen function names are one connection, not a
-    /// dozen parallel lines. The lines were the tangle: the graph is keyed per
-    /// symbol so that the detail strip can name them, but the picture only has
-    /// to say *that* they are connected and which way it runs.
-    pub fn links(&self) -> Vec<Link> {
-        let mut out: Vec<Link> = Vec::new();
-        for e in &self.graph.edges {
-            if !self.edge_visible(e) {
-                continue;
-            }
-            let (a, b) = (e.from.min(e.to), e.from.max(e.to));
-            if !out.iter().any(|l| l.a == a && l.b == b) {
-                out.push(Link { a, b });
-            }
-        }
-        out
-    }
-
-    // ---- moving around ----------------------------------------------------
 }
 
 #[cfg(test)]

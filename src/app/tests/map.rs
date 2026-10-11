@@ -315,7 +315,7 @@ fn typing_in_the_bar_narrows_the_map_as_it_goes() {
     type_str(&mut app, "src");
 
     let view = app.project_map.as_ref().unwrap();
-    assert_eq!(view.filter, "src");
+    assert_eq!(view.filter(), "src");
     let shown: Vec<&str> = view
         .visible_indices()
         .iter()
@@ -338,7 +338,7 @@ fn enter_keeps_the_filter_and_escape_takes_it_off() {
 
     assert!(matches!(app.mode, Mode::Normal), "the bar is put away");
     assert_eq!(
-        app.project_map.as_ref().unwrap().filter,
+        app.project_map.as_ref().unwrap().filter(),
         "src",
         "the filter stays"
     );
@@ -348,7 +348,7 @@ fn enter_keeps_the_filter_and_escape_takes_it_off() {
     type_str(&mut app, "notes");
     app.on_key(k(KeyCode::Esc));
     assert!(
-        app.project_map.as_ref().unwrap().filter.is_empty(),
+        app.project_map.as_ref().unwrap().filter().is_empty(),
         "escape clears it"
     );
 }
@@ -364,7 +364,7 @@ fn a_command_still_runs_from_over_the_map() {
     app.on_key(k(KeyCode::Enter));
 
     assert!(
-        app.project_map.as_ref().unwrap().filter.is_empty(),
+        app.project_map.as_ref().unwrap().filter().is_empty(),
         "a command never filtered anything"
     );
     assert!(joined(&mut app).contains("fromthemap.md") || app.window == Window::Main);

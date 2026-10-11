@@ -169,7 +169,7 @@ impl Highlighter {
 
     /// Swap the theme in place, keeping the syntax set.
     ///
-    /// This is what `:set syntax_theme` calls. Rebuilding the `Highlighter`
+    /// This is what `*set syntax_theme` calls. Rebuilding the `Highlighter`
     /// would re-unpack every grammar to change a palette, which is the whole
     /// startup cost paid again for nothing.
     pub fn set_theme(&mut self, name: &str) -> Option<String> {
@@ -215,6 +215,12 @@ impl Highlighter {
     }
 
     /// Pick a syntax from a fenced code block's info string (```python).
+    ///
+    /// Both lookups hand back a reference, and it is worth keeping one: a
+    /// clone of a `SyntaxReference` carries its grammar serialized rather than
+    /// parsed, and deserializes it all over again the first time it is used.
+    /// Cloned per code block per frame, that was most of what drawing a note
+    /// cost.
     pub fn syntax_for_token(&self, token: &str) -> &SyntaxReference {
         let token = token.split_whitespace().next().unwrap_or("").trim();
         if token.is_empty() {
@@ -362,7 +368,7 @@ impl Default for Highlighter {
 /// Look up a named theme, falling back with a warning when it is not one we
 /// ship. Shared by [`Highlighter::with_theme`] and [`Highlighter::set_theme`]
 /// so a typo reports the same way whether it came from the config file or from
-/// `:set`.
+/// `*set`.
 fn load_theme(name: &str) -> (Theme, Option<String>) {
     let themes = ThemeSet::load_defaults();
     match themes.themes.get(name) {

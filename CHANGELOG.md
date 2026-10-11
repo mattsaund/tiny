@@ -3,6 +3,20 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.4.6 — 2026-10-11
+
+- **A much faster project map.** Opening it reads files on every core and
+  skips the ones with nothing to find in them, like pictures. A 20,000-note
+  vault opens in half a second instead of three, and a 25,000-file code
+  folder in about five instead of thirty. Moving around it takes
+  milliseconds, not two seconds a key.
+- **Faster search.** Files are read on every core, a lowercase search is no
+  slower than one with capitals, and fast typing searches once rather than
+  once a letter. Up to 10× quicker on big folders.
+- **Faster notes.** Code blocks in markdown draw quicker.
+- **Fixes:** maps of very large projects lay out correctly; `tiny
+  --licenses` lists the crates only the Windows build uses.
+
 ## 0.4.5 — 2026-10-10
 
 - **Releases.** Ready-made tiny for macOS, Linux and Windows, Intel and ARM.
