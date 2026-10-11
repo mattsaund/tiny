@@ -4,8 +4,8 @@ A text editor, file browser and notebook that lives in the terminal — like
 nano or micro, with search, git, a project map and plugins built in. Plain
 files in plain folders; nothing proprietary.
 
-**Full installation size:** 7.39 MB macOS (Intel) · 7.03 MB macOS (Apple
-silicon) · 8.16 MB Linux (x86_64) · 7.65 MB Linux (arm64) · 7.63 MB Windows
+**Full installation size:** 7.52 MB macOS (Intel) · 7.13 MB macOS (Apple
+silicon) · 8.31 MB Linux (x86_64) · 7.78 MB Linux (arm64) · 7.76 MB Windows
 
 Try it here: https://msaunders.dev/tiny/
 
