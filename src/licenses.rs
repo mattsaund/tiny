@@ -18,15 +18,21 @@
 //! to appear here, and nothing may appear here that is not in the lockfile.
 //! Add a dependency without listing it and the suite says so.
 //!
-//! To rebuild the list after changing dependencies:
+//! To rebuild the list after changing dependencies, take every target a
+//! release is built for (see `release.yml`) — Windows compiles in crates the
+//! others do not:
 //!
 //! ```text
-//! cargo tree -e normal,build --prefix none --no-dedupe | awk 'NF{print $1}' | sort -u
+//! for t in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu \
+//!          aarch64-unknown-linux-gnu x86_64-pc-windows-msvc; do
+//!   cargo tree -e normal,build --prefix none --no-dedupe --target $t
+//! done | awk 'NF{print $1}' | sort -u
 //! ```
 //!
 //! and take each crate's `license` field from `cargo metadata`.
 
-/// Every crate compiled into tiny, with the license expression it declares.
+/// Every crate compiled into tiny, on any platform it is released for, with
+/// the license expression it declares.
 ///
 /// Spelled exactly as each crate spells it — `MIT/Apache-2.0` and
 /// `MIT OR Apache-2.0` are the same permission and different strings, and
@@ -50,6 +56,7 @@ pub const CRATES: &[(&str, &str)] = &[
     ("crc32fast", "MIT OR Apache-2.0"),
     ("critical-section", "MIT OR Apache-2.0"),
     ("crossterm", "MIT"),
+    ("crossterm_winapi", "MIT"),
     ("darling", "MIT"),
     ("darling_core", "MIT"),
     ("darling_macro", "MIT"),
@@ -161,6 +168,10 @@ pub const CRATES: &[(&str, &str)] = &[
     ("unicode-width", "MIT OR Apache-2.0"),
     ("walkdir", "Unlicense/MIT"),
     ("which", "MIT"),
+    ("winapi", "MIT/Apache-2.0"),
+    ("winapi-util", "Unlicense OR MIT"),
+    ("windows-link", "MIT OR Apache-2.0"),
+    ("windows-sys", "MIT OR Apache-2.0"),
     ("winnow", "MIT"),
     ("zmij", "MIT"),
 ];

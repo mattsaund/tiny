@@ -1,8 +1,8 @@
 # tiny
 
-A text editor, file browser and notebook that lives in the terminal — like
-nano or micro, with search, git, a project map and plugins built in. Plain
-files in plain folders; nothing proprietary.
+A text editor, file browser and notebook that lives in the terminal, in about
+7 MB — like nano or micro, with search, git, a project map and plugins built
+in. Plain files in plain folders; nothing proprietary.
 
 Try it here: https://msaunders.dev/tiny/
 
