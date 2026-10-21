@@ -10,6 +10,8 @@
 //! - [`highlight`] — syntax colors, and the parser-state cache that keeps
 //!   them cheap.
 //! - [`search`] — finding a string, in one file or in a whole project.
+//! - [`tabs`] — the one rule for drawing a tab, shared by everything that
+//!   draws text.
 //!
 //! [`search::Matcher`] is the one piece shared sideways: both the search
 //! itself and the marking of hits in the preview go through it, so "what
@@ -19,3 +21,4 @@ pub mod editor;
 pub mod highlight;
 pub mod markdown;
 pub mod search;
+pub mod tabs;

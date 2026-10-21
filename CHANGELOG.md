@@ -3,6 +3,16 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.5.1 - 2026-10-21
+
+- **Every heading level renders.** `###` and deeper used to show their
+  hashes. They fade by depth now, bold to dim, with no markup showing through
+  and no extra rules on the page.
+- **Tabs are drawn.** A tab reached the screen as a cell holding nothing, so
+  a tab indented file lost its shape and a tab between two words joined them.
+  Tabs now expand to their stops everywhere: the editor, the preview, markdown
+  and the git diff. Makefiles and Go keep their indentation.
+
 ## 0.5.0 — 2026-10-11
 
 - **Commands are sentences.** `*copy temp.txt to notes`, `*goto function

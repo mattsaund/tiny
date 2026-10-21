@@ -60,6 +60,8 @@ mod render;
 mod wrap;
 
 use pulldown_cmark::{Options, Parser};
+
+use crate::text::tabs;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
@@ -136,6 +138,11 @@ pub fn render_plain(source: &str, width: usize, pal: &Palette) -> Vec<Line<'stat
     let width = width.max(8);
     let mut out = Vec::new();
     for line in source.lines() {
+        // Before anything measures this line: a tab is zero columns wide to
+        // `unicode-width` and nothing at all on screen, so the indent a text
+        // file was written with would simply vanish.
+        let line = tabs::expand(line, tabs::MARKDOWN, 0);
+        let line = line.as_str();
         if line.trim().is_empty() {
             out.push(Line::from(""));
             continue;

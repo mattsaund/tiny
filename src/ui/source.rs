@@ -29,6 +29,8 @@ use crate::app::{App, GIT_BUTTONS, GitFocus, GitRow};
 use crate::config::Palette;
 use crate::git::{Code, DiffLine, LineKind};
 use crate::text::highlight::Piece;
+use crate::text::tabs;
+use unicode_width::UnicodeWidthStr;
 
 /// How many rows the branch map gets, when there is room for it at all.
 const GRAPH_HEIGHT: u16 = 8;
@@ -231,6 +233,7 @@ fn button_lines(selected: usize, on_row: bool, width: u16, pal: &Palette) -> Vec
 /// it, so a diff of a very long file costs what is on screen rather than what
 /// is in the file.
 fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
+    let tab_width = app.config.tab_width;
     let git = &app.git;
     let halves = Layout::default()
         .direction(Direction::Horizontal)
@@ -316,7 +319,14 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
             .take(inner.height as usize)
             .map(|(n, l)| {
                 let pieces = colored.get(n - git.diff_scroll);
-                diff_line(l, pieces, i == 0, gap_label(lines, n, i == 0), pal)
+                diff_line(
+                    l,
+                    pieces,
+                    i == 0,
+                    gap_label(lines, n, i == 0),
+                    pal,
+                    tab_width,
+                )
             })
             .collect();
         f.render_widget(Paragraph::new(rows), inner);
@@ -373,6 +383,7 @@ fn diff_line(
     before: bool,
     gap: Option<String>,
     pal: &Palette,
+    tab_width: usize,
 ) -> Line<'static> {
     if let Some(label) = gap {
         return Line::from(Span::styled(label, pal.dim));
@@ -387,14 +398,22 @@ fn diff_line(
         _ => Span::styled("  ", pal.dim),
     };
     let mut spans = vec![gutter];
+    // Counted from the file's own column zero, not from after the `-` or `+`:
+    // the gutter is tiny's, and a tab stop belongs to the line as written.
+    // Without this a tab-indented file shows every line flat against the
+    // margin, which for a Makefile is the whole of its structure.
+    let mut col = 0usize;
     match pieces {
-        Some(pieces) if !pieces.is_empty() => spans.extend(
-            pieces
-                .iter()
-                .map(|(style, text)| Span::styled(text.clone(), *style)),
-        ),
+        Some(pieces) if !pieces.is_empty() => spans.extend(pieces.iter().map(|(style, text)| {
+            let text = tabs::expand(text, tab_width, col);
+            col += text.width();
+            Span::styled(text, *style)
+        })),
         // No grammar matched, or the line is past what syntect will parse.
-        _ => spans.push(Span::styled(line.text.clone(), pal.text)),
+        _ => spans.push(Span::styled(
+            tabs::expand(&line.text, tab_width, 0),
+            pal.text,
+        )),
     }
     Line::from(spans)
 }

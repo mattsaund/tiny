@@ -498,3 +498,44 @@ fn saving_a_file_moves_the_size_with_it() {
         "the file is nine characters longer than it was"
     );
 }
+
+// ---- tabs ------------------------------------------------------------------
+//
+// A tab is zero columns wide to `unicode-width` and draws as a cell holding
+// nothing, so anything that reaches the screen with a tab still in it loses
+// it. These are the two shapes that costs the most: indentation, and a gap
+// between words.
+
+#[test]
+fn a_tab_indented_file_keeps_its_shape() {
+    let (td, mut app) = fixture();
+    fs::write(
+        td.path().join("Makefile"),
+        "all:\n\techo hello\n\techo world\n",
+    )
+    .unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "Makefile");
+
+    let out = joined(&mut app);
+    assert!(
+        out.contains("    echo hello"),
+        "the tab reached its stop:\n{out}"
+    );
+    assert!(
+        !out.contains(" echo hello") || out.contains("    echo hello"),
+        "and did not collapse to nothing:\n{out}"
+    );
+}
+
+#[test]
+fn a_tab_between_words_is_a_gap_not_a_join() {
+    let (td, mut app) = fixture();
+    fs::write(td.path().join("note.md"), "alpha\tbravo\n").unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "note.md");
+
+    let out = joined(&mut app);
+    assert!(out.contains("alpha   bravo"), "to the next stop:\n{out}");
+    assert!(!out.contains("alphabravo"), "never joined:\n{out}");
+}
