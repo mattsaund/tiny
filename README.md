@@ -62,8 +62,9 @@ this file, red is what it reaches.
 
 ![markdown, rendered](docs/markdown.png)
 
-Markdown renders as you read it; `Enter` edits. Pictures, video, audio and PDFs
-open in your own viewer.
+Markdown renders as you read it; `Enter` edits. Headings at every level,
+tables, fenced code with syntax colors, quotes and task lists. Pictures, video,
+audio and PDFs open in your own viewer.
 
 ## Keys
 

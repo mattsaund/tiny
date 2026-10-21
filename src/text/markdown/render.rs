@@ -19,6 +19,7 @@ use super::wrap::{clip, spans_width, wrap};
 use super::{is_blank, scan_wikilinks};
 use crate::config::Palette;
 use crate::text::highlight::Highlighter;
+use crate::text::tabs;
 
 /// A table being accumulated. Cells cannot be drawn as they arrive, because
 /// column widths depend on the widest cell in the whole table — so everything
@@ -59,6 +60,24 @@ pub(super) struct Renderer<'a> {
     table: Option<TableState>,
     /// Bullet/number to place on the first line of the current list item.
     pending_item_prefix: Option<String>,
+}
+
+/// How a heading of each level is drawn.
+///
+/// H1 and H2 carry a rule under them, so their text is simply the heading
+/// style. Deeper levels have no rule to tell them apart, so they fade: one
+/// step to the dim color while keeping the weight, then the dim color alone.
+///
+/// They used to keep their `###` prefix instead, which left the markup
+/// showing through a rendered view, and in the editor's live preview a line
+/// that never looked finished. Weight and color say the same thing and are
+/// drawn by every terminal, which an escape for real text size is not.
+fn heading_style(pal: &Palette, level: HeadingLevel) -> Style {
+    match level {
+        HeadingLevel::H1 | HeadingLevel::H2 | HeadingLevel::H3 => pal.heading,
+        HeadingLevel::H4 => pal.heading.patch(pal.dim),
+        HeadingLevel::H5 | HeadingLevel::H6 => pal.dim,
+    }
 }
 
 impl<'a> Renderer<'a> {
@@ -180,6 +199,12 @@ impl Renderer<'_> {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
             Event::Text(t) => {
+                // Tabs are taken to their stops here, at the one gate every
+                // piece of document text comes through. Inside a fence that
+                // keeps code lined up; in prose it is the difference between
+                // `a\tb` reading as `a b` and reading as `ab`, since a tab
+                // reaches the terminal as a cell holding nothing.
+                let t = tabs::expand(&t, tabs::MARKDOWN, 0);
                 if self.code_fence.is_some() {
                     self.code_buf.push_str(&t);
                 } else {
@@ -247,12 +272,7 @@ impl Renderer<'_> {
             Tag::Paragraph => {}
             Tag::Heading { level, .. } => {
                 self.blank();
-                self.style_stack.push(self.pal.heading);
-                if level >= HeadingLevel::H3 {
-                    let hashes = "#".repeat(level as usize);
-                    self.spans
-                        .push(Span::styled(format!("{hashes} "), self.pal.dim));
-                }
+                self.style_stack.push(heading_style(self.pal, level));
             }
             Tag::BlockQuote(_) => {
                 self.flush_inline(Vec::new(), Vec::new());
@@ -343,8 +363,8 @@ impl Renderer<'_> {
             TagEnd::Heading(level) => {
                 self.flush_inline(Vec::new(), Vec::new());
                 self.pop_style();
-                // H1 and H2 get a rule under them; deeper levels use their
-                // `###` prefix instead, so the page does not turn into lines.
+                // H1 and H2 get a rule under them; deeper levels fade
+                // instead, so the page does not turn into lines.
                 let rule = match level {
                     HeadingLevel::H1 => Some("━"),
                     HeadingLevel::H2 => Some("─"),
@@ -536,13 +556,41 @@ mod tests {
     use crate::text::markdown::testing::*;
 
     #[test]
-    fn headings_get_a_rule_and_deeper_levels_get_hashes() {
+    fn headings_get_a_rule_and_deeper_levels_fade_instead() {
         let out = plain("# Title\n\nbody\n", 20);
         assert_eq!(out[0], "Title");
         assert_eq!(out[1], "━".repeat(20), "H1 is underlined across the pane");
 
         let out = plain("### Deep\n", 20);
-        assert_eq!(out[0], "### Deep");
+        assert_eq!(out[0], "Deep", "no rule, and no hashes left showing");
+        assert_eq!(out.len(), 1, "and no rule under it either");
+    }
+
+    #[test]
+    fn each_heading_below_a_rule_is_a_step_fainter() {
+        // The one test here that looks at style rather than text. With no rule
+        // under them and no hashes in front, style is the only thing left that
+        // tells these levels apart, so it is the thing worth asserting.
+        let pal = crate::config::Palette::default();
+        let hl = crate::text::highlight::Highlighter::new();
+        let style_of = |src: &str| {
+            crate::text::markdown::render(src, 40, &pal, &hl)[0]
+                .spans
+                .iter()
+                .find(|s| !s.content.trim().is_empty())
+                .expect("a heading span")
+                .style
+        };
+
+        assert_eq!(style_of("### three\n"), pal.heading);
+        let h4 = style_of("#### four\n");
+        assert_ne!(h4, pal.heading, "H4 is a step down from H3");
+        assert_eq!(h4.fg, pal.dim.fg, "into the dim color");
+        assert!(
+            h4.add_modifier.contains(Modifier::BOLD),
+            "while keeping the weight"
+        );
+        assert_eq!(style_of("##### five\n"), pal.dim, "and H5 is dim alone");
     }
 
     #[test]

@@ -27,6 +27,7 @@ use crate::app::{App, TextKind};
 use crate::config::Palette;
 use crate::text::markdown;
 use crate::text::search::Matcher;
+use crate::text::tabs;
 
 /// Raw source with line numbers, syntax highlighting, and the real cursor.
 ///
@@ -53,6 +54,7 @@ pub(super) fn draw_editor(
     }
     let height = inner.height as usize;
     app.last_edit_height = height;
+    let tab_width = app.config.tab_width;
 
     let gutter = if app.config.line_numbers {
         digits(app.buffers[path].line_count()).max(2) + 1
@@ -159,7 +161,7 @@ pub(super) fn draw_editor(
                     cursor_row = Some(i);
                 }
                 if let Some(pieces) = piece_of(*n) {
-                    content.extend(clip_pieces(pieces, scroll_x, text_w, pal));
+                    content.extend(clip_pieces(pieces, scroll_x, text_w, pal, tab_width));
                 }
             }
             Row::Made { content: made, .. } => content.extend(made.spans.iter().cloned()),
@@ -178,9 +180,12 @@ pub(super) fn draw_editor(
         // one — display width of the text before it, less the horizontal
         // scroll.
         let line = ed.lines().get(cur_line).map(String::as_str).unwrap_or("");
-        let before: String = line.chars().take(cur_col).collect();
-        let skipped: String = line.chars().take(scroll_x).collect();
-        let vis = before.width().saturating_sub(skipped.width());
+        // Columns, not characters: a tab was drawn as the spaces that reach
+        // its stop, so the cursor has to be counted the same way or it blinks
+        // somewhere the text is not.
+        let before = tabs::column(line, cur_col, tab_width);
+        let skipped = tabs::column(line, scroll_x, tab_width);
+        let vis = before.saturating_sub(skipped);
         let x = inner.x + gutter as u16 + vis as u16;
         let y = match cursor_row {
             Some(r) => inner.y + r as u16,
@@ -300,11 +305,26 @@ fn clip_pieces<'a>(
     scroll_x: usize,
     width: usize,
     pal: Palette,
+    tab_width: usize,
 ) -> Vec<Span<'a>> {
+    // Tabs become spaces before anything is measured or cut, each piece
+    // expanded from the column the ones before it reached — a tab's width is
+    // where it sits, so a piece cannot be expanded on its own. After this
+    // there are no tabs left, and a character's width is the truth again.
+    let mut col = 0usize;
+    let expanded: Vec<(Style, String)> = pieces
+        .iter()
+        .map(|(style, text)| {
+            let text = tabs::expand(text, tab_width, col);
+            col += text.width();
+            (*style, text)
+        })
+        .collect();
+
     let mut out = Vec::new();
     let mut skipped = 0usize;
     let mut used = 0usize;
-    for (style, text) in pieces {
+    for (style, text) in &expanded {
         let chars: Vec<char> = text.chars().collect();
         let mut start = 0;
         if skipped < scroll_x {
