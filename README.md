@@ -1,11 +1,11 @@
 # tiny
 
-A text editor, file browser and notebook that lives in the terminal — like
-nano or micro, with search, git, a project map and plugins built in. Plain
-files in plain folders; nothing proprietary.
+Tiny is an IDE, text editor, personal knowledge management system, and file
+browser that lives in the terminal. Search, git, a project map and plugins are
+built in. Plain files in plain folders; nothing proprietary.
 
-**Full installation size:** 7.54 MB macOS (Intel) · 7.15 MB macOS (Apple
-silicon) · 8.31 MB Linux (x86_64) · 7.78 MB Linux (arm64) · 7.77 MB Windows
+**Full installation size:** 7.54 MB macOS (Intel), 7.15 MB macOS (Apple
+silicon), 8.32 MB Linux (x86_64), 7.78 MB Linux (arm64), 7.78 MB Windows
 
 Try it here: https://msaunders.dev/tiny/
 
@@ -27,7 +27,7 @@ irm https://raw.githubusercontent.com/mattsaund/tiny/main/install.ps1 | iex
 
 Downloads the newest [release](https://github.com/mattsaund/tiny/releases) for
 your machine (or builds it), and offers git and ffmpeg if they are missing.
-tiny tells you when a new version is out — `y` updates it. `tiny --update` does
+tiny tells you when a new version is out, and `y` updates it. `tiny --update` does
 the same; `tiny --uninstall` removes tiny and leaves your files alone.
 What changed: [CHANGELOG](CHANGELOG.md).
 
@@ -49,7 +49,7 @@ tiny ~/code/main.py  # that file
 
 ![the git window](docs/git.png)
 
-`Ctrl+G`. `Enter` stages, `commit` commits — with the git you already have.
+`Ctrl+G`. `Enter` stages, `commit` commits, with the git you already have.
 
 ## Project map
 
@@ -73,11 +73,11 @@ audio and PDFs open in your own viewer.
 | key | does |
 |---|---|
 | arrows, `i` `j` `k` `l` | move |
-| `Enter` · `Esc` | open · back |
-| `Ctrl+S` | save — on a folder, all of it |
-| `/` · `Ctrl+F` | search |
-| `Ctrl+G` · `Ctrl+L` | git · map |
-| `Ctrl+T` · `<` `>` | hide the browser · its width |
+| `Enter`, `Esc` | open, back |
+| `Ctrl+S` | save (on a folder, all of it) |
+| `/`, `Ctrl+F` | search |
+| `Ctrl+G`, `Ctrl+L` | git, map |
+| `Ctrl+T`, `<` `>` | hide the browser, its width |
 | `Ctrl+N` | another tiny window |
 | `Ctrl+Q` | quit |
 
@@ -99,8 +99,8 @@ Names are found anywhere in the project. No `in` means everywhere. `go to`,
 
 ## Plugins
 
-A plugin is a Lua file in the plugins folder — settings, `Plugins` opens it.
-Drop one in and `*reload`.
+A plugin is a Lua file in the plugins folder, which `Plugins` in settings
+opens. Drop one in and `*reload`.
 
 ```lua
 -- words.lua: *words counts them
@@ -136,16 +136,16 @@ to follow specific guidelines:
 3. Contributors MUST look at and document code and code changes. You need to
    understand the code that is being written.
 
-**Tests.** `cargo test`, `cargo clippy` and `cargo fmt` — CI runs all three on
+**Tests.** `cargo test`, `cargo clippy` and `cargo fmt`. CI runs all three on
 Linux, macOS and Windows. A version is released by tagging it; see
 `.github/workflows/release.yml`.
 
 ## License and credits
 
-Created by Matthew Saunders — https://msaunders.dev
+Created by Matthew Saunders, https://msaunders.dev
 
-MIT. See [LICENSE](LICENSE). Everything compiled in — every crate, Lua, the
-color themes — is permissive, with its copyright and license in
+MIT. See [LICENSE](LICENSE). Everything compiled in (every crate, Lua, the
+color themes) is permissive, with its copyright and license in
 [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt); `tiny --licenses` prints
 it, with the syntax definitions from [bat](https://github.com/sharkdp/bat) via
 [two-face](https://codeberg.org/CosmicHarper/two-face).
