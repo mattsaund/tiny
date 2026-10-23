@@ -448,13 +448,13 @@ fn diff_line(
     let mut col = 0usize;
     match pieces {
         Some(pieces) if !pieces.is_empty() => spans.extend(pieces.iter().map(|(style, text)| {
-            let text = tabs::expand(text, tab_width, col);
+            let text = tabs::expand(text, tab_width, col).into_owned();
             col += text.width();
             Span::styled(text, *style)
         })),
         // No grammar matched, or the line is past what syntect will parse.
         _ => spans.push(Span::styled(
-            tabs::expand(&line.text, tab_width, 0),
+            tabs::expand(&line.text, tab_width, 0).into_owned(),
             pal.text,
         )),
     }

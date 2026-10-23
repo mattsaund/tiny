@@ -98,14 +98,14 @@ pub struct Opts {
     pub show_hidden: bool,
 }
 
+/// What the tests search with: the shipped config's ignore list, so a test
+/// search skips what a user's does.
+#[cfg(test)]
 impl Default for Opts {
     fn default() -> Self {
         Self {
             max_results: MAX_RESULTS,
-            ignore: [".git", "target", "node_modules", ".venv", "__pycache__"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            ignore: crate::config::Config::default().search_ignore,
             show_hidden: false,
         }
     }
@@ -229,13 +229,16 @@ pub fn lines_where(
         );
         for (path, text) in chunk.iter().zip(texts) {
             let Some(text) = text else { continue };
+            // Split once, not counted down to on every hit: a file that
+            // matches on every line would otherwise cost lines squared.
+            let lines: Vec<&str> = text.lines().collect();
             for (line, col) in lines_in(&text, &at) {
                 out.push(Hit {
                     path: path.clone(),
                     kind: HitKind::Content,
                     line,
                     col,
-                    text: truncate(text.lines().nth(line).unwrap_or(""), MAX_LINE_DISPLAY),
+                    text: truncate(lines.get(line).copied().unwrap_or(""), MAX_LINE_DISPLAY),
                 });
                 if out.len() >= cap {
                     return out;
@@ -304,19 +307,32 @@ impl Needle {
     /// Whether the match at `r` is a word on its own: nothing word-like
     /// running into it at either end that is itself word-like.
     fn stands_alone(&self, hay: &str, r: &Range<usize>) -> bool {
-        let starts_word = self.text.chars().next().is_some_and(is_word_char);
-        let ends_word = self.text.chars().next_back().is_some_and(is_word_char);
-        let before = hay[..r.start].chars().next_back();
-        let after = hay[r.end..].chars().next();
-        !(starts_word && before.is_some_and(is_word_char))
-            && !(ends_word && after.is_some_and(is_word_char))
+        stands_alone(
+            (self.text.chars().next(), self.text.chars().next_back()),
+            (
+                hay[..r.start].chars().next_back(),
+                hay[r.end..].chars().next(),
+            ),
+        )
     }
 }
 
+/// Whether a match stands as a word of its own, given the first and last
+/// characters of what was looked for and the characters either side of
+/// where it was found. Only an end of the query that is word-like is
+/// checked, so `->` is found between two words, see [`Needle`].
+fn stands_alone(ends: (Option<char>, Option<char>), around: (Option<char>, Option<char>)) -> bool {
+    let word = |c: Option<char>| c.is_some_and(is_word_char);
+    !(word(ends.0) && word(around.0)) && !(word(ends.1) && word(around.1))
+}
+
 /// Letters, digits and the underscore: what a word, or a name in code, is
-/// made of.
+/// made of. And the marks that combine with a letter: `é` written as an `e`
+/// and an accent is one letter, and a word does not end between the two.
 pub fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    c.is_alphanumeric()
+        || c == '_'
+        || matches!(c, '\u{300}'..='\u{36f}' | '\u{1ab0}'..='\u{1aff}' | '\u{1dc0}'..='\u{1dff}' | '\u{20d0}'..='\u{20ff}' | '\u{fe20}'..='\u{fe2f}')
 }
 
 /// How many occurrences a `*replace` would rewrite, without touching anything.
@@ -460,14 +476,13 @@ impl Matcher {
     /// longer word passed over. What `goto word` looks for.
     pub fn first_word(&self, haystack: &str) -> Option<usize> {
         let chars: Vec<char> = haystack.chars().collect();
-        let starts_word = self.pat.first().is_some_and(|c| is_word_char(*c));
-        let ends_word = self.pat.last().is_some_and(|c| is_word_char(*c));
+        let ends = (self.pat.first().copied(), self.pat.last().copied());
         self.all(haystack).into_iter().find_map(|(start, end)| {
-            let before = start.checked_sub(1).map(|i| chars[i]);
-            let after = chars.get(end).copied();
-            let alone = !(starts_word && before.is_some_and(is_word_char))
-                && !(ends_word && after.is_some_and(is_word_char));
-            alone.then_some(start)
+            let around = (
+                start.checked_sub(1).map(|i| chars[i]),
+                chars.get(end).copied(),
+            );
+            stands_alone(ends, around).then_some(start)
         })
     }
 
@@ -689,6 +704,18 @@ mod tests {
         hits.iter()
             .map(|h| h.path.file_name().unwrap().to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn a_word_does_not_end_at_an_accent() {
+        // `cafe` and then a combining acute is `café`, not `cafe` followed by
+        // something else.
+        let whole = Needle::new("cafe", true);
+        assert!(whole.find_in("cafe\u{301} au lait").is_empty());
+        assert_eq!(whole.find_in("cafe au lait").len(), 1);
+        let m = Matcher::new("cafe").unwrap();
+        assert_eq!(m.first_word("un cafe\u{301}"), None);
+        assert_eq!(m.first_word("un cafe"), Some(3));
     }
 
     #[test]

@@ -221,7 +221,7 @@ pub(super) fn digits(n: usize) -> usize {
 /// index, not byte offset: slicing on a raw cursor position would panic on
 /// any non-ASCII input.
 pub(super) fn split_at_char(s: &str, ci: usize) -> (String, String) {
-    let b = s.char_indices().nth(ci).map_or(s.len(), |(b, _)| b);
+    let b = crate::text::editor::byte_of_char(s, ci);
     (s[..b].to_string(), s[b..].to_string())
 }
 

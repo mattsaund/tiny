@@ -10,8 +10,9 @@
 //!
 //! # Two entry points
 //!
-//! - [`render()`]: full markdown. Headings get rules, lists get bullets, tables
-//!   get drawn, fenced code is syntax-highlighted via `highlight`.
+//! - [`render()`]: full markdown. The two top heading levels get a rule and
+//!   the deeper ones fade, lists get bullets, tables get drawn, fenced code is
+//!   syntax-highlighted via `highlight`.
 //! - [`render_plain`]: `.txt` and friends. Wraps long lines and picks out
 //!   wikilinks and URLs, and does nothing else. A `#` at the start of a line in
 //!   a text file is a hash, not a heading; a plain-text file that silently
@@ -164,15 +165,13 @@ pub fn render_plain(
         // `unicode-width` and nothing at all on screen, so the indent a text
         // file was written with would simply vanish.
         let line = tabs::expand(line, tab_width, 0);
-        let line = line.as_str();
+        let line: &str = &line;
         if line.trim().is_empty() {
             out.push(Line::from(""));
             continue;
         }
-        let indent: String = line
-            .chars()
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .collect();
+        // Spaces only: the tabs became spaces just above.
+        let indent: String = line.chars().take_while(|c| *c == ' ').collect();
         let indent_w = indent.width().min(width.saturating_sub(4));
         let body = &line[indent.len()..];
 

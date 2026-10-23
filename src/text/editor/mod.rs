@@ -63,8 +63,8 @@ impl LineEnding {
 }
 
 /// What kind of edit produced the current undo group. Consecutive edits of the
-/// same kind coalesce into one undo step, so Ctrl+Z undoes a typed word rather
-/// than one character.
+/// same kind coalesce into one undo step, so Ctrl+Z undoes a run of typing
+/// rather than one character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EditKind {
     Insert,
@@ -76,10 +76,10 @@ pub(super) enum EditKind {
 ///
 /// Snapshotting every line is wasteful in principle and completely fine in
 /// practice: notes and source files are small, edits are coalesced so this
-/// runs once per typed word rather than once per key, and the alternative
+/// runs once per run of typing rather than once per key, and the alternative
 /// (a proper piece table or per-edit delta log) is a large amount of machinery
-/// for a text editor of this size. If you ever open a 50 MB file in here, that
-/// is the thing to revisit.
+/// for a text editor of this size. A file of megabytes keeps fewer steps
+/// instead, see `UNDO_BYTES`.
 #[derive(Debug, Clone)]
 pub(super) struct Snapshot {
     lines: Vec<String>,
@@ -370,8 +370,6 @@ impl Editor {
         self.cursor_line = self.cursor_line.min(self.lines.len() - 1);
         self.cursor_col = self.cursor_col.min(self.line_chars(self.cursor_line));
     }
-
-    // ---- undo bookkeeping -------------------------------------------------
 }
 
 /// Byte offset of character index `ci`, or the string length if past the end.
@@ -567,6 +565,36 @@ mod tests {
         assert_eq!(e.cursor_col, 8, "past 'foo_bar' and the space");
         e.move_word_left();
         assert_eq!(e.cursor_col, 0);
+    }
+
+    #[test]
+    fn a_word_with_an_accent_written_apart_is_still_one_word() {
+        // `café` as an `e` and a combining acute, the way macOS names files.
+        let mut e = ed("cafe\u{301} noir\n");
+        e.move_word_right();
+        assert_eq!(e.cursor_col, 6, "past the accent and the space");
+        e.move_end();
+        e.move_word_left();
+        e.move_word_left();
+        assert_eq!(e.cursor_col, 0, "not stopped at the accent");
+    }
+
+    #[test]
+    fn tab_types_spaces_to_the_next_stop() {
+        let mut e = ed("ab\n");
+        e.move_end();
+        e.insert_tab(4);
+        assert_eq!(e.lines()[0], "ab  ", "two to reach column four");
+        e.insert_tab(4);
+        assert_eq!(e.lines()[0], "ab      ", "and a whole stop from one");
+    }
+
+    #[test]
+    fn deleting_the_only_line_of_an_empty_file_changes_nothing() {
+        let mut e = ed("");
+        e.delete_line();
+        assert!(!e.dirty, "nothing to save");
+        assert!(!e.undo(), "and nothing to undo");
     }
 
     #[test]

@@ -14,6 +14,7 @@
 //! and nobody notices until it is missing.
 
 use super::Editor;
+use crate::text::search::is_word_char;
 use crate::text::tabs;
 
 impl Editor {
@@ -77,8 +78,9 @@ impl Editor {
 
     /// Move to the start of the previous word.
     ///
-    /// A word is a run of alphanumerics and underscores, so `foo_bar` is one
-    /// word and `foo.bar` is two. Skips any separators first, then the word
+    /// A word is a run of letters, digits and underscores (and the accents
+    /// on them, see [`is_word_char`]), so `foo_bar` is one word and `foo.bar`
+    /// is two. Skips any separators first, then the word
     /// itself. At column 0 it falls through to a plain left, which steps onto
     /// the end of the previous line.
     pub fn move_word_left(&mut self) {
@@ -89,10 +91,10 @@ impl Editor {
         }
         let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
         let mut i = self.cursor_col;
-        while i > 0 && !chars[i - 1].is_alphanumeric() && chars[i - 1] != '_' {
+        while i > 0 && !is_word_char(chars[i - 1]) {
             i -= 1;
         }
-        while i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_') {
+        while i > 0 && is_word_char(chars[i - 1]) {
             i -= 1;
         }
         self.cursor_col = i;
@@ -109,10 +111,10 @@ impl Editor {
             return;
         }
         let mut i = self.cursor_col;
-        while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+        while i < chars.len() && is_word_char(chars[i]) {
             i += 1;
         }
-        while i < chars.len() && !chars[i].is_alphanumeric() && chars[i] != '_' {
+        while i < chars.len() && !is_word_char(chars[i]) {
             i += 1;
         }
         self.cursor_col = i;
