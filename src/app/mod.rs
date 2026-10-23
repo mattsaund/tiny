@@ -258,6 +258,12 @@ pub struct App {
     /// says, for the same reason as `plugins_dir`: a test that saves the
     /// settings must never write over anybody's real config file.
     pub config_path: Option<PathBuf>,
+    /// The rows each block of a note was formatted into, by its text and the
+    /// width it was drawn at, so a keystroke formats the one block being
+    /// typed in rather than the whole note again. Written by `ui` while
+    /// drawing, like the highlighting; emptied when a setting changes how
+    /// anything is drawn.
+    pub block_rows: std::cell::RefCell<HashMap<u64, Vec<ratatui::text::Line<'static>>>>,
     /// Which pane had the keyboard when the tree was folded away, so unfolding
     /// puts it back and the key is a true toggle.
     focus_before_hide: Focus,
@@ -351,6 +357,7 @@ impl App {
             plugins_dir: None,
             in_plugin_event: false,
             config_path: None,
+            block_rows: Default::default(),
             focus_before_hide: Focus::Tree,
             status: warning
                 .or(keys_warning)

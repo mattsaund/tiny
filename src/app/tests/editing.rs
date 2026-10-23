@@ -304,3 +304,52 @@ fn the_cursor_stays_on_the_text_when_a_tabbed_line_scrolls_across() {
         "the cell left of the cursor is the line's last character"
     );
 }
+
+/// A note long enough to scroll, with every kind of block in it, some of
+/// them many rows tall.
+fn long_note() -> String {
+    let section = "# Heading one\n\nA paragraph long enough to wrap across several rows of a narrow pane, so one source line becomes many drawn ones and the two counts drift apart.\n\n## Heading two\n\n- one\n- two\n  - nested\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n\n> a quote\n> over two lines\n\n---\n\n";
+    section.repeat(3)
+}
+
+/// Where the cursor is drawn, and the line the pane is scrolled to.
+fn cursor_and_anchor(app: &mut App) -> (u16, usize) {
+    let mut t = Terminal::new(TestBackend::new(60, 16)).unwrap();
+    t.draw(|f| crate::ui::draw(f, app)).unwrap();
+    let y = t.get_cursor_position().map(|p| p.y).unwrap_or(u16::MAX);
+    (y, app.active_buffer().unwrap().scroll_y)
+}
+
+#[test]
+fn a_formatted_note_scrolls_without_snapping_back_to_its_top() {
+    // The pane's top row can be part way down a block many rows tall. It
+    // used to fall back to the top of the note when that happened, so the
+    // view snapped about, and pressing Up from the bottom scrolled the text
+    // rather than moving the cursor.
+    let (td, mut app) = fixture();
+    fs::write(td.path().join("long.md"), long_note()).unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "long.md");
+    app.on_key(k(KeyCode::Enter));
+    let lines = app.active_buffer().unwrap().line_count();
+
+    let mut last_anchor = 0;
+    for _ in 0..lines {
+        let (_, anchor) = cursor_and_anchor(&mut app);
+        assert!(
+            anchor >= last_anchor,
+            "scrolled back from {last_anchor} to {anchor}"
+        );
+        last_anchor = anchor;
+        app.on_key(k(KeyCode::Down));
+    }
+
+    let (bottom, _) = cursor_and_anchor(&mut app);
+    app.on_key(k(KeyCode::Up));
+    app.on_key(k(KeyCode::Up));
+    let (after, _) = cursor_and_anchor(&mut app);
+    assert!(
+        after < bottom,
+        "the cursor moved up the pane: {bottom} to {after}"
+    );
+}
