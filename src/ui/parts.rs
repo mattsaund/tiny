@@ -64,6 +64,7 @@ pub(super) fn pane<'a>(
     }
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(pal.glyphs.border)
         .border_style(style)
         .title(Line::from(title));
     let inner = block.inner(area);

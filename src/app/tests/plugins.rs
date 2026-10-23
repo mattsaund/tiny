@@ -127,3 +127,76 @@ fn a_test_never_loads_the_real_plugins_folder() {
     command(&mut app, "reload");
     assert!(app.plugins.loaded.is_empty());
 }
+
+// ---- settings from a plugin ------------------------------------------------
+
+#[test]
+fn a_plugin_can_set_the_glyphs_when_it_loads() {
+    // The way a plugin that sets up tiny's look would do it: at the top of
+    // its file, not inside a command anyone has to run.
+    let (_td, mut app) = with_plugins(&[("plain.lua", r#"tiny.set("glyphs", "ascii")"#)]);
+    assert_eq!(app.config.glyphs, GlyphSet::Ascii);
+    let out = joined(&mut app);
+    assert!(
+        out.contains("+ BROWSER -"),
+        "and the screen follows:\n{out}"
+    );
+}
+
+#[test]
+fn a_plugin_setting_takes_numbers_and_booleans_as_lua_writes_them() {
+    let (_td, app) = with_plugins(&[(
+        "prefs.lua",
+        r#"
+tiny.set("tab_width", 2)
+tiny.set("line_numbers", false)
+"#,
+    )]);
+    assert_eq!(app.config.tab_width, 2);
+    assert!(!app.config.line_numbers);
+}
+
+#[test]
+fn a_misspelled_setting_is_an_error_at_the_line_that_wrote_it() {
+    let (_td, app) = with_plugins(&[("typo.lua", r#"tiny.set("glyps", "ascii")"#)]);
+    assert!(app.plugins.loaded.is_empty(), "the plugin did not load");
+    assert!(
+        app.plugins.errors[0].contains("glyps"),
+        "and says which setting: {:?}",
+        app.plugins.errors
+    );
+    assert_eq!(app.config.glyphs, GlyphSet::Unicode, "nothing changed");
+}
+
+#[test]
+fn a_plugin_that_fails_to_load_asks_for_nothing() {
+    // It set something, and then broke: half of what it meant to do is not
+    // worth doing, the same rule as for a command that fails part way.
+    let (_td, app) = with_plugins(&[(
+        "broken.lua",
+        r#"
+tiny.set("tab_width", 8)
+error("and then this")
+"#,
+    )]);
+    assert_eq!(app.config.tab_width, Config::default().tab_width);
+}
+
+#[test]
+fn what_a_plugin_says_while_it_loads_is_shown() {
+    // Asked for at load time, so before this it was cleared away unseen by
+    // the first call into any plugin.
+    let (_td, app) = with_plugins(&[("hello.lua", r#"tiny.status("hello from a plugin")"#)]);
+    assert_eq!(app.status, "hello from a plugin");
+}
+
+#[test]
+fn a_plugin_command_can_change_a_setting_too() {
+    let (_td, mut app) = with_plugins(&[(
+        "toggle.lua",
+        r#"tiny.command("plain", function() tiny.set("glyphs", "ascii") end)"#,
+    )]);
+    assert_eq!(app.config.glyphs, GlyphSet::Unicode);
+    command(&mut app, "plain");
+    assert_eq!(app.config.glyphs, GlyphSet::Ascii);
+}

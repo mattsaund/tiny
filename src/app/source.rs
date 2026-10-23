@@ -271,12 +271,12 @@ impl App {
         // room for it on the status line.
         self.status = match self.git.current() {
             Some((change, staged)) => format!(
-                "{} — {}{}",
+                "{}: {}{}",
                 change.code.word(),
-                change.label(),
+                change.label(self.palette.glyphs.arrow),
                 if staged { "" } else { ", not staged" }
             ),
-            None => self.git.status.branch.summary(),
+            None => self.git.status.branch.summary(self.palette.glyphs.arrow),
         };
     }
 
@@ -315,7 +315,7 @@ impl App {
             // Into the diff, where up and down scroll both columns at once.
             if delta > 0 && !self.git.diff.is_empty() {
                 self.git.focus = GitFocus::Diff;
-                self.status = "reading the change — left to come back".into();
+                self.status = "reading the change, left to come back".into();
             }
             return;
         }
@@ -380,7 +380,7 @@ impl App {
     /// Open the message box over both diff columns, with the keyboard in it.
     pub(super) fn open_message(&mut self) {
         if self.git.status.staged.is_empty() {
-            self.status = "nothing staged — Enter on a file stages it".into();
+            self.status = "nothing staged, Enter on a file stages it".into();
             return;
         }
         let path = self
@@ -394,7 +394,7 @@ impl App {
             self.git.message = Some(Editor::from_str(path, ""));
         }
         self.git.focus = GitFocus::Message;
-        self.status = "write the message — Ctrl+S commits, Esc puts it down".into();
+        self.status = "write the message: Ctrl+S commits, Esc puts it down".into();
     }
 
     /// Send what is in the box.
@@ -427,7 +427,7 @@ impl App {
             Some(Action::Save) => return self.commit_message(),
             Some(Action::Back) => {
                 self.git.focus = GitFocus::List;
-                self.status = "message kept — commit to send it".into();
+                self.status = "message kept, commit to send it".into();
                 return;
             }
             _ => {}
@@ -452,7 +452,7 @@ impl App {
             self.status = format!("still {}", job.what);
             return;
         }
-        self.status = format!("{what}…");
+        self.status = format!("{what}{}", self.palette.glyphs.ellipsis);
         self.git.job = Some(Job::start(&repo.root, what, args));
     }
 
@@ -476,7 +476,7 @@ impl App {
                     None => format!("{what}: nothing to do"),
                 };
             }
-            Err(e) => self.status = format!("{what} failed — {e}"),
+            Err(e) => self.status = format!("{what} failed: {e}"),
         }
         // Whatever it did, the repository may look different now.
         if self.window == Window::Source {

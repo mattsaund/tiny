@@ -384,7 +384,7 @@ fn load_theme(name: &str) -> (Theme, Option<String>) {
             (
                 fallback,
                 Some(format!(
-                    "unknown syntax_theme `{name}` — try one of: {}",
+                    "unknown syntax_theme `{name}`, try one of: {}",
                     available.join(", ")
                 )),
             )

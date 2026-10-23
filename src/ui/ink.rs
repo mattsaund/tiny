@@ -21,7 +21,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::config::{Markers, Palette};
+use crate::config::{Glyphs, Palette};
 use crate::map::layout::{Channels, Placed};
 
 /// How brightly one cell of the graph is drawn.
@@ -39,43 +39,6 @@ pub(super) enum InkStyle {
     In,
     /// The file under the cursor itself.
     Selected,
-}
-
-/// The characters the graph is drawn out of.
-///
-/// Two sets, chosen by the `markers` setting, so a terminal with no box-drawing
-/// characters gets a picture made of `+`, `-` and `|` rather than a screen of
-/// replacement glyphs. Boxes use rounded corners where they exist, which keeps
-/// them visually separate from the sharp corners a line turns with.
-pub(super) struct Glyphs {
-    /// Indexed by the direction bits a line leaves a cell by.
-    lines: [char; 16],
-    corners: [char; 4],
-    horizontal: char,
-    vertical: char,
-}
-
-impl Glyphs {
-    pub(super) fn for_markers(markers: Markers) -> Self {
-        match markers {
-            Markers::Arrows => Self {
-                lines: [
-                    ' ', '│', '│', '│', '─', '┘', '┐', '┤', '─', '└', '┌', '├', '─', '┴', '┬', '┼',
-                ],
-                corners: ['╭', '╮', '╰', '╯'],
-                horizontal: '─',
-                vertical: '│',
-            },
-            Markers::Ascii => Self {
-                lines: [
-                    ' ', '|', '|', '|', '-', '+', '+', '+', '-', '+', '+', '+', '-', '+', '+', '+',
-                ],
-                corners: ['+', '+', '+', '+'],
-                horizontal: '-',
-                vertical: '|',
-            },
-        }
-    }
 }
 
 // Which way a line leaves a cell. Kept as bits so two lines crossing produce
@@ -163,16 +126,16 @@ impl Ink {
         let (x0, y0) = (p.col as i32, p.row as i32);
         let x1 = x0 + p.width as i32 - 1;
         let y1 = y0 + Placed::HEIGHT as i32 - 1;
-        self.put(x0, y0, g.corners[0], style);
-        self.put(x1, y0, g.corners[1], style);
-        self.put(x0, y1, g.corners[2], style);
-        self.put(x1, y1, g.corners[3], style);
+        self.put(x0, y0, g.map_corners[0], style);
+        self.put(x1, y0, g.map_corners[1], style);
+        self.put(x0, y1, g.map_corners[2], style);
+        self.put(x1, y1, g.map_corners[3], style);
         for x in x0 + 1..x1 {
-            self.put(x, y0, g.horizontal, style);
-            self.put(x, y1, g.horizontal, style);
+            self.put(x, y0, g.map_horizontal, style);
+            self.put(x, y1, g.map_horizontal, style);
         }
-        self.put(x0, y0 + 1, g.vertical, style);
-        self.put(x1, y0 + 1, g.vertical, style);
+        self.put(x0, y0 + 1, g.map_vertical, style);
+        self.put(x1, y0 + 1, g.map_vertical, style);
         for (i, c) in name.chars().enumerate() {
             self.put(x0 + 1 + i as i32, y0 + 1, c, style);
         }
@@ -209,7 +172,7 @@ impl Ink {
                 let i = y * self.w + x;
                 let (ch, style) = match self.text[i] {
                     Some((ch, s)) => (ch, style_of(s)),
-                    None if self.bits[i] != 0 => (g.lines[self.bits[i] as usize], pal.text),
+                    None if self.bits[i] != 0 => (g.map_lines[self.bits[i] as usize], pal.text),
                     None => (' ', pal.dim),
                 };
                 if run_style != Some(style) {
@@ -388,13 +351,13 @@ mod tests {
 
     /// The grid as text, for a failure message.
     fn sketch(ink: &Ink) -> String {
-        let g = Glyphs::for_markers(Markers::Arrows);
+        let g = &crate::config::glyphs::UNICODE;
         (0..ink.h)
             .map(|y| {
                 (0..ink.w)
                     .map(|x| match ink.text[y * ink.w + x] {
                         Some((c, _)) => c,
-                        None => g.lines[ink.bits[y * ink.w + x] as usize],
+                        None => g.map_lines[ink.bits[y * ink.w + x] as usize],
                     })
                     .collect::<String>()
             })

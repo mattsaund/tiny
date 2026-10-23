@@ -188,17 +188,21 @@ pub(super) fn folders_of(nodes: &[Node]) -> (Vec<usize>, Vec<String>) {
 /// files on screen.
 const MAX_LABEL: usize = 18;
 
-/// The name as it appears inside its box, shortened from the front if need be.
+/// The name as it appears inside its box, shortened from the front if need be,
+/// with `ellipsis` where it was cut.
 ///
 /// The front is what goes: `…ent/reducers.js` tells you more than
 /// `components/red…`, because the end of a file name is the part that differs.
-pub fn label_of(name: &str) -> String {
+/// However long the ellipsis, the label is never longer than [`MAX_LABEL`],
+/// so the glyph set cannot change how the boxes are laid out.
+pub fn label_of(name: &str, ellipsis: &str) -> String {
     let count = name.chars().count();
     if count <= MAX_LABEL {
         return name.to_string();
     }
-    let tail: String = name.chars().skip(count - (MAX_LABEL - 1)).collect();
-    format!("…{tail}")
+    let keep = MAX_LABEL.saturating_sub(ellipsis.chars().count());
+    let tail: String = name.chars().skip(count - keep).collect();
+    format!("{ellipsis}{tail}")
 }
 
 /// A box or a heading before the pane is applied. Rows are counted in `u32`
@@ -518,7 +522,7 @@ mod tests {
     fn a_box_is_wide_enough_for_the_name_it_holds() {
         let (_td, mut view) = fixture();
         for p in view.place(80, 30).boxes {
-            let name = label_of(&view.graph.nodes[p.node].name);
+            let name = &view.labels[p.node];
             assert_eq!(
                 p.width as usize,
                 name.chars().count() + 2,
@@ -722,11 +726,15 @@ mod tests {
 
     #[test]
     fn a_long_name_is_shortened_from_the_front() {
-        assert_eq!(label_of("short.md"), "short.md");
+        assert_eq!(label_of("short.md", "…"), "short.md");
         let long = "a-very-long-file-name-indeed.md";
-        let cut = label_of(long);
+        let cut = label_of(long, "…");
         assert_eq!(cut.chars().count(), MAX_LABEL);
         assert!(cut.starts_with('…'), "{cut}");
+        // Three dots in ASCII, and still no longer: the boxes do not move.
+        let cut = label_of(long, "...");
+        assert_eq!(cut.chars().count(), MAX_LABEL);
+        assert!(cut.starts_with("..."), "{cut}");
         assert!(
             cut.ends_with("indeed.md"),
             "the end is the part that differs"

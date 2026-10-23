@@ -51,7 +51,7 @@ impl App {
     /// keymap, swaps the syntax theme, and re-reads the tree if dotfile
     /// visibility changed.
     pub(super) fn apply_config(&mut self) {
-        self.palette = Palette::from_theme(&self.config.theme);
+        self.palette = Palette::from_theme(&self.config.theme).with_glyphs(self.config.glyphs);
         let (keymap, warning) = Keymap::new(&self.config.keys, self.keyboard);
         self.keymap = keymap;
         if let Some(w) = warning {
@@ -300,7 +300,7 @@ impl App {
         self.status = match clashes.first() {
             // Say what was taken away, rather than letting a key quietly stop
             // doing what it used to.
-            Some(other) => format!("{} = {spec} — taken from {}", action.name(), other.name()),
+            Some(other) => format!("{} = {spec}, taken from {}", action.name(), other.name()),
             None => format!("{} = {spec}", action.name()),
         };
     }

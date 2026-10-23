@@ -140,10 +140,10 @@ impl Renderer<'_> {
         }
     }
 
-    /// The `│ ` gutter that marks blockquote depth.
+    /// The gutter that marks blockquote depth, one bar per level.
     fn quote_prefix(&self) -> Vec<Span<'static>> {
         (0..self.quote_depth)
-            .map(|_| Span::styled("│ ".to_string(), self.pal.dim))
+            .map(|_| Span::styled(self.pal.glyphs.gutter, self.pal.dim))
             .collect()
     }
 
@@ -225,7 +225,7 @@ impl Renderer<'_> {
                 self.flush_inline(Vec::new(), Vec::new());
                 self.blank();
                 self.out.push(Line::from(Span::styled(
-                    "─".repeat(self.width),
+                    self.pal.glyphs.rule.repeat(self.width),
                     self.pal.dim,
                 )));
                 self.blank();
@@ -304,12 +304,9 @@ impl Renderer<'_> {
                         *n += 1;
                         s
                     }
-                    // Bullet glyph varies by depth so nesting reads at a glance.
-                    _ => match depth % 3 {
-                        0 => "• ".to_string(),
-                        1 => "◦ ".to_string(),
-                        _ => "▪ ".to_string(),
-                    },
+                    // The bullet changes with depth, so nesting reads at a
+                    // glance.
+                    _ => self.pal.glyphs.bullets[depth % 3].to_string(),
                 };
                 self.pending_item_prefix = Some(format!("{}{marker}", " ".repeat(depth * 2)));
             }
@@ -366,8 +363,8 @@ impl Renderer<'_> {
                 // H1 and H2 get a rule under them; deeper levels fade
                 // instead, so the page does not turn into lines.
                 let rule = match level {
-                    HeadingLevel::H1 => Some("━"),
-                    HeadingLevel::H2 => Some("─"),
+                    HeadingLevel::H1 => Some(self.pal.glyphs.rule_heavy),
+                    HeadingLevel::H2 => Some(self.pal.glyphs.rule),
                     _ => None,
                 };
                 if let Some(ch) = rule {
@@ -445,7 +442,7 @@ impl Renderer<'_> {
         let gutter = self.pal.dim;
         let avail = self.width.saturating_sub(2).max(1);
         for pieces in hl.highlight_snippet(body, syntax) {
-            let mut spans = vec![Span::styled("│ ".to_string(), gutter)];
+            let mut spans = vec![Span::styled(self.pal.glyphs.gutter, gutter)];
             let mut w = 0usize;
             for (style, text) in pieces {
                 // Code is not re-wrapped — indentation is meaning. Long lines
@@ -510,7 +507,7 @@ impl Renderer<'_> {
             #[allow(clippy::needless_range_loop)]
             for ci in 0..cols {
                 if ci > 0 {
-                    spans.push(Span::styled(" │ ".to_string(), dim));
+                    spans.push(Span::styled(self.pal.glyphs.column, dim));
                 }
                 let empty = Vec::new();
                 let cell = row.get(ci).unwrap_or(&empty);
@@ -537,11 +534,12 @@ impl Renderer<'_> {
             self.out.push(Line::from(spans));
             if ri == 0 {
                 let mut rule: Vec<Span<'static>> = self.quote_prefix();
+                let g = self.pal.glyphs;
                 let bar: String = widths
                     .iter()
-                    .map(|w| "─".repeat(*w))
+                    .map(|w| g.rule.repeat(*w))
                     .collect::<Vec<_>>()
-                    .join("─┼─");
+                    .join(g.cross);
                 rule.push(Span::styled(bar, dim));
                 self.out.push(Line::from(rule));
             }

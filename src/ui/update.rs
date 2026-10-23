@@ -29,6 +29,7 @@ pub(super) fn draw_update(f: &mut Frame, app: &App, area: Rect, version: &str) {
     f.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(pal.glyphs.border)
         .border_style(pal.border_focus)
         .title(Line::from(Span::styled(
             " Update ",

@@ -23,7 +23,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::parts::{centered, highlight_row, keep_visible, split_at_char};
 
@@ -81,6 +81,7 @@ pub(super) fn draw_keybinds(f: &mut Frame, app: &App, area: Rect, kb: &Keybinds)
     f.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(pal.glyphs.border)
         .border_style(pal.border_focus)
         .title(Line::from(Span::styled(
             " Keybinds ",
@@ -90,7 +91,7 @@ pub(super) fn draw_keybinds(f: &mut Frame, app: &App, area: Rect, kb: &Keybinds)
             if kb.capturing {
                 " press a key "
             } else {
-                " Enter change · Delete reset · Ctrl+S save · Esc back "
+                " Enter change | Delete reset | Ctrl+S save | Esc back "
             },
             pal.dim,
         )));
@@ -126,7 +127,7 @@ pub(super) fn draw_keybinds(f: &mut Frame, app: &App, area: Rect, kb: &Keybinds)
             BindRow::Action(_, action) => {
                 let changed = app.config.keys.contains_key(action.name());
                 let keys = if selected && kb.capturing {
-                    "…".to_string()
+                    pal.glyphs.ellipsis.to_string()
                 } else {
                     app.keymap.spec(*action)
                 };
@@ -188,13 +189,14 @@ pub(super) fn draw_settings(f: &mut Frame, app: &App, area: Rect, s: &Settings) 
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(pal.glyphs.border)
         .border_style(pal.border_focus)
         .title(Line::from(Span::styled(
             " Settings ",
             pal.text.add_modifier(Modifier::BOLD),
         )))
         .title_bottom(Line::from(Span::styled(
-            " Enter change · Ctrl+S save · Esc close ",
+            " Enter change | Ctrl+S save | Esc close ",
             pal.dim,
         )));
     let inner = block.inner(popup);
@@ -257,7 +259,10 @@ pub(super) fn draw_settings(f: &mut Frame, app: &App, area: Rect, s: &Settings) 
                 pal.text,
             ));
         } else {
-            spans.push(Span::styled(clip(&value, VALUE_WIDTH), pal.text));
+            spans.push(Span::styled(
+                clip(&value, VALUE_WIDTH, pal.glyphs.ellipsis),
+                pal.text,
+            ));
             if selected && !hint.is_empty() {
                 spans.push(Span::styled(format!("  {hint}"), pal.dim));
             }
@@ -272,20 +277,37 @@ pub(super) fn draw_settings(f: &mut Frame, app: &App, area: Rect, s: &Settings) 
 
 // ---- small helpers --------------------------------------------------------
 
-/// `text` in exactly `width` cells: padded when short, cut with `…` when long.
-fn clip(text: &str, width: usize) -> String {
-    if text.width() <= width {
-        return format!("{text:<width$}");
+/// `text` in exactly `width` columns: padded when short, cut with `ellipsis`
+/// when long.
+///
+/// Measured in display width throughout. `format!`'s own padding counts
+/// characters, which lines a value with wide characters in it up a column or
+/// two short of every other row.
+fn clip(text: &str, width: usize, ellipsis: &str) -> String {
+    let full = text.width();
+    if full <= width {
+        return format!("{text}{}", " ".repeat(width - full));
     }
-    let mut out = String::new();
+    // An ellipsis wider than the whole column would overflow it; show as much
+    // of the ellipsis as fits instead.
+    if ellipsis.width() >= width {
+        return ellipsis.chars().take(width).collect();
+    }
+    let room = width - ellipsis.width();
+    let mut out = String::with_capacity(width);
+    let mut used = 0;
     for c in text.chars() {
-        if out.width() + c.to_string().width() >= width {
+        let w = c.width().unwrap_or(0);
+        if used + w > room {
             break;
         }
         out.push(c);
+        used += w;
     }
-    out.push('…');
-    format!("{out:<width$}")
+    out.push_str(ellipsis);
+    used += ellipsis.width();
+    out.push_str(&" ".repeat(width - used));
+    out
 }
 
 #[cfg(test)]
@@ -294,14 +316,27 @@ mod tests {
 
     #[test]
     fn a_long_value_is_cut_to_its_column_and_says_so() {
-        let cut = clip("md markdown mdown mkd txt text rst org", 12);
+        let cut = clip("md markdown mdown mkd txt text rst org", 12, "…");
         assert_eq!(cut.width(), 12);
         assert!(cut.trim_end().ends_with('…'), "{cut:?}");
-        assert_eq!(clip("left", 6), "left  ", "a short one is padded");
+        assert_eq!(clip("left", 6, "…"), "left  ", "a short one is padded");
         assert_eq!(
-            clip("exactly", 7),
+            clip("exactly", 7, "…"),
             "exactly",
             "and one that fits is left alone"
         );
+        // Three dots in ASCII still fit the same column.
+        let cut = clip("md markdown mdown mkd txt text rst org", 12, "...");
+        assert_eq!(cut.width(), 12);
+        assert!(cut.trim_end().ends_with("..."), "{cut:?}");
+    }
+
+    #[test]
+    fn a_value_with_wide_characters_lines_up_with_the_rest() {
+        // Two characters, four columns: padded by width, not by count.
+        let padded = clip("日本", 6, "…");
+        assert_eq!(padded.width(), 6, "{padded:?}");
+        let cut = clip("日本語のファイル名", 7, "…");
+        assert_eq!(cut.width(), 7, "{cut:?}");
     }
 }

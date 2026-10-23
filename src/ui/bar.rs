@@ -59,14 +59,15 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
         String::new()
     };
 
+    // Pipes between the keys, the same as every other hint on screen.
     let hint = if command {
-        "  Tab or → complete · Enter run · Esc close"
+        "  Tab complete | Enter run | Esc close"
     } else if app.window == Window::Map {
-        "  narrowing the map · Enter keep · Esc clear"
+        "  narrowing the map | Enter keep | Esc clear"
     } else if b.results.is_empty() {
-        "  names and contents · * for a command · Esc close"
+        "  names and contents | * for a command | Esc close"
     } else {
-        "  up/down pick · Enter jump · Esc close"
+        "  up/down pick | Enter jump | Esc close"
     };
     // The real cursor lives in the editor, so the bar draws its own — on the
     // next character of the line, or on the first character being offered when
@@ -89,7 +90,7 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     // Read off the same plan Enter carries out, so the two cannot differ.
     let said = match &b.plan {
         Some(Ok(does)) => Some(Line::from(vec![
-            Span::styled("   ↳ ", pal.dim),
+            Span::styled(format!("   {} ", pal.glyphs.continued), pal.dim),
             Span::styled(does.clone(), pal.text),
         ])),
         Some(Err(why)) => Some(Line::from(vec![
@@ -126,7 +127,7 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         // only needs to say which two keys answer it.
         Mode::Confirm(c) if matches!(c.kind, ConfirmKind::Update(_)) => Line::from(vec![
             Span::styled(" ! ", pal.marker.add_modifier(Modifier::REVERSED)),
-            Span::styled(" y update now · n not now", pal.marker),
+            Span::styled(" y update now | n not now", pal.marker),
         ]),
         Mode::Confirm(c) => Line::from(vec![
             Span::styled(" ! ", pal.marker.add_modifier(Modifier::REVERSED)),
@@ -173,8 +174,8 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 // has to name the key that will actually work.
                 (_, Focus::Tree) => format!(
                     "/ search | {} git | {} map",
-                    key_name(app, Action::WindowSource),
-                    key_name(app, Action::WindowMap)
+                    app.key_name(Action::WindowSource),
+                    app.key_name(Action::WindowMap)
                 ),
                 (_, Focus::Editor) => "Ctrl+S save | Ctrl+Z undo | Ctrl+K cut | Esc back".into(),
             };
@@ -197,26 +198,6 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         }
     };
     f.render_widget(Paragraph::new(line).style(app.palette.text), area);
-}
-
-/// The first key bound to an action, written the way someone would say it.
-///
-/// Read from the live keymap, so a hint names what will actually work — after
-/// a rebinding, and on a terminal that was given a different keyboard.
-fn key_name(app: &App, action: Action) -> String {
-    let spec = app.keymap.spec(action);
-    let first = spec.split_whitespace().next().unwrap_or_default();
-    first
-        .split('+')
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("+")
 }
 
 /// The right-hand end of the status line: how much disk the thing under the

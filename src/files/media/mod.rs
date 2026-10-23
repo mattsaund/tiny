@@ -112,9 +112,9 @@ pub struct Info {
 }
 
 impl Info {
-    /// `1920 × 1080`, ready to print.
-    pub fn resolution(&self) -> Option<String> {
-        self.dimensions.map(|(w, h)| format!("{w} × {h}"))
+    /// `1920 × 1080`, ready to print, with `times` between the two.
+    pub fn resolution(&self, times: &str) -> Option<String> {
+        self.dimensions.map(|(w, h)| format!("{w} {times} {h}"))
     }
 
     /// `4:07`, or `1:02:07` once it passes an hour. Sub-second clips round up
@@ -408,7 +408,7 @@ mod tests {
         let p = write_png(td.path(), "grad.png", 640, 480);
         let info = probe(&p, Kind::Image);
         assert_eq!(info.dimensions, Some((640, 480)));
-        assert_eq!(info.resolution().as_deref(), Some("640 × 480"));
+        assert_eq!(info.resolution("×").as_deref(), Some("640 × 480"));
         assert_eq!(info.note, None, "nothing went wrong");
     }
 

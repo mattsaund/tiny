@@ -20,6 +20,8 @@
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};
 
+use super::glyphs::{GlyphSet, Glyphs};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Theme {
@@ -68,7 +70,8 @@ impl Default for Theme {
     }
 }
 
-/// A resolved theme: specs parsed once at startup so drawing never re-parses.
+/// A resolved theme: specs parsed once at startup so drawing never re-parses,
+/// and the characters to draw with.
 ///
 /// `Copy`, and deliberately so — `ui` passes it around by value on every line
 /// it draws, and threading a reference through would add lifetimes to most of
@@ -89,6 +92,11 @@ pub struct Palette {
     pub marker: Style,
     pub map_in: Style,
     pub map_out: Style,
+    /// The characters lines and markers are drawn with, from the `glyphs`
+    /// setting. Here because everything that draws is already handed the
+    /// palette, so a setting that changes how the screen is built reaches all
+    /// of it without a second thing to pass around.
+    pub glyphs: &'static Glyphs,
 }
 
 impl Palette {
@@ -106,7 +114,14 @@ impl Palette {
             marker: parse_style(&t.marker),
             map_in: parse_style(&t.map_in),
             map_out: parse_style(&t.map_out),
+            glyphs: GlyphSet::default().glyphs(),
         }
+    }
+
+    /// The same palette, drawing with `set`.
+    pub fn with_glyphs(mut self, set: GlyphSet) -> Self {
+        self.glyphs = set.glyphs();
+        self
     }
 }
 

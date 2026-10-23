@@ -53,13 +53,13 @@ fn borders_can_be_turned_off_for_a_quieter_screen() {
 #[test]
 fn tree_markers_can_be_plain_ascii() {
     let cfg = Config {
-        markers: Markers::Ascii,
+        glyphs: GlyphSet::Ascii,
         ..Config::default()
     };
     let (_td, mut app) = fixture_with(cfg);
     let out = joined(&mut app);
     assert!(!out.contains('▾'), "no geometric glyphs:\n{out}");
-    assert!(out.contains("- "), "an open folder uses a dash:\n{out}");
+    assert!(out.contains("v "), "an open folder points down:\n{out}");
 }
 
 #[test]

@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 
+use crate::config::keys::Action;
 use crate::text::editor::Editor;
 
 use super::App;
@@ -102,7 +103,11 @@ impl App {
             self.status = "cannot copy the project root".into();
             return;
         }
-        self.status = format!("copied {} — ^V to paste", row.name);
+        self.status = format!(
+            "copied {}, {} to paste",
+            row.name,
+            self.key_name(Action::Paste)
+        );
         self.clipboard = Some(row.path);
     }
 
@@ -116,7 +121,7 @@ impl App {
     /// useless.
     pub(super) fn paste_clipboard(&mut self) {
         let Some(src) = self.clipboard.clone() else {
-            self.status = "nothing copied — ^C first".into();
+            self.status = format!("nothing copied, {} first", self.key_name(Action::Copy));
             return;
         };
         let base = self.creation_base();
@@ -243,7 +248,7 @@ impl App {
         under.sort();
         let (saved, failed) = self.save_each(&under);
         self.status = match failed.first() {
-            Some(first) => format!("saved {saved}, {} failed — {first}", failed.len()),
+            Some(first) => format!("saved {saved}, {} failed: {first}", failed.len()),
             None if saved == 1 => format!("saved {}", display_name(&under[0])),
             None => format!("saved {saved} files in {}", row.name),
         };

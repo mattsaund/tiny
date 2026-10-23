@@ -25,8 +25,13 @@
 //! tiny.cursor() tiny.go(line, col)          -- counted from 1
 //! tiny.path()   tiny.root()                 -- the file, the project
 //! tiny.open(path)                           -- a file, in tiny
+//! tiny.set("glyphs", "ascii")               -- any setting, as *set
 //! tiny.version
 //! ```
+//!
+//! What a plugin asks for while it loads (at the top of its file, outside any
+//! function) is carried out once every plugin has loaded. That is where a
+//! plugin that sets up tiny's look calls `tiny.set`.
 //!
 //! A command a plugin adds cannot replace one tiny has: `*delete` always means
 //! tiny's own delete, whatever is installed.
@@ -87,6 +92,9 @@ pub enum Effect {
     Go(usize, usize),
     /// Open a file — a path from the project folder, or an absolute one.
     Open(String),
+    /// Change a setting, the way `*set` does: for this run, and written to
+    /// `tiny.conf` only if the settings area is saved.
+    Set(String, String),
 }
 
 /// What the plugins and tiny share while a plugin runs.
@@ -113,6 +121,9 @@ pub struct Plugins {
     shared: Rc<RefCell<Shared>>,
     /// The plugins that loaded, by name.
     pub loaded: Vec<String>,
+    /// What the plugins asked for while they loaded, in order, waiting for
+    /// `App` to carry it out. A plugin that failed to load asks for nothing.
+    pub startup: Vec<Effect>,
     /// One line for each that did not, saying why.
     pub errors: Vec<String>,
 }
@@ -143,8 +154,14 @@ impl Plugins {
                     })
                     .map_err(|e| first_line(&e))
                 });
+            // Taken either way, so one plugin's requests never leak into the
+            // next one's, and kept only from a plugin that loaded.
+            let asked = std::mem::take(&mut plugins.shared.borrow_mut().effects);
             match ran {
-                Ok(()) => plugins.loaded.push(name),
+                Ok(()) => {
+                    plugins.startup.extend(asked);
+                    plugins.loaded.push(name);
+                }
                 Err(e) => plugins.errors.push(format!("{name}: {e}")),
             }
         }
@@ -200,7 +217,7 @@ impl Plugins {
             lua.create_function(move |_, (event, f): (String, Function)| {
                 if !EVENTS.contains(&event.as_str()) {
                     return Err(mlua::Error::RuntimeError(format!(
-                        "there is no event called `{event}` — there is {}",
+                        "there is no event called `{event}`; there is {}",
                         EVENTS.join(" and ")
                     )));
                 }
@@ -287,6 +304,32 @@ impl Plugins {
             "open",
             lua.create_function(move |_, path: String| {
                 shared.borrow_mut().effects.push(Effect::Open(path));
+                Ok(())
+            })?,
+        )?;
+        let shared = self.shared.clone();
+        tiny.set(
+            "set",
+            lua.create_function(move |_, (name, value): (String, mlua::Value)| {
+                let value = match value {
+                    mlua::Value::String(s) => s.to_str()?.to_string(),
+                    mlua::Value::Integer(n) => n.to_string(),
+                    mlua::Value::Number(n) => n.to_string(),
+                    mlua::Value::Boolean(b) => b.to_string(),
+                    other => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "a setting is text, a number or true or false, not a {}",
+                            other.type_name()
+                        )));
+                    }
+                };
+                // Tried against a spare config first, so a misspelled name or
+                // a value that will not parse is an error at the line of Lua
+                // that wrote it, rather than a status message later.
+                crate::config::Config::default()
+                    .set(&name, &value)
+                    .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+                shared.borrow_mut().effects.push(Effect::Set(name, value));
                 Ok(())
             })?,
         )?;

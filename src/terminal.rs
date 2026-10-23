@@ -272,7 +272,7 @@ pub fn open_window(dir: &Path) -> Result<&'static str> {
         && env("TMUX").is_none()
     {
         return Err(anyhow!(
-            "no desktop to open a window on — run tiny inside tmux for that"
+            "no desktop to open a window on; run tiny inside tmux for that"
         ));
     }
     let script = std::env::temp_dir().join(format!(

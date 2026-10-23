@@ -82,7 +82,7 @@ impl App {
     /// `n`: not now. Not asked again this run; `*update` asks again on purpose.
     pub(super) fn decline_update(&mut self) {
         self.status = format!(
-            "staying on {} — *update installs it later",
+            "staying on {}, *update installs it later",
             update::running()
         );
     }

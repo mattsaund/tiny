@@ -125,7 +125,7 @@ pub(super) fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "not a text file — nothing to edit here",
+                    "not a text file, nothing to edit here",
                     pal.dim,
                 )),
             ];
@@ -178,7 +178,10 @@ fn draw_media(
             pal.text,
         )),
     ];
-    for fact in [info.resolution(), info.runtime()].into_iter().flatten() {
+    for fact in [info.resolution(pal.glyphs.times), info.runtime()]
+        .into_iter()
+        .flatten()
+    {
         lines.push(Line::from(Span::styled(fact, pal.text)));
     }
     lines.push(Line::from(Span::styled(readable_size(size), pal.text)));

@@ -120,7 +120,7 @@ impl App {
         let n = self.plugins.loaded.len();
         Ok(match (n, self.plugins.errors.is_empty()) {
             (0, true) => String::new(),
-            (n, true) => format!("refreshed — {n} plugin{}", plural(n)),
+            (n, true) => format!("refreshed, {n} plugin{}", plural(n)),
             // `load_plugins` has already named the one that failed.
             _ => String::new(),
         })

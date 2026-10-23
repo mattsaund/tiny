@@ -171,7 +171,7 @@ pub fn install(version: &str) -> Result<PathBuf> {
         return Ok(exe);
     }
     Err(anyhow!(
-        "the update did not install{} — {} is still {}",
+        "the update did not install{}; {} is still {}",
         if status.success() {
             ""
         } else {
@@ -228,7 +228,7 @@ pub fn relaunch(exe: &Path) -> Result<()> {
 
 /// `tiny --update`: the same check and the same install, without a window.
 pub fn run_cli() -> Result<()> {
-    println!("tiny {} — asking GitHub for a newer one", running());
+    println!("tiny {}, asking GitHub for a newer one", running());
     let Some(latest) = latest() else {
         println!("no release found (or GitHub could not be reached)");
         return Ok(());
