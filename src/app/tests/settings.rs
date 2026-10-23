@@ -325,3 +325,16 @@ fn the_settings_area_can_be_opened_by_command_too() {
     command(&mut app, "config");
     assert!(matches!(app.mode, Mode::Settings(_)));
 }
+
+#[test]
+fn a_syntax_theme_that_does_not_exist_says_so() {
+    let (_td, mut app) = fixture();
+    command(&mut app, "set syntax_theme solarized");
+    assert!(
+        app.status.contains("unknown syntax_theme `solarized`"),
+        "rather than quietly drawing in another one: {}",
+        app.status
+    );
+    command(&mut app, "set syntax_theme InspiredGitHub");
+    assert_eq!(app.highlighter.theme_name(), "InspiredGitHub");
+}

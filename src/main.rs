@@ -198,6 +198,7 @@ fn real_main() -> Result<()> {
     // The plugins, from the one real folder: the app is only ever told where
     // it is from here, so a test never loads anybody's plugins.
     app.plugins_dir = Config::plugins_dir();
+    app.config_path = Config::user_path();
     app.load_plugins();
     app.tell_plugins_what_is_open();
     // A release build asks, once, whether there is a newer one. A debug build

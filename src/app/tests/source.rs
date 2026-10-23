@@ -946,3 +946,141 @@ fn a_commit_message_longer_than_its_box_scrolls() {
     let out = screen(&mut app, 100, 24).join("\n");
     assert!(out.contains("xEND"), "{out}");
 }
+
+/// Run git in `dir` for a test, failing loudly.
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("git is installed");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn a_refresh_leaves_a_message_being_written_with_the_keyboard() {
+    // A push finishing refreshes the window. It used to put the keyboard
+    // back in the list, so the next Enter typed into the message staged a
+    // file instead.
+    let (_td, mut app) = repo();
+    source(&mut app);
+    cursor_on(&mut app, "README.md");
+    app.on_key(k(KeyCode::Enter));
+    press_commit(&mut app);
+    type_str(&mut app, "half a summary");
+    app.refresh_git();
+    assert_eq!(app.git.focus, GitFocus::Message);
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, "more");
+    let text = app.git.message.as_ref().unwrap().to_text();
+    assert!(text.contains("half a summary\nmore"), "{text:?}");
+}
+
+#[test]
+fn a_refresh_leaves_the_cursor_on_the_buttons() {
+    let (_td, mut app) = repo();
+    source(&mut app);
+    for _ in 0..10 {
+        app.on_key(k(KeyCode::Up));
+    }
+    assert_eq!(app.git.rows[app.git.selected], GitRow::Buttons);
+    app.refresh_git();
+    assert_eq!(app.git.rows[app.git.selected], GitRow::Buttons);
+}
+
+#[test]
+fn right_goes_back_into_a_message_that_was_put_down() {
+    let (_td, mut app) = repo();
+    source(&mut app);
+    cursor_on(&mut app, "README.md");
+    app.on_key(k(KeyCode::Enter));
+    press_commit(&mut app);
+    type_str(&mut app, "first");
+    app.on_key(k(KeyCode::Esc));
+    assert_eq!(app.git.focus, GitFocus::List);
+    let out = joined(&mut app);
+    assert!(out.contains("commit button sends it"), "{out}");
+
+    cursor_on(&mut app, "README.md");
+    app.on_key(k(KeyCode::Right));
+    assert_eq!(app.git.focus, GitFocus::Message, "{}", app.status);
+    type_str(&mut app, " and more");
+    let text = app.git.message.as_ref().unwrap().to_text();
+    assert_eq!(text.trim_end(), "first and more");
+}
+
+#[test]
+fn sync_pulls_and_then_pushes() {
+    let (td, mut app) = repo();
+    let remote = tempfile::tempdir().unwrap();
+    git_in(
+        remote.path(),
+        &["init", "--quiet", "--bare", "--initial-branch=main"],
+    );
+    let url = remote.path().to_string_lossy().into_owned();
+    git_in(td.path(), &["remote", "add", "origin", &url]);
+    git_in(td.path(), &["push", "--quiet", "-u", "origin", "main"]);
+    // Everything committed: a pull with a rebase refuses a tree with changes
+    // in it, and then, rightly, nothing is pushed.
+    git_in(td.path(), &["add", "--all"]);
+    git_in(td.path(), &["commit", "--quiet", "-m", "made here"]);
+
+    source(&mut app);
+    for _ in 0..10 {
+        app.on_key(k(KeyCode::Up));
+    }
+    let sync = GIT_BUTTONS
+        .iter()
+        .position(|b| b.label() == "sync")
+        .unwrap();
+    for _ in 0..sync {
+        app.on_key(k(KeyCode::Right));
+    }
+    app.on_key(k(KeyCode::Enter));
+    for _ in 0..500 {
+        if app.poll_git_job() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(app.git.job.is_none(), "the job finished: {}", app.status);
+    let log = git_in(remote.path(), &["log", "--oneline", "main"]);
+    assert!(
+        log.contains("made here"),
+        "the commit reached the remote: {log}, {}",
+        app.status
+    );
+}
+
+#[test]
+fn a_gap_cut_off_by_the_top_of_the_pane_still_says_how_long_it_is() {
+    let (td, _) = repo();
+    let at = td.path();
+    let start: String = (0..10).map(|n| format!("line {n}\n")).collect();
+    fs::write(at.join("grows.txt"), &start).unwrap();
+    git_in(at, &["add", "--all"]);
+    git_in(at, &["commit", "--quiet", "-m", "grows"]);
+    let added: String = (0..40).map(|n| format!("new {n}\n")).collect();
+    fs::write(
+        at.join("grows.txt"),
+        start.replacen("line 5\n", &format!("line 5\n{added}"), 1),
+    )
+    .unwrap();
+    let mut app = App::new(target(at, None), Config::default(), None).unwrap();
+    source(&mut app);
+    cursor_on(&mut app, "grows.txt");
+    joined(&mut app);
+
+    // Into the middle of the forty added lines.
+    app.git.diff_scroll = 20;
+    let out = joined(&mut app);
+    assert!(
+        out.contains("40 lines added"),
+        "the left column says what the gap is, even though it began above:\n{out}"
+    );
+}

@@ -17,9 +17,20 @@
 //! Every call sets `GIT_OPTIONAL_LOCKS=0`, which stops a mere status check from
 //! taking the index lock. Without it, a window left open on a repository would
 //! fight `git` in a terminal next door over a file neither of them is writing.
+//!
+//! # Git never asks the terminal anything
+//!
+//! tiny is drawing on that terminal, in raw mode. A password prompt would land
+//! in the middle of the picture, and the Enter typed to answer it arrives as a
+//! `\r` that git never takes for the end of a line, so the command would wait
+//! forever and every button after it would say it is still running. So git
+//! gets no input, `GIT_TERMINAL_PROMPT=0` stops it asking for a password, and
+//! ssh runs in batch mode (unless you have set your own ssh command). Anything
+//! that needed asking fails instead, with git's own message: set up a
+//! credential helper or an ssh agent, and the buttons work.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use anyhow::{Context, Result, anyhow};
@@ -30,9 +41,17 @@ use anyhow::{Context, Result, anyhow};
 /// complaints are already written for a person to read and anything we put in
 /// front of them would be in the way.
 pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    run(dir, args, &[])
+}
+
+/// [`git`], with `env` set as well.
+fn run(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
     let out = Command::new("git")
         .current_dir(dir)
+        .stdin(Stdio::null())
         .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .envs(env.iter().copied())
         .args(args)
         .output()
         .with_context(|| match args.first() {
@@ -72,18 +91,39 @@ impl std::fmt::Debug for Job {
 }
 
 impl Job {
-    /// Start `git args` in `dir` and return at once.
+    /// Start each of `steps` in turn in `dir`, on a thread, and return at
+    /// once. A step that fails stops the ones after it, and what the last one
+    /// to run said is the answer.
     ///
     /// The thread is detached deliberately: if tiny exits while a push is in
     /// flight, the push is already git's business and killing it half way
     /// through would be worse than letting it finish.
-    pub fn start(dir: &Path, what: &str, args: &[&str]) -> Self {
+    pub fn start(dir: &Path, what: &str, steps: &[&[&str]]) -> Self {
         let (tx, done) = channel();
         let dir: PathBuf = dir.to_path_buf();
-        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let steps: Vec<Vec<String>> = steps
+            .iter()
+            .map(|args| args.iter().map(|a| a.to_string()).collect())
+            .collect();
         std::thread::spawn(move || {
-            let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
-            let result = git(&dir, &borrowed).map_err(|e| format!("{e:#}"));
+            // Batch mode, so ssh fails rather than asking for a passphrase or
+            // about an unknown host on the terminal tiny is drawing on; but
+            // never over an ssh command someone has chosen for themselves.
+            let quiet = std::env::var_os("GIT_SSH_COMMAND").is_none()
+                && git(&dir, &["config", "--get", "core.sshCommand"]).is_err();
+            let env: &[(&str, &str)] = if quiet {
+                &[("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")]
+            } else {
+                &[]
+            };
+            let mut result = Ok(String::new());
+            for args in &steps {
+                let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+                result = run(&dir, &borrowed, env).map_err(|e| format!("{e:#}"));
+                if result.is_err() {
+                    break;
+                }
+            }
             // The receiver is gone if tiny has closed the window or quit, and
             // there is nothing to report to.
             let _ = tx.send(result);
@@ -126,7 +166,7 @@ mod tests {
     #[test]
     fn a_job_that_finishes_reports_what_it_did() {
         let td = tempfile::tempdir().unwrap();
-        let job = Job::start(td.path(), "asking", &["--version"]);
+        let job = Job::start(td.path(), "asking", &[&["--version"]]);
         // Give the thread a moment; this is the one place a test waits.
         let mut answer = None;
         for _ in 0..200 {

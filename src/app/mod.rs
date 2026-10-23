@@ -254,6 +254,10 @@ pub struct App {
     /// Doing what a plugin's event hook asked, during which no further
     /// events fire, see `App::plugin_event`.
     in_plugin_event: bool,
+    /// Where `Ctrl+S` in the settings writes `tiny.conf`. `None` until `main`
+    /// says, for the same reason as `plugins_dir`: a test that saves the
+    /// settings must never write over anybody's real config file.
+    pub config_path: Option<PathBuf>,
     /// Which pane had the keyboard when the tree was folded away, so unfolding
     /// puts it back and the key is a true toggle.
     focus_before_hide: Focus,
@@ -346,6 +350,7 @@ impl App {
             plugins: crate::plugins::Plugins::default(),
             plugins_dir: None,
             in_plugin_event: false,
+            config_path: None,
             focus_before_hide: Focus::Tree,
             status: warning
                 .or(keys_warning)

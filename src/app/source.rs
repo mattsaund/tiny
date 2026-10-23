@@ -22,6 +22,7 @@ use std::path::Path;
 
 use crate::git::{Change, Diff, Job, Repo, Status};
 use crate::text::editor::Editor;
+use crate::text::highlight::Resume;
 
 use super::App;
 use super::mode::Window;
@@ -62,19 +63,21 @@ impl Button {
         }
     }
 
-    /// What it says while it runs, and what git is actually asked to do.
+    /// What it says while it runs, and what git is actually asked to do, in
+    /// order.
     ///
     /// `sync` is the one that is not a single git command: pull with a rebase
     /// and then push, which is what "get level with the remote" means when the
-    /// answer must not be a merge commit nobody wrote.
-    fn command(self) -> Option<(&'static str, &'static [&'static str])> {
+    /// answer must not be a merge commit nobody wrote. The push only happens
+    /// if the pull worked.
+    fn command(self) -> Option<(&'static str, &'static [&'static [&'static str]])> {
         match self {
-            Button::Fetch => Some(("fetching", &["fetch", "--all", "--prune"])),
-            Button::Pull => Some(("pulling", &["pull", "--ff-only"])),
-            Button::Push => Some(("pushing", &["push"])),
-            Button::Sync => Some(("syncing", &["pull", "--rebase"])),
-            Button::Rebase => Some(("rebasing", &["rebase"])),
-            // A commit needs a message, which is typing, which is the bar.
+            Button::Fetch => Some(("fetching", &[&["fetch", "--all", "--prune"]])),
+            Button::Pull => Some(("pulling", &[&["pull", "--ff-only"]])),
+            Button::Push => Some(("pushing", &[&["push"]])),
+            Button::Sync => Some(("syncing", &[&["pull", "--rebase"], &["push"]])),
+            Button::Rebase => Some(("rebasing", &[&["rebase"]])),
+            // A commit needs a message, which is typing, which is the box.
             Button::Commit => None,
         }
     }
@@ -122,6 +125,12 @@ pub struct GitPane {
     pub button: usize,
     /// The before and after of the file under the cursor.
     pub diff: Diff,
+    /// Each side's text, as the highlighter takes it, made once per diff
+    /// rather than once per frame.
+    pub diff_text: [Vec<String>; 2],
+    /// Each side's saved highlighting, so scrolling down a long diff resumes
+    /// from where the last frame got to rather than parsing from the top.
+    pub diff_highlight: [Resume; 2],
     pub diff_scroll: usize,
     /// Which half has the arrow keys.
     pub focus: GitFocus,
@@ -160,13 +169,15 @@ impl GitPane {
         }
     }
 
-    /// Rebuild the list from the status, putting the cursor back on `keep` if
-    /// that file is still in it.
+    /// Rebuild the list from the status, putting the cursor back on what it
+    /// was on: the same file if it is still in the list, the buttons or a
+    /// section heading if it was on one.
     ///
     /// `keep` is read *before* the new status arrives and passed in, because
     /// after it arrives the old row indices point into the new lists and name
     /// whichever file has taken that place.
     fn rebuild(&mut self, keep: Option<String>) {
+        let was_on = self.rows.get(self.selected).cloned();
         self.rows = vec![Row::Buttons];
         for staged in [true, false] {
             let list = if staged {
@@ -197,6 +208,13 @@ impl GitPane {
                     }
                     _ => false,
                 })
+            })
+            .or_else(|| match &was_on {
+                // The buttons, or a heading, are rows that survive a refresh.
+                Some(row @ (Row::Buttons | Row::Header { .. })) => {
+                    self.rows.iter().position(|r| r == row)
+                }
+                _ => None,
             })
             .or_else(|| {
                 // Otherwise, the first file if there is one.
@@ -233,29 +251,66 @@ impl App {
             return;
         };
         // Read before the new status lands: see `rebuild`.
-        let keep = self.git.current().map(|(c, _)| c.path.clone());
+        let before = self
+            .git
+            .current()
+            .map(|(c, staged)| (c.path.clone(), staged));
         match repo.status() {
             Ok(status) => self.git.status = status,
             Err(e) => self.git.error = Some(format!("{e:#}")),
         }
         self.git.graph = repo.graph(GRAPH_ROWS).unwrap_or_default();
-        self.git.rebuild(keep);
-        self.sync_diff();
+        self.git
+            .rebuild(before.as_ref().map(|(path, _)| path.clone()));
+        let after = self
+            .git
+            .current()
+            .map(|(c, staged)| (c.path.clone(), staged));
+        if after == before {
+            // Still on the same change: a refresh, after a push finished say,
+            // leaves the reader where they were in it, and a message being
+            // written keeps the keyboard.
+            let (focus, scroll) = (self.git.focus, self.git.diff_scroll);
+            self.load_diff();
+            self.git.diff_scroll = scroll.min(self.git.diff.len().saturating_sub(1));
+            self.git.focus = match focus {
+                GitFocus::Diff if self.git.diff.is_empty() => GitFocus::List,
+                focus => focus,
+            };
+        } else {
+            self.sync_diff();
+        }
     }
 
-    /// Read the diff for whatever the cursor is on now.
+    /// Read the diff for whatever the cursor is on now, from the top, with
+    /// the keyboard in the list: a new file is a new thing to read. A message
+    /// being written keeps the keyboard, though.
     pub(super) fn sync_diff(&mut self) {
+        self.load_diff();
         self.git.diff_scroll = 0;
-        // A new file is a new thing to read, from the top and from the list.
-        self.git.focus = GitFocus::List;
-        let Some(repo) = self.git.repo.clone() else {
-            self.git.diff = Diff::default();
-            return;
+        if self.git.focus == GitFocus::Diff {
+            self.git.focus = GitFocus::List;
+        }
+    }
+
+    /// Read the diff of the change under the cursor, and nothing else.
+    fn load_diff(&mut self) {
+        self.git.diff = match (&self.git.repo, self.git.current()) {
+            (Some(repo), Some((change, staged))) => repo.diff(change, staged).unwrap_or_default(),
+            _ => Diff::default(),
         };
-        self.git.diff = match self.git.current() {
-            Some((change, staged)) => repo.diff(change, staged).unwrap_or_default(),
-            None => Diff::default(),
-        };
+        // What the diff is drawn from, and its saved highlighting, belong to
+        // the old diff.
+        self.git.diff_text = [
+            self.git
+                .diff
+                .before
+                .iter()
+                .map(|l| l.text.clone())
+                .collect(),
+            self.git.diff.after.iter().map(|l| l.text.clone()).collect(),
+        ];
+        self.git.diff_highlight = Default::default();
     }
 
     /// Move the cursor in the list, or scroll the diff, whichever half has
@@ -351,8 +406,16 @@ impl App {
             return;
         }
         if self.git.rows.get(self.git.selected) != Some(&Row::Buttons) {
-            // Into the diff, where up and down scroll both columns at once.
-            if delta > 0 && !self.git.diff.is_empty() {
+            if delta <= 0 {
+                return;
+            }
+            // Into what is drawn on the right: a message put down with Esc,
+            // to go on writing it, or else the diff, where up and down scroll
+            // both columns at once.
+            if self.git.message.is_some() {
+                self.git.focus = GitFocus::Message;
+                self.status = "back in the message: Ctrl+S commits, Esc puts it down".into();
+            } else if !self.git.diff.is_empty() {
                 self.git.focus = GitFocus::Diff;
                 self.status = "reading the change, left to come back".into();
             }
@@ -402,10 +465,10 @@ impl App {
     /// message is the one piece of writing in this window, and a one-line
     /// prompt is not where anyone wants to write the second paragraph of it.
     fn press_git_button(&mut self, button: Button) {
-        let Some((what, args)) = button.command() else {
+        let Some((what, steps)) = button.command() else {
             return self.commit_button();
         };
-        self.start_git_job(what, args);
+        self.start_git_job(what, steps);
     }
 
     /// The commit button: open the box, or send what is in it.
@@ -481,8 +544,9 @@ impl App {
         }
     }
 
-    /// Start a git command on a thread, unless one is already running.
-    pub(super) fn start_git_job(&mut self, what: &str, args: &[&str]) {
+    /// Start git commands on a thread, one after another, unless a job is
+    /// already running.
+    pub(super) fn start_git_job(&mut self, what: &str, steps: &[&[&str]]) {
         let Some(repo) = self.git.repo.clone() else {
             self.status = "not a git repository".into();
             return;
@@ -492,7 +556,7 @@ impl App {
             return;
         }
         self.status = format!("{what}{}", self.palette.glyphs.ellipsis);
-        self.git.job = Some(Job::start(&repo.root, what, args));
+        self.git.job = Some(Job::start(&repo.root, what, steps));
     }
 
     /// Collect a finished push or pull. Returns whether anything changed, for

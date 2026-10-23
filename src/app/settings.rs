@@ -57,17 +57,30 @@ impl App {
         if let Some(w) = warning {
             self.status = w;
         }
-        // Swap the theme in place. Rebuilding the highlighter here would
-        // re-unpack all 213 grammars, which is the startup cost paid again
-        // every time any setting changes, including ones it has nothing to
-        // do with, since this runs after every successful `Config::set`.
-        self.highlighter.set_theme(&self.config.syntax_theme);
-        // The saved states carry styles taken from the old theme.
-        self.highlight_cache.clear();
+        // Swap the theme in place, and only when it is a different one.
+        // Rebuilding the highlighter would re-unpack all 213 grammars, and
+        // even a swap re-reads the theme set; this runs after every change to
+        // any setting, a key, or a plugin's `tiny.set`.
+        if self.highlighter.theme_name() != self.config.syntax_theme {
+            if let Some(warning) = self.highlighter.set_theme(&self.config.syntax_theme) {
+                self.status = warning;
+            }
+            self.forget_highlighting();
+        }
         if self.tree.show_hidden() != self.config.show_hidden {
             self.tree.set_show_hidden(self.config.show_hidden);
             self.rebuild_rows();
         }
+    }
+
+    /// Throw away every saved highlighting state, in every pane: they carry
+    /// styles taken from the theme they were made under.
+    fn forget_highlighting(&mut self) {
+        self.highlight_cache.clear();
+        if let Some(split) = &mut self.split {
+            split.pinned.highlight.clear();
+        }
+        self.git.diff_highlight = Default::default();
     }
 
     pub(super) fn open_settings(&mut self) {
@@ -84,7 +97,8 @@ impl App {
     /// mode dispatch itself.
     ///
     /// `Ctrl+S` writes `tiny.conf` and works in both states, since finishing a
-    /// value and immediately saving is the obvious thing to want.
+    /// value and immediately saving is the obvious thing to want: in the
+    /// middle of a value it takes the value first, the way Enter does.
     pub(super) fn on_settings_key(&mut self, mut s: Settings, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let index = Config::settings_index();
@@ -97,7 +111,18 @@ impl App {
         if let Some(mut buf) = s.editing.take() {
             if ctrl {
                 if key.code == KeyCode::Char('s') {
-                    self.write_config();
+                    let key_name = setting_at(s.selected).map(|r| r.0).unwrap_or("");
+                    match self.config.set(key_name, &buf) {
+                        Ok(()) => {
+                            self.apply_config();
+                            self.write_config();
+                            self.mode = Mode::Settings(s);
+                            return;
+                        }
+                        // Nothing is written while the field holds something
+                        // that will not parse; it stays open to be fixed.
+                        Err(e) => self.status = format!("{e:#}"),
+                    }
                 }
                 s.editing = Some(buf);
                 self.mode = Mode::Settings(s);
@@ -132,6 +157,14 @@ impl App {
                 }
                 KeyCode::Right => {
                     s.cursor = (s.cursor + 1).min(buf.chars().count());
+                    s.editing = Some(buf);
+                }
+                KeyCode::Home => {
+                    s.cursor = 0;
+                    s.editing = Some(buf);
+                }
+                KeyCode::End => {
+                    s.cursor = buf.chars().count();
                     s.editing = Some(buf);
                 }
                 KeyCode::Char(c) => {
@@ -187,10 +220,14 @@ impl App {
     /// here: they edit the same file, and one of them writing a different
     /// message than the other would only suggest otherwise.
     fn write_config(&mut self) {
-        match self.config.save() {
-            Ok(p) => self.status = format!("wrote {}", p.display()),
-            Err(e) => self.status = format!("{e:#}"),
-        }
+        let Some(path) = self.config_path.clone() else {
+            self.status = "there is no config file to write".into();
+            return;
+        };
+        self.status = match self.config.save_to(&path) {
+            Ok(()) => format!("wrote {}", path.display()),
+            Err(e) => format!("{e:#}"),
+        };
     }
 
     /// Ask before throwing away every setting. There is no undo for this, and

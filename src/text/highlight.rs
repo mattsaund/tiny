@@ -73,6 +73,9 @@ pub type Piece = (Style, String);
 pub struct Highlighter {
     syntaxes: SyntaxSet,
     theme: Theme,
+    /// The name the theme was asked for by, so asking again for the same one
+    /// is known to change nothing.
+    theme_name: String,
 }
 
 /// Files past this many lines are shown unhighlighted: the parse cost stops
@@ -114,6 +117,17 @@ pub struct Resume {
     /// the start of the file, so index `i` is only present once every line
     /// above it has been parsed at least once.
     states: Vec<(ParseState, HighlightState)>,
+}
+
+impl std::fmt::Debug for Resume {
+    /// What the states are of and how many there are; the parser's own state
+    /// is not worth reading.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Resume")
+            .field("key", &self.key)
+            .field("states", &self.states.len())
+            .finish()
+    }
 }
 
 impl Resume {
@@ -162,9 +176,15 @@ impl Highlighter {
             Self {
                 syntaxes: two_face::syntax::extra_newlines(),
                 theme,
+                theme_name: name.to_string(),
             },
             warning,
         )
+    }
+
+    /// The name of the theme in use, as it was asked for.
+    pub fn theme_name(&self) -> &str {
+        &self.theme_name
     }
 
     /// Swap the theme in place, keeping the syntax set.
@@ -175,6 +195,7 @@ impl Highlighter {
     pub fn set_theme(&mut self, name: &str) -> Option<String> {
         let (theme, warning) = load_theme(name);
         self.theme = theme;
+        self.theme_name = name.to_string();
         warning
     }
 
