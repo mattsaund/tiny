@@ -26,6 +26,10 @@ anyhow 1.0.104
     license: MIT OR Apache-2.0, taken as MIT
     Copyright (c) David Tolnay
 
+arrayvec 0.7.8
+    license: MIT OR Apache-2.0, taken as MIT
+    Copyright (c) Ulrik Sverdrup "bluss" 2015-2023
+
 autocfg 1.5.1
     license: Apache-2.0 OR MIT, taken as MIT
     Copyright (c) 2018 Josh Stone
@@ -63,6 +67,10 @@ cc 1.4.4
 cfg-if 1.0.4
     license: MIT OR Apache-2.0, taken as MIT
     Copyright (c) 2014 Alex Crichton
+
+cfg_aliases 0.1.1, 0.2.2
+    license: MIT
+    Copyright (c) 2020 Katharos Technology
 
 compact_str 0.9.1
     license: MIT
@@ -116,6 +124,10 @@ document-features 0.2.12
     license: MIT OR Apache-2.0, taken as MIT
     Copyright (c) 2020 Olivier Goffart <ogoffart@sixtyfps.io>
 
+downcast-rs 1.2.1
+    license: MIT/Apache-2.0, taken as MIT
+    Copyright (c) 2020 Ashish Myles and contributors
+
 either 1.18.0
     license: MIT OR Apache-2.0, taken as MIT
     Copyright (c) 2015, the either developers
@@ -131,6 +143,10 @@ errno 0.3.14
 fancy-regex 0.11.0, 0.16.2
     license: MIT
     Copyright 2015 The Fancy Regex Authors.
+
+filedescriptor 0.8.3
+    license: MIT
+    Copyright (c) 2018 Wez Furlong
 
 find-msvc-tools 0.1.11
     license: MIT OR Apache-2.0, taken as MIT
@@ -185,6 +201,10 @@ kasuari 0.4.12
     license: MIT OR Apache-2.0, taken as MIT
     Copyright (c) 2016 Dylan Ede
     Copyright (c) 2024 Josh McKinney
+
+lazy_static 1.5.0
+    license: MIT OR Apache-2.0, taken as MIT
+    Copyright (c) 2010 The Rust Project Developers
 
 libc 0.2.189
     license: MIT OR Apache-2.0, taken as MIT
@@ -247,6 +267,10 @@ mlua-sys 0.12.0
     license: MIT
     Copyright (c) Aleksandr Orlenko
 
+nix 0.28.0, 0.29.0
+    license: MIT
+    Copyright (c) 2015 Carl Lerche + nix-rust Authors
+
 num-conv 0.2.2
     license: MIT OR Apache-2.0, taken as MIT
     Copyright (c) Jacob Pratt
@@ -274,6 +298,10 @@ parking_lot_core 0.9.12
 pkg-config 0.3.34
     license: MIT OR Apache-2.0, taken as MIT
     Copyright (c) 2014 Alex Crichton
+
+portable-pty 0.9.0
+    license: MIT
+    Copyright (c) 2018 Wez Furlong
 
 powerfmt 0.2.0
     license: MIT OR Apache-2.0, taken as MIT
@@ -379,6 +407,18 @@ serde_json 1.0.151
 serde_spanned 1.1.1
     license: MIT OR Apache-2.0, taken as MIT
     Copyright (c) Individual contributors
+
+serial2 0.2.38
+    license: BSD-2-Clause OR Apache-2.0, taken as BSD-2-Clause
+    Copyright (c) 2021, Maarten de Vries <maarten@de-vri.es>
+
+shared_library 0.1.9
+    license: Apache-2.0/MIT, taken as MIT
+    Copyright (c) 2017 Pierre Krieger
+
+shell-words 1.1.1
+    license: MIT/Apache-2.0, taken as MIT
+    Copyright (c) 2016 Tomasz Miąsko
 
 shlex 2.0.1
     license: MIT OR Apache-2.0, taken as MIT
@@ -515,6 +555,14 @@ unicode-width 0.2.2
     license: MIT OR Apache-2.0, taken as MIT
     Copyright (c) 2015 The Rust Project Developers
 
+vt100 0.18.1
+    license: MIT
+    Copyright (c) 2016 Jesse Luehrs
+
+vte 0.15.0
+    license: Apache-2.0 OR MIT, taken as MIT
+    Copyright (c) 2016 Joe Wilm
+
 walkdir 2.5.0
     license: Unlicense/MIT, taken as MIT
     Copyright (c) 2015 Andrew Gallant
@@ -542,6 +590,10 @@ windows-sys 0.61.2
 winnow 1.0.4
     license: MIT
     Copyright (c) the winnow developers
+
+winreg 0.10.1
+    license: MIT
+    Copyright (c) 2015 Igor Shaula
 
 zmij 1.0.23
     license: MIT
@@ -578,6 +630,33 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---- BSD-2-Clause (serial2) ------------------------------------------------
+
+BSD 2-Clause License
+
+Copyright (c) 2021, Maarten de Vries <maarten@de-vri.es>
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---- BSL-1.0 (ryu) ---------------------------------------------------------
 

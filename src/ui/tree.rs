@@ -17,7 +17,7 @@ use ratatui::widgets::Paragraph;
 use super::parts::{highlight_row, keep_visible, mark_query, pane};
 
 use crate::app::{App, Bar, Focus, Mode};
-use crate::text::search::{HitKind, Matcher};
+use crate::text::search::{self, HitKind, Matcher};
 use crate::text::tabs;
 
 /// The project tree. Draws a window of `app.rows` around the cursor.
@@ -163,10 +163,12 @@ pub(super) fn draw_results(f: &mut Frame, app: &App, area: Rect, b: &Bar) {
     }
 
     if b.results.is_empty() {
-        let msg = if b.searched {
-            "no matches"
-        } else {
-            "type to search names and contents"
+        // A query between slashes is a pattern, and one that does not read
+        // as one finds nothing for a reason worth saying.
+        let msg = match search::pattern_error(&b.input) {
+            Some(why) => why,
+            None if b.searched => "no matches".into(),
+            None => "type to search names and contents, or /a pattern/".into(),
         };
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(msg, pal.dim))),

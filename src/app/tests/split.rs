@@ -1,10 +1,11 @@
-//! Two panes side by side: `Ctrl+W`, and `Shift+Left` and `Shift+Right`.
+//! The panes: `Ctrl+W`, `*split`, `*split down` and `*close`.
 //!
-//! What the split promises, each checked on its own: the panes are equal, a
-//! new one starts on the file you are in, each keeps its own place in a file
-//! they share, the browser opens into the pane with the keyboard, and closing
-//! keeps the pane you are in. And what it must not do: take `Shift` with an
-//! arrow away from the editor when there is only one pane.
+//! What the panes promise, each checked on its own: they share the space
+//! equally, a new one starts on the file you are in, each keeps its own
+//! place in a file they share, the browser opens into the pane with the
+//! keyboard, and closing hands the keyboard to the pane before. And what
+//! they must not do: take `Shift` with an arrow away from the editor, where
+//! it selects.
 
 use super::*;
 
@@ -45,7 +46,7 @@ fn ctrl_w_opens_a_second_pane_on_the_file_you_are_in() {
         "the same file, twice"
     );
     assert!(
-        app.status.contains("Shift+Left") && app.status.contains("Ctrl+W"),
+        app.status.contains("Ctrl+W"),
         "and says how to use it: {}",
         app.status
     );
@@ -82,13 +83,13 @@ fn each_pane_keeps_its_own_place_in_a_file_they_share() {
     let line = |app: &App| app.buffers[&path].cursor_line;
     assert_eq!(line(&app), 30, "the right pane moved");
 
-    app.on_key(shift(KeyCode::Left));
+    app.on_key(ctrl('w'));
     assert_eq!(
         line(&app),
         0,
         "the left pane is still where the split began"
     );
-    app.on_key(shift(KeyCode::Right));
+    app.on_key(ctrl('w'));
     assert_eq!(line(&app), 30, "and the right one where it was left");
 }
 
@@ -104,7 +105,7 @@ fn the_browser_opens_files_into_the_pane_with_the_keyboard() {
         "the right pane took the new file; the left kept its own"
     );
 
-    app.on_key(shift(KeyCode::Left));
+    app.on_key(ctrl('w'));
     select(&mut app, "main.py");
     assert_eq!(
         titles(&mut app),
@@ -129,35 +130,87 @@ fn an_edit_shows_in_both_panes_when_they_share_a_file() {
 }
 
 #[test]
-fn ctrl_w_again_keeps_the_pane_you_are_in() {
+fn closing_a_pane_hands_the_keyboard_to_the_one_before() {
     let (_td, mut app) = fixture();
     select(&mut app, "README.md");
     app.on_key(ctrl('w'));
     select(&mut app, "design.md");
-    app.on_key(shift(KeyCode::Left));
-    app.on_key(ctrl('w'));
+    command(&mut app, "close");
 
     assert!(app.split.is_none());
     assert_eq!(
         titles(&mut app),
         ["README.md"],
-        "the left pane, which had the keyboard"
+        "the left pane, which was before it"
     );
+    command(&mut app, "close");
+    assert!(app.status.contains("only one"), "{}", app.status);
 }
 
 #[test]
-fn with_one_pane_shift_and_an_arrow_still_move_the_cursor() {
+fn shift_and_an_arrow_select_whatever_the_panes() {
     let (td, mut app) = fixture();
     select(&mut app, "README.md");
     app.on_key(k(KeyCode::Enter));
+    app.on_key(ctrl('w'));
     app.on_key(k(KeyCode::End));
     let at = app.buffers[&td.path().join("README.md")].cursor_col;
     app.on_key(shift(KeyCode::Left));
+    let ed = &app.buffers[&td.path().join("README.md")];
+    assert_eq!(ed.cursor_col, at - 1, "the cursor moved");
+    assert!(ed.has_selection(), "selecting as it went");
+}
+
+#[test]
+fn panes_go_side_by_side_and_stacked_in_any_mix() {
+    let (_td, mut app) = fixture();
+    select(&mut app, "README.md");
+    screen(&mut app, 160, 40);
+    command(&mut app, "split");
+    screen(&mut app, 160, 40);
+    command(&mut app, "split down");
+    screen(&mut app, 160, 40);
+    assert_eq!(app.pane_count(), 3);
+    let live = app.last_live_area;
+    let mut pinned: Vec<_> = app.last_pinned.iter().map(|(_, r)| *r).collect();
+    pinned.sort_by_key(|r| (r.x, r.y));
+    let (left, above) = (pinned[0], pinned[1]);
     assert_eq!(
-        app.buffers[&td.path().join("README.md")].cursor_col,
-        at - 1,
-        "no second pane to go to, so the key does what it always did"
+        left.height,
+        live.height + above.height,
+        "the first, full height"
     );
+    assert_eq!(above.x, live.x, "the other two, one above the other");
+    assert!(above.y < live.y, "the new one below, with the keyboard");
+
+    // Ctrl+W goes round all three, in reading order.
+    let mut seen = vec![live];
+    for _ in 0..3 {
+        app.on_key(ctrl('w'));
+        screen(&mut app, 160, 40);
+        seen.push(app.last_live_area);
+    }
+    assert_eq!(seen[0], seen[3], "and back to the start");
+    assert_eq!(seen[1], left, "from the last to the first");
+    assert_eq!(seen[2], above);
+}
+
+#[test]
+fn three_side_by_side_are_thirds() {
+    let (_td, mut app) = fixture();
+    app.on_key(ctrl('t'));
+    select(&mut app, "README.md");
+    screen(&mut app, 150, 30);
+    command(&mut app, "split");
+    screen(&mut app, 150, 30);
+    command(&mut app, "split");
+    screen(&mut app, 150, 30);
+    let mut widths: Vec<u16> = app.last_pinned.iter().map(|(_, r)| r.width).collect();
+    widths.push(app.last_live_area.width);
+    assert_eq!(widths, [50, 50, 50], "{widths:?}");
+    command(&mut app, "close others");
+    assert!(app.split.is_none());
+    assert_eq!(app.pane_count(), 1);
 }
 
 #[test]
@@ -188,16 +241,16 @@ fn the_wheel_over_the_other_pane_scrolls_that_pane() {
     app.on_key(k(KeyCode::Enter));
     app.on_key(ctrl('w'));
     screen(&mut app, 120, 20);
-    let (x0, _) = app.last_pinned_cols.expect("two panes on screen");
+    let (_, pinned) = *app.last_pinned.first().expect("two panes on screen");
 
     for _ in 0..5 {
-        app.on_scroll(true, x0 + 2);
+        app.on_scroll(true, pinned.x + 2, pinned.y + 2);
     }
     assert_eq!(
         app.buffers[&path].cursor_line, 0,
         "the pane with the keyboard did not move"
     );
-    app.on_key(shift(KeyCode::Left));
+    app.on_key(ctrl('w'));
     assert_eq!(app.buffers[&path].cursor_line, 5, "the other one did");
 }
 
@@ -215,7 +268,7 @@ fn the_other_pane_follows_its_file_through_a_rename() {
         ["INTRO.md", "INTRO.md"],
         "the left pane shows the file under its new name"
     );
-    app.on_key(shift(KeyCode::Left));
+    app.on_key(ctrl('w'));
     assert!(
         app.active_buffer().is_some(),
         "and taking it up gives the keyboard a file to type into"
@@ -235,21 +288,18 @@ fn the_other_pane_says_when_its_file_is_deleted() {
 }
 
 #[test]
-fn the_split_keys_leave_the_panes_alone_from_another_window() {
+fn ctrl_w_from_another_window_brings_you_back_to_the_panes() {
     let (_td, mut app) = fixture();
     select(&mut app, "README.md");
     app.on_key(ctrl('w'));
+    let live = app.split.as_ref().unwrap().live;
     app.on_key(ctrl('g'));
-    app.on_key(shift(KeyCode::Left));
-    assert!(
-        app.split.as_ref().unwrap().live_right,
-        "the panes are not on screen, so the keyboard stays where it was"
-    );
     app.on_key(ctrl('w'));
     assert_eq!(app.window, Window::Main, "Ctrl+W brings you to them");
-    assert!(
-        app.split.is_some(),
-        "rather than closing one you cannot see"
+    assert_eq!(
+        app.split.as_ref().unwrap().live,
+        live,
+        "the panes were not on screen, so the keyboard stays where it was"
     );
 }
 
@@ -264,7 +314,7 @@ fn moving_to_the_other_pane_ends_a_run_of_typing() {
         app.on_key(k(KeyCode::Down));
     }
     type_str(&mut app, "foo");
-    app.on_key(shift(KeyCode::Left));
+    app.on_key(ctrl('w'));
     type_str(&mut app, "bar");
     app.on_key(ctrl('z'));
     let text = app.buffers[&path].to_text();
@@ -285,7 +335,9 @@ fn the_other_pane_reads_its_file_again_after_a_rename() {
     app.on_key(k(KeyCode::Esc));
     select(&mut app, "README.md");
     command(&mut app, "rename notes.txt to notes.rs");
-    let pinned = &app.split.as_ref().expect("still two panes").pinned.preview;
+    let pinned = &app.split.as_ref().expect("still two panes").pinned[0]
+        .1
+        .preview;
     assert!(
         matches!(pinned, Preview::Buffer { path, kind: TextKind::Code } if path.ends_with("notes.rs")),
         "{pinned:?}"

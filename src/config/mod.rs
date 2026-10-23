@@ -68,6 +68,39 @@ pub enum Side {
     Right,
 }
 
+/// The shape of the cursor in a file, from the `cursor_shape` setting.
+/// `Default` is whatever the terminal is set to draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorShape {
+    #[default]
+    Default,
+    Block,
+    Bar,
+    Underline,
+}
+
+impl CursorShape {
+    pub fn name(self) -> &'static str {
+        match self {
+            CursorShape::Default => "default",
+            CursorShape::Block => "block",
+            CursorShape::Bar => "bar",
+            CursorShape::Underline => "underline",
+        }
+    }
+
+    fn parse(v: &str) -> Option<Self> {
+        Some(match v.to_ascii_lowercase().as_str() {
+            "default" | "auto" => CursorShape::Default,
+            "block" | "box" => CursorShape::Block,
+            "bar" | "line" | "beam" | "ibeam" => CursorShape::Bar,
+            "underline" | "underscore" => CursorShape::Underline,
+            _ => return None,
+        })
+    }
+}
+
 /// Every setting, in one flat struct.
 ///
 /// `#[serde(default)]` is what makes a partial file legal: any key the user
@@ -110,6 +143,10 @@ pub struct Config {
     pub colors: Colors,
     /// Draw boxes around the panes. Off gives a plainer, quieter screen.
     pub borders: bool,
+    /// The shape of the cursor in a file, and whether it blinks. Left at
+    /// `default`, the terminal draws its own, as it is set to.
+    pub cursor_shape: CursorShape,
+    pub cursor_blink: bool,
 
     /// syntect theme used for code. Chrome stays monochrome regardless.
     pub syntax_theme: String,
@@ -138,6 +175,8 @@ impl Default for Config {
             glyphs: GlyphSet::Auto,
             colors: Colors::Auto,
             borders: true,
+            cursor_shape: CursorShape::Default,
+            cursor_blink: true,
             syntax_theme: "base16-ocean.dark".into(),
             search_ignore: [".git", "target", "node_modules", ".venv", "__pycache__"]
                 .iter()
@@ -265,6 +304,8 @@ impl Config {
             ("glyphs", "auto, unicode, console or ascii"),
             ("colors", "auto, truecolor, 256, 16 or none"),
             ("borders", ""),
+            ("cursor_shape", "default, block, bar or underline"),
+            ("cursor_blink", "when it has a shape"),
             ("syntax_theme", "colors for code"),
             ("prose_extensions", "wrapped, not code"),
             ("search_ignore", "folders search skips"),
@@ -304,6 +345,8 @@ impl Config {
             "glyphs" => self.glyphs.name().into(),
             "colors" => self.colors.name().into(),
             "borders" => self.borders.to_string(),
+            "cursor_shape" => self.cursor_shape.name().into(),
+            "cursor_blink" => self.cursor_blink.to_string(),
             "syntax_theme" => self.syntax_theme.clone(),
             "prose_extensions" => self.prose_extensions.join(" "),
             "search_ignore" => self.search_ignore.join(" "),
@@ -362,6 +405,12 @@ impl Config {
                     .ok_or_else(|| anyhow!("colors must be auto, truecolor, 256, 16 or none"))?
             }
             "borders" => self.borders = parse_bool(v)?,
+            "cursor_shape" | "cursor" => {
+                self.cursor_shape = CursorShape::parse(v).ok_or_else(|| {
+                    anyhow!("cursor_shape must be default, block, bar or underline")
+                })?
+            }
+            "cursor_blink" => self.cursor_blink = parse_bool(v)?,
             "syntax_theme" => {
                 crate::text::highlight::check_theme(v).map_err(|e| anyhow!(e))?;
                 self.syntax_theme = v.to_string();

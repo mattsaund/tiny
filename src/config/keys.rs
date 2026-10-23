@@ -80,13 +80,26 @@
 //! - **Home, End, Page Up, Page Down** as the *only* way to do something. A
 //!   MacBook has none of them, and Terminal uses all four to scroll its own
 //!   history unless Shift is held. Each is bound beside a chord that works
-//!   everywhere: `Ctrl+A` and `Ctrl+E` for the ends of a line, the way every
-//!   Mac text field and every shell already does it, and `Ctrl+U` and `Ctrl+D`
-//!   for a screen at a time, the way `less` and `vim` do.
+//!   everywhere: `Ctrl+E` for the end of a line, the way every Mac text field
+//!   and every shell already does it, and `Ctrl+U` and `Ctrl+D` for a screen
+//!   at a time, the way `less` and `vim` do. The start of a line is the one
+//!   exception: its chord, `Ctrl+A`, selects everything, as it does in every
+//!   other editor, and Terminal sends Home when Shift is held with it.
 //!
 //! The one key a terminal takes for itself is `Ctrl+V`: Windows Terminal and
 //! the Windows console paste on it before the program sees anything. That is
-//! the whole of [`Keyboard`]: on Windows, file paste ships on `Ctrl+P`.
+//! the whole of [`Keyboard`]: on Windows, file paste ships on `Ctrl+P`. Text
+//! paste in a file keeps `Ctrl+V` there too, because what the terminal does
+//! with the key is paste, which tiny takes as it arrives.
+//!
+//! # Shift selects
+//!
+//! In a file, Shift with any key that moves the cursor selects as it moves:
+//! `Shift+Right`, `Shift+End`, `Ctrl+Shift+Left`. That is not a binding of
+//! its own for each, but a rule (see `app::input`): take the Shift away, and
+//! if what is left moves the cursor, it moves it selecting. So a movement
+//! rebound to another key selects with Shift and that key, with nothing more
+//! to set.
 //!
 //! # Option and the arrows
 //!
@@ -213,11 +226,8 @@ pub enum Action {
     WindowMap,
     ToggleTreePane,
     NewWindow,
-    Split,
-    PaneLeft,
-    PaneRight,
-    Copy,
-    Paste,
+    NextPane,
+    Terminal,
     // In every pane that has them. One name for one movement, however many
     // panes can make that movement, see the module docs.
     Up,
@@ -235,9 +245,15 @@ pub enum Action {
     Wider,
     // The browser alone
     TreeHidden,
+    Copy,
+    Paste,
     // A file being edited
     EditorUndo,
     EditorRedo,
+    EditorCopy,
+    EditorCut,
+    EditorPaste,
+    EditorSelectAll,
     EditorDeleteLine,
     EditorWordLeft,
     EditorWordRight,
@@ -245,6 +261,11 @@ pub enum Action {
     EditorLineEnd,
     EditorDocStart,
     EditorDocEnd,
+    EditorNextMatch,
+    EditorCursorUp,
+    EditorCursorDown,
+    MacroRecord,
+    MacroPlay,
     // The project map
     MapNext,
     MapPrevious,
@@ -326,44 +347,23 @@ const TABLE: &[Row] = &[
         "another tiny, here",
         "ctrl+n",
     ),
-    // Ctrl with a letter and Shift with an arrow are the two kinds of chord
-    // every terminal sends the same way, on every system and every keyboard
-    // layout. `Ctrl+\`, the usual split key elsewhere, is neither: it reaches
-    // tiny as `Ctrl+4` on Linux and macOS, and needs AltGr on many layouts.
+    // Ctrl with a letter is the chord every terminal sends the same way, on
+    // every system and every keyboard layout. `Ctrl+\\`, the usual split key
+    // elsewhere, is not: it reaches tiny as `Ctrl+4` on Linux and macOS, and
+    // needs AltGr on many layouts.
     (
-        Action::Split,
+        Action::NextPane,
         &[Context::Global],
-        "split",
-        "two panes, and back",
+        "next_pane",
+        "or split one in two",
         "ctrl+w",
     ),
     (
-        Action::PaneLeft,
+        Action::Terminal,
         &[Context::Global],
-        "pane_left",
-        "with two panes",
-        "shift+left",
-    ),
-    (
-        Action::PaneRight,
-        &[Context::Global],
-        "pane_right",
-        "with two panes",
-        "shift+right",
-    ),
-    (
-        Action::Copy,
-        &[Context::Global],
-        "copy",
-        "this file",
-        "ctrl+c",
-    ),
-    (
-        Action::Paste,
-        &[Context::Global],
-        "paste",
-        "into this folder",
-        "ctrl+v",
+        "terminal",
+        "show or hide",
+        "ctrl+o",
     ),
     (Action::Up, PANES, "up", "", "up i"),
     (Action::Down, PANES, "down", "", "down k"),
@@ -457,6 +457,20 @@ const TABLE: &[Row] = &[
         ".",
     ),
     (
+        Action::Copy,
+        &[Context::Tree],
+        "copy",
+        "this file",
+        "ctrl+c",
+    ),
+    (
+        Action::Paste,
+        &[Context::Tree],
+        "paste",
+        "into this folder",
+        "ctrl+v",
+    ),
+    (
         Action::EditorUndo,
         &[Context::Editor],
         "editor.undo",
@@ -469,6 +483,34 @@ const TABLE: &[Row] = &[
         "editor.redo",
         "",
         "ctrl+y",
+    ),
+    (
+        Action::EditorCopy,
+        &[Context::Editor],
+        "editor.copy",
+        "or the line",
+        "ctrl+c",
+    ),
+    (
+        Action::EditorCut,
+        &[Context::Editor],
+        "editor.cut",
+        "or the line",
+        "ctrl+x",
+    ),
+    (
+        Action::EditorPaste,
+        &[Context::Editor],
+        "editor.paste",
+        "",
+        "ctrl+v",
+    ),
+    (
+        Action::EditorSelectAll,
+        &[Context::Editor],
+        "editor.select_all",
+        "",
+        "ctrl+a",
     ),
     (
         Action::EditorDeleteLine,
@@ -496,7 +538,7 @@ const TABLE: &[Row] = &[
         &[Context::Editor],
         "editor.line_start",
         "",
-        "home ctrl+a",
+        "home",
     ),
     (
         Action::EditorLineEnd,
@@ -518,6 +560,42 @@ const TABLE: &[Row] = &[
         "editor.end",
         "last line",
         "ctrl+end",
+    ),
+    // micro's keys for more cursors, so a hand that knows them knows these.
+    (
+        Action::EditorNextMatch,
+        &[Context::Editor],
+        "editor.next_match",
+        "selected, with a cursor",
+        "alt+n",
+    ),
+    (
+        Action::EditorCursorUp,
+        &[Context::Editor],
+        "editor.cursor_up",
+        "another cursor",
+        "alt+shift+up",
+    ),
+    (
+        Action::EditorCursorDown,
+        &[Context::Editor],
+        "editor.cursor_down",
+        "another cursor",
+        "alt+shift+down",
+    ),
+    (
+        Action::MacroRecord,
+        &[Context::Editor],
+        "macro.record",
+        "start or stop",
+        "ctrl+r",
+    ),
+    (
+        Action::MacroPlay,
+        &[Context::Editor],
+        "macro.play",
+        "what was recorded",
+        "ctrl+p",
     ),
     (Action::MapNext, &[Context::Map], "map.next", "", "tab"),
     (
@@ -569,6 +647,7 @@ const RENAMED: &[(&str, &str)] = &[
     ("tree.open", "open"),
     ("map.open", "open"),
     ("source.stage", "open"),
+    ("split", "next_pane"),
 ];
 
 /// Names an older tiny wrote for actions that are gone. Each was a second way
@@ -582,6 +661,8 @@ const RETIRED: &[&str] = &[
     "jump_down",
     "tree.preview",
     "tree.quit",
+    "pane_left",
+    "pane_right",
 ];
 
 /// Bring a `[keys]` section written by an older tiny up to date, in place.
@@ -879,10 +960,15 @@ mod tests {
     }
 
     /// The keys a stock macOS Terminal never delivers, or delivers as
-    /// something else, see the module docs.
+    /// something else, see the module docs. Option with a letter types a
+    /// symbol there, unless Option is set to send Meta.
     fn reaches_a_mac(key: &str) -> bool {
         let key = key.to_ascii_lowercase();
-        let dead = key.starts_with('f') && key.len() > 1 && key[1..].parse::<u8>().is_ok()
+        let alt_letter = key
+            .strip_prefix("alt+")
+            .is_some_and(|rest| rest.chars().count() == 1 || rest.starts_with("shift+"));
+        let dead = alt_letter
+            || key.starts_with('f') && key.len() > 1 && key[1..].parse::<u8>().is_ok()
             || matches!(
                 key.as_str(),
                 "home" | "end" | "pageup" | "pagedown" | "ctrl+space"
@@ -901,7 +987,18 @@ mod tests {
         // The two ends of a document are the honest exception: there is no
         // chord a stock Mac terminal sends for them that is not already
         // something else. A screen at a time, and `*line`, cover the distance.
-        let allowed = [Action::EditorDocStart, Action::EditorDocEnd];
+        // The start of a line is another: its chord selects everything, and
+        // Terminal sends Home with Shift held. And the keys for more cursors
+        // are micro's, which on a Mac need Option set to send Meta: every
+        // Ctrl and letter is something already.
+        let allowed = [
+            Action::EditorDocStart,
+            Action::EditorDocEnd,
+            Action::EditorLineStart,
+            Action::EditorNextMatch,
+            Action::EditorCursorUp,
+            Action::EditorCursorDown,
+        ];
         for action in Action::all().filter(|a| !allowed.contains(a)) {
             let spec = map.spec(action);
             assert!(
@@ -945,6 +1042,15 @@ mod tests {
                 &ev(KeyCode::Char('p'), KeyModifiers::CONTROL)
             ),
             Some(Action::Paste)
+        );
+        // In a file the key plays what was recorded: file paste is the
+        // browser's alone, and text paste arrives from the terminal.
+        assert_eq!(
+            windows.resolve_while_typing(
+                Context::Editor,
+                &ev(KeyCode::Char('p'), KeyModifiers::CONTROL)
+            ),
+            Some(Action::MacroPlay)
         );
         // Everything else is the same keyboard either way.
         for action in Action::all().filter(|a| *a != Action::Paste) {
@@ -1002,6 +1108,17 @@ mod tests {
             ),
             Some(Action::WindowMap)
         );
+    }
+
+    #[test]
+    fn the_pane_keys_of_0_5_are_carried_over_or_dropped() {
+        let mut keys = BTreeMap::new();
+        keys.insert("split".to_string(), "ctrl+o".to_string());
+        keys.insert("pane_left".to_string(), "alt+left".to_string());
+        keys.insert("pane_right".to_string(), "alt+right".to_string());
+        migrate(&mut keys);
+        assert_eq!(keys.get("next_pane").map(String::as_str), Some("ctrl+o"));
+        assert_eq!(keys.len(), 1, "moving left and right is Ctrl+W now");
     }
 
     #[test]

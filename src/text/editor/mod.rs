@@ -25,21 +25,34 @@
 //! here but two cells on screen, which is why `ui` recomputes widths with
 //! `unicode-width` when it places the terminal cursor.
 //!
+//! # Selections and more than one cursor
+//!
+//! The cursor fields are the main cursor, and `anchor` is where its
+//! selection began, when there is one. `others` are the rest, each with a
+//! selection of its own, for typing in several places at once. Every edit
+//! goes through one change, [`Editor::splice`] (this range, replaced with
+//! this text), made at each cursor in turn from the last one up, and it
+//! carries every other cursor along with the text around it. That is the
+//! whole of how several cursors stay right: no edit has to know about them.
+//!
 //! # What this module is not
 //!
-//! No selection, no clipboard, no search-within-buffer, no syntax awareness.
-//! Highlighting is applied at draw time by `highlight`, and project-wide
-//! find-replace lives in `search` and works on files rather than buffers.
+//! No clipboard (`app` keeps it, and the system's), no search-within-buffer,
+//! no syntax awareness. Highlighting is applied at draw time by `highlight`,
+//! and project-wide find-replace lives in `search` and works on files rather
+//! than buffers.
 //!
 //! # Where things are
 //!
 //! - here: the buffer, the cursor, and reading and writing the file.
 //! - [`edit`]: everything that changes the text.
 //! - [`motion`]: everything that moves the cursor.
+//! - [`select`]: selections, and the cursors beyond the first.
 //! - [`undo`]: the history, and the grouping that makes it usable.
 
 mod edit;
 mod motion;
+mod select;
 mod undo;
 
 use std::fs;
@@ -60,6 +73,28 @@ impl LineEnding {
             LineEnding::Crlf => "\r\n",
         }
     }
+}
+
+/// A place in the text: a line, and a character index into it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct Pos {
+    pub line: usize,
+    pub col: usize,
+}
+
+impl Pos {
+    pub fn new(line: usize, col: usize) -> Self {
+        Self { line, col }
+    }
+}
+
+/// One of the cursors beyond the main one: where it is, the column it is
+/// trying to get back to, and where its selection began, if it has one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cursor {
+    pub pos: Pos,
+    pub goal: usize,
+    pub anchor: Option<Pos>,
 }
 
 /// What kind of edit produced the current undo group. Consecutive edits of the
@@ -85,15 +120,19 @@ pub(super) struct Snapshot {
     lines: Vec<String>,
     cursor_line: usize,
     cursor_col: usize,
+    /// The selection and the other cursors, so an undo puts back what was
+    /// selected along with the text that was.
+    anchor: Option<Pos>,
+    others: Vec<Cursor>,
 }
 
 /// Where one view of a file is: the cursor, the column it is trying to get
-/// back to, and the scroll.
+/// back to, the scroll, and what is selected, with any other cursors.
 ///
 /// A buffer keeps one of these as its own fields, which is all a file needs
 /// until it is open in two panes at once. Then each pane keeps a view, and
 /// the pane with the keyboard lends its view to the buffer while it types.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct View {
     pub cursor_line: usize,
     pub cursor_col: usize,
@@ -101,6 +140,8 @@ pub struct View {
     pub scroll_y: usize,
     pub scroll_rows: usize,
     pub scroll_x: usize,
+    anchor: Option<Pos>,
+    others: Vec<Cursor>,
 }
 
 /// One open file. `App` keeps a map of these keyed by path, so a buffer with
@@ -152,6 +193,11 @@ pub struct Editor {
     /// Lowest line index changed since [`Editor::take_touched`] last ran, or
     /// `usize::MAX` when nothing has. See that method for who asks.
     touched: usize,
+    /// Where the main cursor's selection began, when there is one: it runs
+    /// from here to the cursor, whichever way round they are.
+    pub anchor: Option<Pos>,
+    /// Every cursor but the main one, see the module docs.
+    pub others: Vec<Cursor>,
 }
 
 impl Editor {
@@ -213,6 +259,8 @@ impl Editor {
             redo: Vec::new(),
             last_edit: None,
             touched: usize::MAX,
+            anchor: None,
+            others: Vec::new(),
         }
     }
 
@@ -336,12 +384,14 @@ impl Editor {
             scroll_y: self.scroll_y,
             scroll_rows: self.scroll_rows,
             scroll_x: self.scroll_x,
+            anchor: self.anchor,
+            others: self.others.clone(),
         }
     }
 
     /// Whether this buffer is exactly what opening its file again would
-    /// make: no edits, nothing to undo or redo, and the cursor and the
-    /// scroll still at the top. Letting go of one loses nothing.
+    /// make: no edits, nothing to undo or redo, one cursor and the scroll
+    /// still at the top. Letting go of one loses nothing.
     pub fn untouched(&self) -> bool {
         !self.dirty
             && self.undo.is_empty()
@@ -349,9 +399,16 @@ impl Editor {
             && self.view() == View::default()
     }
 
+    /// The main cursor, as a place in the text.
+    pub fn pos(&self) -> Pos {
+        Pos::new(self.cursor_line, self.cursor_col)
+    }
+
     /// Take up `view`, kept inside the file as it is now: another pane may
     /// have deleted the very lines it was on.
     pub fn set_view(&mut self, view: View) {
+        self.anchor = view.anchor;
+        self.others = view.others;
         self.cursor_line = view.cursor_line;
         self.cursor_col = view.cursor_col;
         self.goal_col = view.goal_col;
@@ -361,14 +418,31 @@ impl Editor {
         self.scroll_rows = view.scroll_rows;
     }
 
-    /// Clamp the cursor into the buffer. Called after every mutation so no
-    /// operation can leave the cursor pointing past the end of a line.
+    /// Clamp every cursor, and every end of a selection, into the buffer.
+    /// Called after every mutation so no operation can leave a cursor
+    /// pointing past the end of a line.
     pub(super) fn clamp_cursor(&mut self) {
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
-        self.cursor_line = self.cursor_line.min(self.lines.len() - 1);
-        self.cursor_col = self.cursor_col.min(self.line_chars(self.cursor_line));
+        self.set_pos(self.clamped(self.pos()));
+        self.anchor = self.anchor.map(|a| self.clamped(a));
+        let others: Vec<Cursor> = self
+            .others
+            .iter()
+            .map(|c| Cursor {
+                pos: self.clamped(c.pos),
+                anchor: c.anchor.map(|a| self.clamped(a)),
+                ..*c
+            })
+            .collect();
+        self.others = others;
+    }
+
+    /// `p`, moved back inside the text if it is past the end of it.
+    fn clamped(&self, p: Pos) -> Pos {
+        let line = p.line.min(self.lines.len() - 1);
+        Pos::new(line, p.col.min(self.line_chars(line)))
     }
 }
 

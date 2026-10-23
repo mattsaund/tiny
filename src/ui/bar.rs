@@ -138,10 +138,17 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             let hints = hints(app);
             let pos = position_readout(app);
             let room = area.width as usize;
-            let mut spans = vec![
-                Span::styled(format!(" {}", app.status), pal.text),
-                Span::raw("   "),
-            ];
+            let mut spans = Vec::new();
+            // Keys going into a recording is worth knowing about whatever the
+            // status line has to say, so it gets a mark of its own.
+            if app.is_recording() {
+                spans.push(Span::styled(
+                    " REC ",
+                    pal.marker.add_modifier(Modifier::REVERSED),
+                ));
+            }
+            spans.push(Span::styled(format!(" {}", app.status), pal.text));
+            spans.push(Span::raw("   "));
             let used: usize = spans.iter().map(|s| s.content.width()).sum();
             // The first hints are the keys most worth knowing, and half of
             // one is none, so whole ones come off the end until the rest fit.
@@ -211,6 +218,20 @@ fn hints(app: &App) -> String {
             ),
             // Only with a file to type into: the keyboard can be in a pane
             // showing a picture or a folder, where none of these do anything.
+            // With text selected, or more cursors than one, what is worth
+            // knowing is what can be done with them, and how to let go.
+            Focus::Editor
+                if app
+                    .active_buffer()
+                    .is_some_and(|ed| ed.has_selection() || !ed.others.is_empty()) =>
+            {
+                format!(
+                    "{} copy | {} cut | {} let go",
+                    key(Action::EditorCopy),
+                    key(Action::EditorCut),
+                    key(Action::Back)
+                )
+            }
             Focus::Editor if app.active_buffer().is_some() => format!(
                 "{} save | {} undo | {} delete line | {} back",
                 key(Action::Save),
@@ -219,6 +240,8 @@ fn hints(app: &App) -> String {
                 key(Action::Back)
             ),
             Focus::Editor => format!("{} back", key(Action::Back)),
+            // Every other key is the shell's, so this is the one worth saying.
+            Focus::Terminal => format!("{} back | exit closes it", key(Action::Terminal)),
         },
     }
 }
@@ -248,7 +271,16 @@ fn position_readout(app: &App) -> String {
                 // on the outside where it will not be read as part of the one
                 // that is moving.
                 Some(ed) if app.focus == Focus::Editor => {
-                    format!("{}:{}  {size} ", ed.cursor_line + 1, ed.cursor_col + 1)
+                    let many = match (ed.others.len(), ed.selected_count()) {
+                        (0, 0) => String::new(),
+                        (0, n) => format!("{n} selected  "),
+                        (n, _) => format!("{} cursors  ", n + 1),
+                    };
+                    format!(
+                        "{many}{}:{}  {size} ",
+                        ed.cursor_line + 1,
+                        ed.cursor_col + 1
+                    )
                 }
                 _ => format!("{size} "),
             }

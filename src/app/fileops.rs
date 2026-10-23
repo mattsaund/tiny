@@ -463,28 +463,25 @@ impl App {
         {
             *copied = moved(copied, from, target);
         }
-        let pinned_moved = self
-            .split
-            .as_ref()
-            .is_some_and(|s| s.pinned.preview.path().is_some_and(|p| p.starts_with(from)));
+        // The panes without the keyboard follow their files, and read them
+        // again under the new name, which can make one another kind of file:
+        // notes.txt renamed notes.rs is code now.
+        let mut moved_files = Vec::new();
         if let Some(split) = &mut self.split {
-            split.pinned.preview.moved(from, target);
+            for (id, pane) in &mut split.pinned {
+                if pane.preview.path().is_some_and(|p| p.starts_with(from)) {
+                    pane.preview.moved(from, target);
+                    if let Some(path) = pane.preview.path().filter(|p| p.is_file()) {
+                        moved_files.push((*id, path.to_path_buf()));
+                    }
+                }
+            }
         }
-        // The pane without the keyboard reads its file again under the new
-        // name, which can make it another kind of file: notes.txt renamed
-        // notes.rs is code now.
-        if pinned_moved
-            && let Some(path) = self
-                .split
-                .as_ref()
-                .and_then(|s| s.pinned.preview.path())
-                .filter(|p| p.is_file())
-                .map(Path::to_path_buf)
-        {
+        for (id, path) in moved_files {
             let fresh = self.load_file_preview(&path);
-            if let Some(split) = &mut self.split {
-                split.pinned.preview = fresh;
-                split.pinned.highlight = Default::default();
+            if let Some(pane) = self.pinned_mut(id) {
+                pane.preview = fresh;
+                pane.highlight = Default::default();
             }
         }
         self.tree.refresh_all();

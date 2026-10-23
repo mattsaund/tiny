@@ -40,19 +40,24 @@ pub(super) fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
     draw_pane(f, app, area, focused);
 }
 
-/// The pane without the keyboard, while the main window is split.
+/// A pane without the keyboard, while the main window is split.
 ///
 /// Drawn by lending it the live pane's state for the length of one draw (the
 /// preview, its scroll, the highlighting, and the buffer's view when it shows
 /// a file) and taking all of it back after. So it is drawn by exactly the code
 /// that draws the live pane, looking as that pane would without the keyboard,
 /// and nothing about the live pane is touched by it. See `app::split`.
-pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, area: Rect) {
+///
+/// `again` says whether a pane drawn after this one shows the same file, and
+/// so needs to know what was edited in it as well.
+pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, id: usize, area: Rect, again: bool) {
     let Some(mut split) = app.split.take() else {
         return;
     };
-    let pane = &mut split.pinned;
-    let same_file = pane.preview.path().is_some() && pane.preview.path() == app.preview.path();
+    let Some((_, pane)) = split.pinned.iter_mut().find(|(p, _)| *p == id) else {
+        app.split = Some(split);
+        return;
+    };
     std::mem::swap(&mut app.preview, &mut pane.preview);
     std::mem::swap(&mut app.preview_scroll, &mut pane.preview_scroll);
     std::mem::swap(&mut app.highlight_cache, &mut pane.highlight);
@@ -65,7 +70,7 @@ pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, area: Rect) {
     let mut mark = None;
     if let Some(ed) = path.as_ref().and_then(|p| app.buffers.get_mut(p)) {
         mark = ed.touched();
-        if let Some(view) = pane.view {
+        if let Some(view) = pane.view.take() {
             lent = Some(ed.view());
             ed.set_view(view);
         }
@@ -78,9 +83,9 @@ pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, area: Rect) {
             pane.view = Some(ed.view());
             ed.set_view(own);
         }
-        // Drawing took the mark of what changed; the live pane draws this
-        // same file next and needs it too.
-        if same_file {
+        // Drawing took the mark of what changed; a pane drawn after this one
+        // showing the same file needs it too.
+        if again {
             ed.retouch(mark);
         }
     }

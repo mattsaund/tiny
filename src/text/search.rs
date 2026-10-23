@@ -1,10 +1,19 @@
 //! Project-wide search, and the find-replace behind `*replace`.
 //!
-//! Deliberately plain: a literal substring scan over the text files in the
-//! project, no index and no regex. For a folder of notes and source that is
-//! fast enough to run on every keystroke, and it never goes stale. The files
-//! are read on every core at once, in batches taken in order, so a big
-//! project costs its disk rather than one core's patience, see [`search`].
+//! Deliberately plain: a scan over the text files in the project, no index.
+//! For a folder of notes and source that is fast enough to run on every
+//! keystroke, and it never goes stale. The files are read on every core at
+//! once, in batches taken in order, so a big project costs its disk rather
+//! than one core's patience, see [`search`].
+//!
+//! # Patterns
+//!
+//! A query is text, found as it is written, unless it is written between
+//! slashes: `/fn \w+/` is a regular expression, in the syntax of the `regex`
+//! crate, which is Perl's without the parts that can take forever. Smart case
+//! holds for a pattern too, and `(?i)` or `(?-i)` at its start overrules it.
+//! A replace takes one the same way, and its replacement can use what the
+//! pattern captured: `*replace /(\w+)@old/ with $1@new`.
 //!
 //! Matching is smart-cased: an all-lowercase query ignores case, a query
 //! with any capital in it does not. Replace is always case-sensitive, because
@@ -25,10 +34,10 @@
 //!
 //! `widget` matches `Widget`; `Widget` matches only `Widget`. This applies to
 //! [`search`] and to the `goto` commands. [`count`] and [`replace_all`] are
-//! always case-sensitive and always literal (a [`Needle`]) because a
-//! find-replace that guessed at your intent across a whole project would be a
-//! very bad afternoon. The one thing a needle may ask for is whole words, so
-//! that replacing `hi` leaves `this` alone.
+//! always case-sensitive (a [`Needle`]) because a find-replace that guessed
+//! at your intent across a whole project would be a very bad afternoon. What
+//! a needle may ask for is whole words, so that replacing `hi` leaves `this`
+//! alone, or a pattern, which says exactly what it means.
 //!
 //! # Shared with the graph
 //!
@@ -49,6 +58,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use regex::{Regex, RegexBuilder};
 
 use crate::parallel::{self, par_map};
 
@@ -264,23 +274,62 @@ pub fn lines_in(text: &str, at: impl Fn(&str) -> Option<usize>) -> Vec<(usize, u
 /// word, and leaves `this` and `high` alone. A needle that starts or ends with
 /// something that is not a letter, digit or underscore only checks the ends
 /// that are, so `replace -> with →` still finds every arrow.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Written between slashes, it is a pattern instead, see the module docs.
+#[derive(Debug, Clone)]
 pub struct Needle {
+    /// As it was written, slashes and all.
     pub text: String,
     pub whole_words: bool,
+    /// The pattern, when `text` is one.
+    pattern: Option<Regex>,
 }
+
+/// Two needles are the same when they were written the same: a pattern is
+/// made from its text and nothing else.
+impl PartialEq for Needle {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text && self.whole_words == other.whole_words
+    }
+}
+
+impl Eq for Needle {}
 
 impl Needle {
     pub fn new(text: &str, whole_words: bool) -> Self {
         Self {
             text: text.to_string(),
             whole_words,
+            pattern: None,
         }
     }
 
+    /// The needle `text` says it is: a pattern when it is written between
+    /// slashes, otherwise the text itself. A pattern that does not read as
+    /// one says why.
+    pub fn read(text: &str, whole_words: bool) -> Result<Self, String> {
+        let Some(inner) = pattern_of(text) else {
+            return Ok(Self::new(text, whole_words));
+        };
+        let pattern = Regex::new(inner).map_err(|e| not_a_pattern(&e))?;
+        Ok(Self {
+            text: text.to_string(),
+            whole_words: false,
+            pattern: Some(pattern),
+        })
+    }
+
     /// Byte ranges of every place it sits in `hay`, left to right, never
-    /// overlapping.
+    /// overlapping. A pattern that matches nothing at all, as `/x*/` does
+    /// between every two characters, is not a place.
     pub fn find_in(&self, hay: &str) -> Vec<Range<usize>> {
+        if let Some(pattern) = &self.pattern {
+            return pattern
+                .find_iter(hay)
+                .filter(|m| !m.is_empty())
+                .map(|m| m.range())
+                .collect();
+        }
         if self.text.is_empty() {
             return Vec::new();
         }
@@ -290,14 +339,22 @@ impl Needle {
             .collect()
     }
 
-    /// `hay` with every occurrence replaced, and how many there were.
+    /// `hay` with every occurrence replaced, and how many there were. For a
+    /// pattern, `$1` and `${name}` in `with` are what it captured.
     pub fn replace_in(&self, hay: &str, with: &str) -> (String, usize) {
         let found = self.find_in(hay);
         let mut out = String::with_capacity(hay.len());
         let mut from = 0;
         for r in &found {
             out.push_str(&hay[from..r.start]);
-            out.push_str(with);
+            match self
+                .pattern
+                .as_ref()
+                .and_then(|p| p.captures_at(hay, r.start))
+            {
+                Some(caps) => caps.expand(with, &mut out),
+                None => out.push_str(with),
+            }
             from = r.end;
         }
         out.push_str(&hay[from..]);
@@ -425,6 +482,9 @@ pub fn replace_all(
 /// Smart case is decided once, at construction, from the query, see
 /// [`folds_case`].
 pub struct Matcher {
+    /// The pattern, when the query is one, see the module docs. Everything
+    /// below is for plain text, and unused then.
+    pattern: Option<Regex>,
     /// The query as characters, for the case-folding scan.
     pat: Vec<char>,
     /// The query as it was written, for the case-sensitive path, where
@@ -445,7 +505,17 @@ impl Matcher {
         if query.is_empty() {
             return None;
         }
+        let pattern = match pattern_of(query) {
+            Some(inner) => Some(
+                RegexBuilder::new(inner)
+                    .case_insensitive(folds_case(&without_escapes(inner)))
+                    .build()
+                    .ok()?,
+            ),
+            None => None,
+        };
         Some(Self {
+            pattern,
             pat: query.chars().collect(),
             needle: query.to_string(),
             ascii: query.is_ascii().then(|| query.as_bytes().to_vec()),
@@ -459,6 +529,9 @@ impl Matcher {
     /// `Editor` cursor column, see the note on character indexing in
     /// `editor`.
     pub fn first(&self, haystack: &str) -> Option<usize> {
+        if self.pattern.is_some() {
+            return self.all(haystack).first().map(|&(start, _)| start);
+        }
         let byte = match self.folded_ascii(haystack) {
             _ if !self.fold => haystack.find(&self.needle)?,
             Some(pat) => find_folded(haystack.as_bytes(), pat)?,
@@ -490,6 +563,9 @@ impl Matcher {
     /// without the counting of characters up to it. How a whole file is
     /// checked before it is split into lines.
     pub fn is_in(&self, haystack: &str) -> bool {
+        if let Some(pattern) = &self.pattern {
+            return pattern.is_match(haystack);
+        }
         match self.folded_ascii(haystack) {
             _ if !self.fold => haystack.contains(&self.needle),
             Some(pat) => find_folded(haystack.as_bytes(), pat).is_some(),
@@ -519,6 +595,20 @@ impl Matcher {
     /// these become highlights on screen, and two overlapping highlights are
     /// one highlight to look at.
     pub fn all(&self, haystack: &str) -> Vec<(usize, usize)> {
+        if let Some(pattern) = &self.pattern {
+            // Bytes to characters, counted as the matches come, left to right.
+            let (mut byte, mut chars) = (0, 0);
+            let mut to_chars = |at: usize| {
+                chars += haystack[byte..at].chars().count();
+                byte = at;
+                chars
+            };
+            return pattern
+                .find_iter(haystack)
+                .filter(|m| !m.is_empty())
+                .map(|m| (to_chars(m.start()), to_chars(m.end())))
+                .collect();
+        }
         let mut out = Vec::new();
         let mut resume = 0;
         for (i, (byte, _)) in haystack.char_indices().enumerate() {
@@ -556,6 +646,48 @@ fn find_folded(hay: &[u8], pat: &[u8]) -> Option<usize> {
     (0..=last).find(|&i| {
         (hay[i] == first || hay[i] == upper) && hay[i + 1..i + pat.len()].eq_ignore_ascii_case(rest)
     })
+}
+
+/// What is between the slashes of a query written as a pattern, `/like
+/// this/`, see the module docs.
+pub fn pattern_of(query: &str) -> Option<&str> {
+    let inner = query.trim().strip_prefix('/')?.strip_suffix('/')?;
+    (!inner.is_empty()).then_some(inner)
+}
+
+/// Why a query written as a pattern is not one, or `None` when it is, or is
+/// not written as one at all.
+pub fn pattern_error(query: &str) -> Option<String> {
+    Regex::new(pattern_of(query)?)
+        .err()
+        .map(|e| not_a_pattern(&e))
+}
+
+/// A pattern's error, in a line: the regex crate's own message draws the
+/// pattern with a caret under the trouble, over several lines.
+fn not_a_pattern(e: &regex::Error) -> String {
+    let said = e.to_string();
+    let why = said
+        .lines()
+        .rev()
+        .find_map(|l| l.trim().strip_prefix("error: "))
+        .unwrap_or("it does not read as one");
+    format!("not a pattern: {why}")
+}
+
+/// A pattern without its escapes, for smart case to look at: `\W` and `\S`
+/// are kinds of character, not capitals.
+fn without_escapes(pattern: &str) -> String {
+    let mut out = String::new();
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            chars.next();
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Whether a query is matched case-insensitively.
@@ -680,6 +812,52 @@ pub fn walk_up_to(root: &Path, opts: &Opts, max_files: usize) -> Walked {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_query_between_slashes_is_a_pattern() {
+        let m = Matcher::new("/fn \\w+/").unwrap();
+        assert_eq!(m.first("pub fn main() {}"), Some(4));
+        assert_eq!(m.all("fn a(); fn bc();"), [(0, 4), (8, 13)]);
+        assert!(!m.is_in("function"), "a space is a space");
+        // Smart case, escapes aside: `\w` is no capital.
+        assert!(Matcher::new("/FN/").unwrap().first("fn").is_none());
+        assert!(Matcher::new("/fn/").unwrap().first("FN").is_some());
+        // Columns are characters, wherever the match is.
+        assert_eq!(
+            Matcher::new("/b+/").unwrap().all("ébb é b"),
+            [(1, 3), (6, 7)]
+        );
+    }
+
+    #[test]
+    fn a_pattern_that_does_not_read_says_why_and_finds_nothing() {
+        assert!(Matcher::new("/(oops/").is_none());
+        let why = pattern_error("/(oops/").unwrap();
+        assert!(
+            why.starts_with("not a pattern: ") && !why.contains('\n'),
+            "{why}"
+        );
+        assert_eq!(pattern_error("/fine/"), None);
+        assert_eq!(pattern_error("plain"), None);
+        assert_eq!(pattern_of("/"), None, "a slash alone is a slash");
+        assert_eq!(pattern_of("//"), None);
+    }
+
+    #[test]
+    fn a_pattern_replaces_with_what_it_captured() {
+        let n = Needle::read("/(\\w+)@old/", true).unwrap();
+        let (out, count) = n.replace_in("ann@old, bob@old, cy@new", "$1@new");
+        assert_eq!(out, "ann@new, bob@new, cy@new");
+        assert_eq!(count, 2);
+        assert!(
+            Needle::read("/x*/", false)
+                .unwrap()
+                .find_in("abc")
+                .is_empty(),
+            "nothing is not a place"
+        );
+        assert!(Needle::read("/[/", false).is_err());
+    }
 
     fn fixture() -> tempfile::TempDir {
         let td = tempfile::tempdir().unwrap();

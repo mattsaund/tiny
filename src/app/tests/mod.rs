@@ -41,6 +41,7 @@ mod settings;
 mod single_file;
 mod source;
 mod split;
+mod text;
 mod update;
 mod watch;
 

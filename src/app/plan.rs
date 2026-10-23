@@ -34,7 +34,7 @@ use super::App;
 use super::mode::{Confirm, ConfirmKind, Focus, Mode, Window as AppWindow};
 use super::parts::{as_on_disk, display_name, plural, safe_join};
 use super::preview::{Preview, read_editable};
-use super::sentence::{Place, Sentence, Target, Window};
+use super::sentence::{Closing, Place, Sentence, Target, Window};
 
 /// Most places a `goto` collects before it stops counting.
 const MAX_SPOTS: usize = 1000;
@@ -145,6 +145,13 @@ pub(super) enum Plan {
     Commit(String),
     Reload,
     Update,
+    Split {
+        stacked: bool,
+    },
+    Close(Closing),
+    Terminal,
+    Record,
+    Play(usize),
     Plugin {
         name: String,
         args: Vec<String>,
@@ -447,6 +454,11 @@ impl App {
             Sentence::Commit(message) => Ok(Plan::Commit(message.clone())),
             Sentence::Reload => Ok(Plan::Reload),
             Sentence::Update => Ok(Plan::Update),
+            Sentence::Split { stacked } => Ok(Plan::Split { stacked: *stacked }),
+            Sentence::Close(what) => Ok(Plan::Close(*what)),
+            Sentence::Terminal => Ok(Plan::Terminal),
+            Sentence::Record => Ok(Plan::Record),
+            Sentence::Play(times) => Ok(Plan::Play(*times)),
             Sentence::Other { name, args } => {
                 // A plugin's own command comes first; failing that, a word on
                 // its own is a name to go to.
@@ -770,7 +782,7 @@ impl App {
         within: Option<&Place>,
         whole_words: bool,
     ) -> Result<Plan, String> {
-        let needle = Needle::new(find, whole_words);
+        let needle = Needle::read(find, whole_words)?;
         let as_what = if whole_words {
             ""
         } else {
@@ -913,6 +925,17 @@ impl App {
             Plan::Commit(m) => format!("commits what is staged: {m}"),
             Plan::Reload => "reads the disk and the plugins again".into(),
             Plan::Update => "asks GitHub for a newer tiny".into(),
+            Plan::Split { stacked: false } => "a new pane beside this one".into(),
+            Plan::Split { stacked: true } => "a new pane below this one".into(),
+            Plan::Close(Closing::Pane) if self.split.is_none() => "only one pane".into(),
+            Plan::Close(Closing::Pane) => "closes this pane".into(),
+            Plan::Close(Closing::Others) => "closes every other pane".into(),
+            Plan::Close(Closing::Terminal) => "closes the terminal".into(),
+            Plan::Terminal => "the terminal".into(),
+            Plan::Record if self.is_recording() => "stops recording".into(),
+            Plan::Record => "starts recording keys".into(),
+            Plan::Play(1) => "plays what was recorded".into(),
+            Plan::Play(n) => format!("plays what was recorded {n} times"),
             Plan::Plugin { name, .. } => {
                 let owner = self.plugins.command_owner(name).unwrap_or_default();
                 format!("runs {owner}'s *{name}")
@@ -1030,6 +1053,34 @@ impl App {
             Plan::Commit(m) => self.commit(&m),
             Plan::Reload => self.cmd_reload(),
             Plan::Update => self.cmd_update(),
+            Plan::Split { stacked } => {
+                self.split_pane(stacked);
+                Ok(String::new())
+            }
+            Plan::Close(Closing::Pane) => {
+                self.close_pane();
+                Ok(String::new())
+            }
+            Plan::Close(Closing::Others) => {
+                self.close_other_panes();
+                Ok(String::new())
+            }
+            Plan::Close(Closing::Terminal) => {
+                self.close_terminal();
+                Ok(String::new())
+            }
+            Plan::Terminal => {
+                self.open_terminal();
+                Ok(String::new())
+            }
+            Plan::Record => {
+                self.toggle_recording();
+                Ok(String::new())
+            }
+            Plan::Play(times) => {
+                self.play_macro(times);
+                Ok(String::new())
+            }
             Plan::Plugin { name, args } => self
                 .run_plugin_command(&name, &args)
                 .unwrap_or_else(|| Err(anyhow!("no plugin has *{name} any more"))),

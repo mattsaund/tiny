@@ -59,11 +59,11 @@ fn a_wheel_notch_moves_exactly_one_line() {
     // Draw once so the preview knows how long it is.
     joined(&mut app);
 
-    app.on_scroll(true, 60);
+    app.on_scroll(true, 60, 5);
     assert_eq!(app.preview_scroll, 1, "one notch, one line");
-    app.on_scroll(false, 60);
+    app.on_scroll(false, 60, 5);
     assert_eq!(app.preview_scroll, 0);
-    app.on_scroll(false, 60);
+    app.on_scroll(false, 60, 5);
     assert_eq!(app.preview_scroll, 0, "and it stops at the top");
 }
 
@@ -75,9 +75,9 @@ fn the_wheel_moves_the_cursor_in_a_file_being_edited() {
     assert_eq!(app.focus, Focus::Editor);
     joined(&mut app);
 
-    app.on_scroll(true, 60);
+    app.on_scroll(true, 60, 5);
     assert_eq!(app.active_buffer().unwrap().cursor_line, 1);
-    app.on_scroll(false, 60);
+    app.on_scroll(false, 60, 5);
     assert_eq!(app.active_buffer().unwrap().cursor_line, 0);
 }
 
@@ -88,9 +88,9 @@ fn the_wheel_over_the_tree_moves_the_tree_cursor() {
     let (x0, _) = app.last_tree_cols.expect("the tree was drawn");
     assert_eq!(app.selected, 0);
 
-    app.on_scroll(true, x0 + 1);
+    app.on_scroll(true, x0 + 1, 5);
     assert_eq!(app.selected, 1, "one notch, one row");
-    app.on_scroll(false, x0 + 1);
+    app.on_scroll(false, x0 + 1, 5);
     assert_eq!(app.selected, 0);
 }
 
@@ -479,7 +479,7 @@ fn the_wheel_through_a_crowded_folder_keeps_the_cursor_on_screen() {
     let (x0, _) = app.last_tree_cols.unwrap();
 
     for _ in 0..120 {
-        app.on_scroll(true, x0 + 1);
+        app.on_scroll(true, x0 + 1, 5);
     }
     assert_eq!(selected_name(&app), "item-120.txt", "one notch, one row");
     cursor_shown(&mut app, 100, 30);
@@ -522,7 +522,7 @@ fn the_wheel_scrolls_the_help_and_stops_at_its_end() {
     app.on_key(ch('?'));
     let top = screen(&mut app, 90, 14).join("\n");
     for _ in 0..500 {
-        app.on_scroll(true, 10);
+        app.on_scroll(true, 10, 5);
     }
     let end = screen(&mut app, 90, 14).join("\n");
     assert_ne!(top, end, "the wheel moved the help");
@@ -533,6 +533,6 @@ fn the_wheel_scrolls_the_help_and_stops_at_its_end() {
 
     // So the first notch back up moves it, rather than paying back the
     // notches spent past the end.
-    app.on_scroll(false, 10);
+    app.on_scroll(false, 10, 5);
     assert_ne!(screen(&mut app, 90, 14).join("\n"), end);
 }

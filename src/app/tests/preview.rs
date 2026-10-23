@@ -435,7 +435,7 @@ fn a_note_too_long_to_format_still_scrolls_to_the_end() {
     // The wheel is what scrolls a preview the keyboard has not reached, and
     // the far right of the window is over it rather than over the tree.
     for _ in 0..app.preview_len {
-        app.on_scroll(true, 88);
+        app.on_scroll(true, 88, 5);
     }
     let out = joined(&mut app);
     assert!(

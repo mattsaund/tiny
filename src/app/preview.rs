@@ -346,10 +346,11 @@ impl App {
     /// is showing it.
     fn let_go_if_untouched(&mut self, path: &Path) {
         let shown = self.preview.path() == Some(path)
-            || self
-                .split
-                .as_ref()
-                .is_some_and(|s| s.pinned.preview.path() == Some(path));
+            || self.split.as_ref().is_some_and(|s| {
+                s.pinned
+                    .iter()
+                    .any(|(_, pane)| pane.preview.path() == Some(path))
+            });
         if !shown && self.buffers.get(path).is_some_and(Editor::untouched) {
             self.buffers.remove(path);
         }

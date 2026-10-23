@@ -21,7 +21,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::config::keys::{Action, Context as KeyContext, from_terminal};
+use crate::config::keys::{Action, Context as KeyContext, Keymap, from_terminal};
 use crate::map::view::Intent;
 use crate::text::editor::Editor;
 
@@ -31,66 +31,104 @@ use super::parts::list_move;
 use super::preview::Preview;
 use super::source::GitFocus;
 
+/// What a key means in a file: the action the keymap names for it, and
+/// whether it selects as it moves.
+///
+/// Shift with a key that moves the cursor selects as it moves, see
+/// `config::keys`. When the key with Shift is not bound to anything itself,
+/// the same key without it is looked up, and a movement found that way
+/// selects. The arrows and Page Up and Down are not looked up at all, being
+/// the fixed half of the keyboard, so for them the Shift alone says so.
+pub(super) fn editing_action(keymap: &Keymap, key: &KeyEvent) -> (Option<Action>, bool) {
+    if let Some(action) = keymap.find(KeyContext::Editor, key) {
+        return (Some(action), false);
+    }
+    let shifted = key.modifiers.contains(KeyModifiers::SHIFT)
+        && !matches!(key.code, KeyCode::Char(_) | KeyCode::BackTab);
+    if !shifted {
+        return (None, false);
+    }
+    let plain = KeyEvent {
+        modifiers: key.modifiers - KeyModifiers::SHIFT,
+        ..*key
+    };
+    match keymap.find(KeyContext::Editor, &plain) {
+        Some(action) if moves(action) => (Some(action), true),
+        _ => (None, true),
+    }
+}
+
+/// The cursor movements a key can be bound to, each with the version that
+/// selects as it goes.
+fn movement(action: Action) -> Option<[fn(&mut Editor); 2]> {
+    Some(match action {
+        Action::EditorWordLeft => [Editor::move_word_left, Editor::select_word_left],
+        Action::EditorWordRight => [Editor::move_word_right, Editor::select_word_right],
+        Action::EditorLineStart => [Editor::move_home, Editor::select_home],
+        Action::EditorLineEnd => [Editor::move_end, Editor::select_end],
+        Action::EditorDocStart => [Editor::move_doc_start, Editor::select_doc_start],
+        Action::EditorDocEnd => [Editor::move_doc_end, Editor::select_doc_end],
+        _ => return None,
+    })
+}
+
+/// Whether `action` moves the cursor, so Shift with it selects.
+fn moves(action: Action) -> bool {
+    movement(action).is_some() || matches!(action, Action::PageUp | Action::PageDown)
+}
+
 /// Apply one key to a buffer, and say what to complain about if anything.
 ///
 /// The one text-editing keyboard in tiny, in one place. The editor pane uses
 /// it, and so does the commit message box in the source window: two panes that
 /// type, which must not disagree about what Backspace does.
 ///
-/// `action` is what the keymap made of the key, already resolved by the caller
-/// so the borrow of the buffer can come after it. Anything the keymap did not
-/// name falls through to the fixed half: the arrows, Enter, Backspace and the
-/// characters themselves, which are not bindable because a keyboard that cannot
-/// type is not a keyboard.
+/// `action` is what the keymap made of the key, and `select` whether it moves
+/// selecting, both from [`editing_action`] and worked out by the caller so
+/// the borrow of the buffer can come after. Anything the keymap did not name
+/// falls through to the fixed half: the arrows, Enter, Backspace and the
+/// characters themselves, which are not bindable because a keyboard that
+/// cannot type is not a keyboard.
 pub(super) fn edit_with_key(
     ed: &mut Editor,
     action: Option<Action>,
+    select: bool,
     key: KeyEvent,
     page: usize,
     tab_width: usize,
 ) -> Option<&'static str> {
-    match action {
-        Some(Action::EditorUndo) => return (!ed.undo()).then_some("nothing to undo"),
-        Some(Action::EditorRedo) => return (!ed.redo()).then_some("nothing to redo"),
-        Some(Action::EditorDeleteLine) => {
-            ed.delete_line();
+    if let Some(action) = action {
+        if let Some([plain, selecting]) = movement(action) {
+            if select {
+                selecting(ed);
+            } else {
+                plain(ed);
+            }
             return None;
         }
-        Some(Action::EditorWordLeft) => {
-            ed.move_word_left();
-            return None;
+        match action {
+            Action::EditorUndo => return (!ed.undo()).then_some("nothing to undo"),
+            Action::EditorRedo => return (!ed.redo()).then_some("nothing to redo"),
+            Action::EditorDeleteLine => ed.delete_line(),
+            Action::EditorSelectAll => ed.select_all(),
+            Action::EditorNextMatch => ed.add_cursor_at_next_match(),
+            Action::EditorCursorUp => ed.add_cursor_vertically(false),
+            Action::EditorCursorDown => ed.add_cursor_vertically(true),
+            Action::PageUp if select => ed.select_page(page, false),
+            Action::PageDown if select => ed.select_page(page, true),
+            Action::PageUp => ed.page_up(page),
+            Action::PageDown => ed.page_down(page),
+            _ => return None,
         }
-        Some(Action::EditorWordRight) => {
-            ed.move_word_right();
-            return None;
-        }
-        Some(Action::PageUp) => {
-            ed.page_up(page);
-            return None;
-        }
-        Some(Action::PageDown) => {
-            ed.page_down(page);
-            return None;
-        }
-        Some(Action::EditorLineStart) => {
-            ed.move_home();
-            return None;
-        }
-        Some(Action::EditorLineEnd) => {
-            ed.move_end();
-            return None;
-        }
-        Some(Action::EditorDocStart) => {
-            ed.move_doc_start();
-            return None;
-        }
-        Some(Action::EditorDocEnd) => {
-            ed.move_doc_end();
-            return None;
-        }
-        _ => {}
+        return None;
     }
     match key.code {
+        KeyCode::Left if select => ed.select_left(),
+        KeyCode::Right if select => ed.select_right(),
+        KeyCode::Up if select => ed.select_up(),
+        KeyCode::Down if select => ed.select_down(),
+        KeyCode::PageUp if select => ed.select_page(page, false),
+        KeyCode::PageDown if select => ed.select_page(page, true),
         KeyCode::Left => ed.move_left(),
         KeyCode::Right => ed.move_right(),
         KeyCode::Up => ed.move_up(),
@@ -101,6 +139,7 @@ pub(super) fn edit_with_key(
         KeyCode::Backspace => ed.backspace(),
         KeyCode::Delete => ed.delete_forward(),
         KeyCode::Tab => ed.insert_tab(tab_width),
+        KeyCode::BackTab => ed.outdent(tab_width),
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => ed.insert_char(c),
         _ => {}
     }
@@ -136,7 +175,18 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
         // One spelling per key, before anything reads it: macOS Terminal's
         // `⌥←` arrives as `Alt+B`, and becomes the arrow it was.
+        // The terminal takes every key as it came, before anything reads it
+        // as one of tiny's: `Ctrl+L` clears its screen, Alt+B goes back a
+        // word in it. Only the key that leaves is tiny's, see `term`.
+        if self.focus == Focus::Terminal
+            && matches!(self.mode, Mode::Normal)
+            && self.window == Window::Main
+        {
+            self.record_key(&key);
+            return self.on_terminal_key(key);
+        }
         let key = from_terminal(key);
+        self.record_key(&key);
         // The window switcher answers before anything else, from every window
         // and through every overlay. A key that changes which window you are
         // looking at cannot be one that a pane might swallow first, or it
@@ -166,6 +216,7 @@ impl App {
             Window::Main => match self.focus {
                 Focus::Tree => self.on_tree_key(key),
                 Focus::Editor => self.on_editor_key(key),
+                Focus::Terminal => self.on_terminal_key(key),
             },
         }
     }
@@ -329,13 +380,8 @@ impl App {
             Action::Bar => self.open_bar(),
             Action::ToggleTreePane => self.toggle_tree_pane(),
             Action::NewWindow => self.open_new_window(),
-            Action::Split => self.toggle_split(),
-            // Only with two panes; otherwise the key carries on to whatever it
-            // did before, like moving the cursor in a file.
-            Action::PaneLeft => return self.focus_pane(false),
-            Action::PaneRight => return self.focus_pane(true),
-            Action::Copy => self.copy_selection(),
-            Action::Paste => self.paste_clipboard(),
+            Action::NextPane => self.next_pane(),
+            Action::Terminal => self.toggle_terminal(),
             Action::Help => self.mode = Mode::Help(0),
             _ => return false,
         }
@@ -371,6 +417,8 @@ impl App {
             Action::Right => self.activate(),
             Action::Left => self.collapse_or_parent(),
             Action::TreeHidden => self.toggle_hidden(),
+            Action::Copy => self.copy_selection(),
+            Action::Paste => self.paste_clipboard(),
             Action::Narrower => self.resize_tree_pane(-1),
             Action::Wider => self.resize_tree_pane(1),
             _ => {}
@@ -405,8 +453,12 @@ impl App {
             Some(Action::Save) => return self.save_active(),
             // "Back to the tree" means the tree, even when it is folded away,
             // so it brings the pane back rather than handing the keyboard to
-            // something that is not on screen.
+            // something that is not on screen. A selection, or more cursors
+            // than one, is let go of first, as Esc does everywhere else.
             Some(Action::Back) => {
+                if self.active_buffer_mut().is_some_and(|ed| ed.collapse()) {
+                    return;
+                }
                 self.focus_tree();
                 self.status = "back to tree".into();
                 return;
@@ -420,24 +472,36 @@ impl App {
 
         // A picture, a directory listing, a binary: a few lines of facts
         // with nothing to type into and nothing to scroll, the same as the
-        // wheel finds over them.
+        // wheel finds over them. Copying one copies the file, there being no
+        // text to copy.
         if !matches!(self.preview, Preview::Buffer { .. }) {
+            if resolved == Some(Action::EditorCopy) {
+                self.copy_selection();
+            }
             return;
         }
 
         // Read what the key meant before borrowing the buffer, so nothing has
         // to be cloned to satisfy the borrow checker on every keystroke.
-        let action = self.keymap.find(KeyContext::Editor, &key);
+        let (action, select) = editing_action(&self.keymap, &key);
+        match action {
+            Some(Action::EditorCopy) => return self.copy_text(false),
+            Some(Action::EditorCut) => return self.copy_text(true),
+            Some(Action::EditorPaste) => return self.paste_text(),
+            Some(Action::MacroRecord) => return self.toggle_recording(),
+            Some(Action::MacroPlay) => return self.play_macro(1),
+            _ => {}
+        }
         let Some(ed) = self.active_buffer_mut() else {
             self.focus = Focus::Tree;
             return;
         };
-        if let Some(complaint) = edit_with_key(ed, action, key, page, tab_width) {
+        if let Some(complaint) = edit_with_key(ed, action, select, key, page, tab_width) {
             self.status = complaint.into();
         }
     }
 
-    /// One notch of the mouse wheel, over the pane at `column`.
+    /// One notch of the mouse wheel, over the pane at `column` and `row`.
     ///
     /// Always exactly one line. The wheel is the one input where a terminal
     /// will happily send three of something for one flick of a finger, and a
@@ -448,7 +512,7 @@ impl App {
     /// its view is tied to it, so the cursor moves instead, which scrolls the
     /// view once it reaches an edge, and never leaves you looking at somewhere
     /// you cannot type.
-    pub fn on_scroll(&mut self, down: bool, column: u16) {
+    pub fn on_scroll(&mut self, down: bool, column: u16, row: u16) {
         // The wheel goes to what is drawn under it: an overlay first, then
         // the window that is up, never a window that is not on screen.
         match &mut self.mode {
@@ -470,14 +534,22 @@ impl App {
             Window::Main => {}
         }
         let step: isize = if down { 1 } else { -1 };
+        let at = ratatui::layout::Position::new(column, row);
+        if self.last_term_area.is_some_and(|r| r.contains(at)) {
+            if let Some(shell) = &mut self.term {
+                shell.scroll(!down, 1);
+            }
+            return;
+        }
         if self.over_tree(column) {
             // The preview follows the tree cursor, so moving the view on its
             // own would only be undone on the next frame.
             self.move_selection(step);
             return;
         }
-        if matches!(self.last_pinned_cols, Some((x0, x1)) if column >= x0 && column < x1) {
-            self.scroll_pinned(down);
+        let under = self.last_pinned.iter().find(|(_, r)| r.contains(at));
+        if let Some(&(id, _)) = under {
+            self.scroll_pinned(id, down);
             return;
         }
         match &self.preview {
