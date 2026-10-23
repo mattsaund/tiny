@@ -9,6 +9,7 @@
 //! through it, and it fails closed twice: once if `..` pops past the start,
 //! and again if the result does not sit under the project root.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
@@ -100,6 +101,66 @@ pub(super) fn edit_field(
         _ => return false,
     }
     true
+}
+
+/// `path` spelled the way the disk spells it, below `root`.
+///
+/// On a disk that ignores case (macOS, Windows), `readme.md` opens
+/// `README.md`, and everything tiny keeps by path (open files and their
+/// unsaved edits, the browser's rows, the clipboard) has it the second way: a
+/// path typed the first way would miss all of them. Each part that is there
+/// under another case takes the disk's; the first part that is not there at
+/// all, and everything after it, stay as written. On a disk that minds case
+/// it costs a look per part and changes nothing.
+pub(super) fn as_on_disk(path: &Path, root: &Path) -> PathBuf {
+    let Ok(rel) = path.strip_prefix(root) else {
+        return path.to_path_buf();
+    };
+    let mut out = root.to_path_buf();
+    let mut parts = rel.components();
+    while let Some(part) = parts.next() {
+        let std::path::Component::Normal(name) = part else {
+            out.push(part);
+            continue;
+        };
+        if fs::symlink_metadata(out.join(name)).is_err() {
+            out.push(name);
+            out.extend(parts);
+            return out;
+        }
+        // The same name in the other case is not there either: the disk
+        // minds case, or the name has none, and it is spelled as written.
+        let Some(text) = name.to_str() else {
+            out.push(name);
+            continue;
+        };
+        let flipped: String = text
+            .chars()
+            .flat_map(|c| -> Vec<char> {
+                if c.is_lowercase() {
+                    c.to_uppercase().collect()
+                } else {
+                    c.to_lowercase().collect()
+                }
+            })
+            .collect();
+        if flipped == text || fs::symlink_metadata(out.join(&flipped)).is_err() {
+            out.push(name);
+            continue;
+        }
+        let lower = text.to_lowercase();
+        let spelled = fs::read_dir(&out).ok().and_then(|entries| {
+            let names: Vec<std::ffi::OsString> = entries.flatten().map(|e| e.file_name()).collect();
+            if names.iter().any(|n| n == name) {
+                return None;
+            }
+            names
+                .into_iter()
+                .find(|n| n.to_string_lossy().to_lowercase() == lower)
+        });
+        out.push(spelled.as_deref().unwrap_or(name));
+    }
+    out
 }
 
 /// Join a user-typed name onto `base`, refusing anything that would escape the

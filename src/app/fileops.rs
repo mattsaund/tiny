@@ -67,23 +67,32 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<usize> {
     Ok(left_out)
 }
 
-/// Whether two paths are one file: what a rename that changes only the case
-/// of a name looks like on a disk that ignores case, where the "new" name
-/// already exists because it is the old one.
+/// Whether two paths are one name in two cases: what a rename that changes
+/// only the case of a name looks like on a disk that ignores case, where the
+/// "new" name already exists because it is the old one.
+///
+/// Only that. A link to the file, or a second hard link to it, is a name of
+/// its own, and a rename onto it would replace it, so the two have to be in
+/// the same folder, differ in nothing but case, and be the one entry on disk,
+/// asked without following links.
 pub(super) fn same_file(a: &Path, b: &Path) -> bool {
+    let lower = |p: &Path| p.file_name().map(|n| n.to_string_lossy().to_lowercase());
+    if a.parent() != b.parent() || lower(a).is_none() || lower(a) != lower(b) {
+        return false;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        match (fs::metadata(a), fs::metadata(b)) {
+        match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
             (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
             _ => false,
         }
     }
     // Windows ignores case in names, so two that differ only in case are
-    // the same file there.
+    // the same entry there.
     #[cfg(not(unix))]
     {
-        a.exists() && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        fs::symlink_metadata(a).is_ok()
     }
 }
 
@@ -248,7 +257,15 @@ impl App {
 
         self.tree.refresh_all();
         self.size_cache.clear();
-        self.reveal(&dst);
+        // Shown where it landed, unless a file is being typed into: moving
+        // the browser onto the copy would hand it the next keystrokes, so the
+        // keyboard stays in the file it was in and the line below says where
+        // the copy went.
+        if self.focus == Focus::Editor && matches!(self.preview, Preview::Buffer { .. }) {
+            self.rebuild_rows();
+        } else {
+            self.reveal(&dst);
+        }
         let links = match left_out {
             0 => String::new(),
             1 => ", one link left out".into(),
@@ -412,6 +429,11 @@ impl App {
         if target == from {
             return Ok("unchanged".into());
         }
+        // Before anything is made on the way there: a folder cannot go
+        // inside itself, and the folders made for it would be left behind.
+        if target.starts_with(from) {
+            return Err(anyhow!("cannot move {} into itself", display_name(from)));
+        }
         if target.exists() && !same_file(target, from) {
             return Err(anyhow!("{} already exists", display_name(target)));
         }
@@ -441,8 +463,29 @@ impl App {
         {
             *copied = moved(copied, from, target);
         }
+        let pinned_moved = self
+            .split
+            .as_ref()
+            .is_some_and(|s| s.pinned.preview.path().is_some_and(|p| p.starts_with(from)));
         if let Some(split) = &mut self.split {
             split.pinned.preview.moved(from, target);
+        }
+        // The pane without the keyboard reads its file again under the new
+        // name, which can make it another kind of file: notes.txt renamed
+        // notes.rs is code now.
+        if pinned_moved
+            && let Some(path) = self
+                .split
+                .as_ref()
+                .and_then(|s| s.pinned.preview.path())
+                .filter(|p| p.is_file())
+                .map(Path::to_path_buf)
+        {
+            let fresh = self.load_file_preview(&path);
+            if let Some(split) = &mut self.split {
+                split.pinned.preview = fresh;
+                split.pinned.highlight = Default::default();
+            }
         }
         self.tree.refresh_all();
         self.size_cache.clear();
@@ -507,10 +550,11 @@ impl App {
     /// Carry out a confirmed delete, then put the cursor somewhere sensible.
     ///
     /// Buffers under the deleted path are dropped, including unsaved ones,
-    /// since there is no longer a file to save them to. The cursor moves to the
-    /// parent directory where it can, rather than staying on an index that now
-    /// points at a different file.
+    /// since there is no longer a file to save them to. A cursor that was on
+    /// what went moves to its parent folder, rather than onto whichever row
+    /// slid into its place; one that was anywhere else stays where it was.
     pub(super) fn do_delete(&mut self, path: &Path) {
+        let was_on_it = self.selected_path().is_some_and(|p| p.starts_with(path));
         // `symlink_metadata` again, so a link is unlinked rather than followed
         // into: deleting a shortcut must never delete what it points at.
         let is_dir = fs::symlink_metadata(path)
@@ -529,7 +573,9 @@ impl App {
                 // Through `rebuild_rows`, so a folder's remembered size and the
                 // watcher's picture of the tree are both brought up to date.
                 self.rebuild_rows();
-                if let Some(i) = parent.and_then(|p| self.rows.iter().position(|r| r.path == p)) {
+                if was_on_it
+                    && let Some(i) = parent.and_then(|p| self.rows.iter().position(|r| r.path == p))
+                {
                     self.selected = i;
                     self.sync_preview();
                 }

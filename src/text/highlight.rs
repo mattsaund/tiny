@@ -404,22 +404,36 @@ fn load_theme(name: &str) -> (Theme, Option<String>) {
     match themes.themes.get(name) {
         Some(t) => (t.clone(), None),
         None => {
-            let available: Vec<&str> = themes.themes.keys().map(String::as_str).collect();
             let fallback = themes
                 .themes
                 .get("base16-ocean.dark")
                 .or_else(|| themes.themes.values().next())
                 .cloned()
                 .expect("syntect ships with default themes");
-            (
-                fallback,
-                Some(format!(
-                    "unknown syntax_theme `{name}`, try one of: {}",
-                    available.join(", ")
-                )),
-            )
+            (fallback, Some(unknown_theme(name, &themes)))
         }
     }
+}
+
+/// Whether a theme by this name ships, and if not, the warning a typo in the
+/// config file gets: for a setting typed in tiny to be refused with, rather
+/// than taken and then complained about.
+pub fn check_theme(name: &str) -> Result<(), String> {
+    let themes = ThemeSet::load_defaults();
+    if themes.themes.contains_key(name) {
+        Ok(())
+    } else {
+        Err(unknown_theme(name, &themes))
+    }
+}
+
+/// What is said about a theme name that does not ship.
+fn unknown_theme(name: &str, themes: &ThemeSet) -> String {
+    let available: Vec<&str> = themes.themes.keys().map(String::as_str).collect();
+    format!(
+        "unknown syntax_theme `{name}`, try one of: {}",
+        available.join(", ")
+    )
 }
 
 /// Licenses for the bundled grammars, for `tiny --licenses`.

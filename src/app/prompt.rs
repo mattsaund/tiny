@@ -96,7 +96,7 @@ impl App {
     /// than on a disk copy its next save would write over.
     fn do_replace(&mut self, find: &search::Needle, replace: &str) {
         let opts = self.search_opts();
-        let unsaved = self.unsaved_paths();
+        let unsaved = self.unsaved_in_reach();
         let written = search::replace_all(self.tree.root_path(), find, replace, &opts, &|path| {
             unsaved.contains(path)
         });

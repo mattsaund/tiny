@@ -338,3 +338,25 @@ fn a_syntax_theme_that_does_not_exist_says_so() {
     command(&mut app, "set syntax_theme InspiredGitHub");
     assert_eq!(app.highlighter.theme_name(), "InspiredGitHub");
 }
+
+#[test]
+fn a_syntax_theme_typed_wrong_in_settings_is_refused_and_said() {
+    let (_td, mut app) = fixture();
+    settings(&mut app);
+    settings_on(&mut app, "syntax_theme");
+    app.on_key(k(KeyCode::Enter));
+    for _ in 0..40 {
+        app.on_key(k(KeyCode::Backspace));
+    }
+    type_str(&mut app, "solarized");
+    app.on_key(k(KeyCode::Enter));
+    assert!(
+        app.status.contains("unknown syntax_theme `solarized`"),
+        "said, not overwritten with the value: {}",
+        app.status
+    );
+    assert_ne!(
+        app.config.syntax_theme, "solarized",
+        "and never taken, so never saved"
+    );
+}

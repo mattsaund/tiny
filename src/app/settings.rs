@@ -50,7 +50,12 @@ impl App {
     /// the config struct without reaching the screen. Rebuilds the palette and
     /// keymap, swaps the syntax theme, and re-reads the tree if dotfile
     /// visibility changed.
-    pub(super) fn apply_config(&mut self) {
+    ///
+    /// Returns what is wrong with the config, if anything (a key that cannot
+    /// be bound, a theme that does not exist), for the caller to say in
+    /// place of whatever it would have said.
+    pub(super) fn apply_config(&mut self) -> Option<String> {
+        let mut warning = None;
         self.palette = Palette::from_theme(&self.config.theme).with_glyphs(self.config.glyphs);
         // Formatted in the old palette.
         self.block_rows.borrow_mut().clear();
@@ -58,18 +63,18 @@ impl App {
         if let Some(map) = &mut self.project_map {
             map.label_with(self.palette.glyphs.ellipsis);
         }
-        let (keymap, warning) = Keymap::new(&self.config.keys, self.keyboard);
+        let (keymap, keys_warning) = Keymap::new(&self.config.keys, self.keyboard);
         self.keymap = keymap;
-        if let Some(w) = warning {
-            self.status = w;
+        if keys_warning.is_some() {
+            warning = keys_warning;
         }
         // Swap the theme in place, and only when it is a different one.
         // Rebuilding the highlighter would re-unpack all 213 grammars, and
         // even a swap re-reads the theme set; this runs after every change to
         // any setting, a key, or a plugin's `tiny.set`.
         if self.highlighter.theme_name() != self.config.syntax_theme {
-            if let Some(warning) = self.highlighter.set_theme(&self.config.syntax_theme) {
-                self.status = warning;
+            if let Some(w) = self.highlighter.set_theme(&self.config.syntax_theme) {
+                warning = Some(w);
             }
             self.forget_highlighting();
         }
@@ -77,6 +82,7 @@ impl App {
             self.tree.set_show_hidden(self.config.show_hidden);
             self.rebuild_rows();
         }
+        warning
     }
 
     /// Throw away every saved highlighting state, in every pane: they carry
@@ -120,8 +126,12 @@ impl App {
                     let key_name = setting_at(s.selected).map(|r| r.0).unwrap_or("");
                     match self.config.set(key_name, &buf) {
                         Ok(()) => {
-                            self.apply_config();
+                            let warning = self.apply_config();
                             self.write_config();
+                            // What is wrong says more than where it went.
+                            if let Some(w) = warning {
+                                self.status = w;
+                            }
                             self.mode = Mode::Settings(s);
                             return;
                         }
@@ -142,8 +152,9 @@ impl App {
                     let key_name = setting_at(s.selected).map(|r| r.0).unwrap_or("");
                     match self.config.set(key_name, &buf) {
                         Ok(()) => {
-                            self.apply_config();
-                            self.status = format!("{key_name} = {buf}");
+                            self.status = self
+                                .apply_config()
+                                .unwrap_or_else(|| format!("{key_name} = {buf}"));
                         }
                         Err(e) => self.status = format!("{e:#}"),
                     }
@@ -265,9 +276,10 @@ impl App {
                 if kb.selected >= KEYBIND_BUTTONS.len() {
                     let action = actions[kb.selected - KEYBIND_BUTTONS.len()];
                     self.config.keys.remove(action.name());
-                    self.apply_config();
+                    let warning = self.apply_config();
                     let shipped = self.keymap.shipped(action);
-                    self.status = format!("{} back to {}", action.name(), shipped);
+                    self.status =
+                        warning.unwrap_or_else(|| format!("{} back to {}", action.name(), shipped));
                 }
             }
             KeyCode::Enter => {
@@ -311,7 +323,10 @@ impl App {
             self.set_binding(*other, &left.join(" "));
         }
         self.set_binding(action, spec);
-        self.apply_config();
+        if let Some(warning) = self.apply_config() {
+            self.status = warning;
+            return;
+        }
         self.status = match clashes.first() {
             // Say what was taken away, rather than letting a key quietly stop
             // doing what it used to.

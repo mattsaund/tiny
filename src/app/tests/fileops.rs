@@ -503,3 +503,136 @@ fn deleting_a_folder_asks_with_everything_at_stake_counted() {
         c.message
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_rename_onto_a_link_to_the_same_file_is_refused() {
+    let (td, mut app) = fixture();
+    let a = td.path().join("a.txt");
+    fs::write(&a, "keep me\n").unwrap();
+    std::os::unix::fs::symlink(&a, td.path().join("link.txt")).unwrap();
+    fs::hard_link(&a, td.path().join("b.txt")).unwrap();
+    command(&mut app, "reload");
+
+    // Both resolve to a.txt's own inode, and neither is a.txt.
+    command(&mut app, "rename link.txt to a.txt");
+    assert!(app.status.contains("already exists"), "{}", app.status);
+    command(&mut app, "rename a.txt to b.txt");
+    assert!(app.status.contains("already exists"), "{}", app.status);
+    assert_eq!(fs::read_to_string(&a).unwrap(), "keep me\n");
+    assert!(
+        fs::symlink_metadata(td.path().join("link.txt"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[test]
+fn a_rename_typed_in_another_case_carries_the_unsaved_edits() {
+    let (td, mut app) = fixture();
+    select(&mut app, "README.md");
+    app.focus_editor();
+    type_str(&mut app, "MINE ");
+    command(&mut app, "rename readme.md to intro.md");
+    let intro = td.path().join("intro.md");
+    assert!(intro.exists(), "{}", app.status);
+    let ed = app.buffers.get(&intro).expect("the edits came along");
+    assert!(ed.dirty && ed.lines()[0].starts_with("MINE"));
+    assert!(!app.buffers.contains_key(&td.path().join("README.md")));
+}
+
+#[test]
+fn a_path_is_spelled_as_the_disk_spells_it() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().canonicalize().unwrap();
+    fs::create_dir(root.join("Notes")).unwrap();
+    fs::write(root.join("Notes/README.md"), "").unwrap();
+    let typed = root.join("notes/readme.md");
+    let got = super::super::parts::as_on_disk(&typed, &root);
+    if typed.exists() {
+        // A disk that ignores case, like macOS's and Windows': the name it
+        // keeps, not the one typed.
+        assert_eq!(got, root.join("Notes/README.md"));
+    } else {
+        assert_eq!(got, typed, "a disk that minds case: as written");
+    }
+    // A part that is not there at all, and what follows it, as written.
+    let new = root.join("Notes/new/thing.md");
+    assert_eq!(super::super::parts::as_on_disk(&new, &root), new);
+}
+
+#[test]
+fn a_replace_across_the_project_leaves_unsaved_files_the_search_skips() {
+    let (td, mut app) = fixture();
+    fs::create_dir_all(td.path().join("node_modules/pkg")).unwrap();
+    let skipped = td.path().join("node_modules/pkg/index.js");
+    fs::write(&skipped, "widget\n").unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "index.js");
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, "draft ");
+    app.on_key(k(KeyCode::Esc));
+
+    command(&mut app, "replace widget with gadget");
+    assert!(joined(&mut app).contains("1 occurrence"), "only README.md");
+    app.on_key(ch('y'));
+    assert!(
+        app.buffers[&skipped].to_text().contains("widget"),
+        "an ignored folder is ignored, saved or not"
+    );
+}
+
+#[test]
+fn deleting_another_file_leaves_the_cursor_and_the_keyboard_where_they_were() {
+    let (td, mut app) = fixture();
+    select(&mut app, "README.md");
+    app.focus_editor();
+    command(&mut app, "delete notes/design.md");
+    app.on_key(ch('y'));
+    assert!(
+        !td.path().join("notes/design.md").exists(),
+        "{}",
+        app.status
+    );
+    assert_eq!(
+        app.selected_path(),
+        Some(td.path().join("README.md").as_path())
+    );
+    assert_eq!(app.focus, Focus::Editor, "still typing in README.md");
+}
+
+#[test]
+fn a_folder_cannot_be_moved_into_itself() {
+    let (td, mut app) = fixture();
+    command(&mut app, "move notes to notes/a/b");
+    assert!(app.status.contains("into itself"), "{}", app.status);
+    assert!(
+        !td.path().join("notes/a").exists(),
+        "and nothing is left behind"
+    );
+    assert!(td.path().join("notes/design.md").exists());
+}
+
+#[test]
+fn a_copy_made_from_the_editor_leaves_the_keyboard_in_the_file() {
+    let (td, mut app) = fixture();
+    let readme = td.path().join("README.md");
+    select(&mut app, "README.md");
+    app.focus_editor();
+    command(&mut app, "copy this to backup.md");
+    assert!(td.path().join("backup.md").exists(), "{}", app.status);
+    assert!(
+        app.status.contains("backup.md"),
+        "says where it went: {}",
+        app.status
+    );
+    type_str(&mut app, "x");
+    assert!(app.buffers[&readme].dirty, "the next key edits README.md");
+    assert!(
+        app.buffers
+            .get(&td.path().join("backup.md"))
+            .is_none_or(|ed| !ed.dirty),
+        "not the copy"
+    );
+}
