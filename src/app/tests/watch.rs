@@ -273,3 +273,41 @@ fn a_file_that_stops_being_text_is_let_go_of() {
         "a buffer holding text that is not the file's is worse than none"
     );
 }
+
+#[test]
+fn typing_straight_after_a_save_is_not_taken_for_someone_elses_write() {
+    // The save moves the file's stamp. Before tiny stamped its own writes,
+    // the next scan saw a moved stamp on a buffer dirty again from new
+    // typing, and warned about a change that was tiny's own.
+    let (_td, mut app) = fixture();
+    select(&mut app, "README.md");
+    app.focus_editor();
+    type_str(&mut app, "one ");
+    app.on_key(ctrl('s'));
+    type_str(&mut app, "two ");
+    app.rescan_disk();
+    assert!(
+        !app.status.contains("changed on disk"),
+        "our own save: {}",
+        app.status
+    );
+}
+
+#[test]
+fn a_file_that_grows_past_what_the_editor_opens_is_let_go() {
+    let (td, mut app) = fixture();
+    let log = td.path().join("grows.txt");
+    fs::write(&log, "small\n").unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "grows.txt");
+    assert!(app.buffers.contains_key(&log));
+
+    let big = "x".repeat(1024) + "\n";
+    fs::write(&log, big.repeat(9 * 1024)).unwrap();
+    assert!(app.rescan_disk());
+    assert!(
+        !app.buffers.contains_key(&log),
+        "not read whole on every scan from here on"
+    );
+    assert!(app.status.contains("too large"), "{}", app.status);
+}

@@ -65,7 +65,7 @@ impl Editor {
     ///
     /// Called by every movement method. Without it, typing "foo", arrowing
     /// away, and typing "bar" would revert both runs in one press.
-    pub(super) fn break_undo_group(&mut self) {
+    pub fn break_undo_group(&mut self) {
         self.last_edit = None;
     }
 

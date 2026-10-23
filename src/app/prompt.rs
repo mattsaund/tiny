@@ -90,28 +90,49 @@ impl App {
 
     /// Carry out a confirmed project-wide replace.
     ///
-    /// Files changed underneath any open buffer, so clean buffers are dropped
-    /// and will re-read from disk on next view. Dirty ones are kept: their
-    /// unsaved edits are worth more than consistency with a file the user has
-    /// already diverged from.
+    /// Files are rewritten on disk, and the clean buffers open on them are
+    /// brought up to date in place. A file open with unsaved edits is the
+    /// exception: its buffer is the newer copy, so the replace happens there,
+    /// as one step of undo left unsaved with the rest of its edits, rather
+    /// than on a disk copy its next save would write over.
     fn do_replace(&mut self, find: &search::Needle, replace: &str) {
         let opts = self.search_opts();
-        match search::replace_all(self.tree.root_path(), find, replace, &opts) {
-            Ok(report) => {
-                // Files changed underneath any open buffer, so drop the clean
-                // ones and let them re-read.
-                self.buffers.retain(|_, e| e.dirty);
-                self.tree.refresh_all();
-                self.rebuild_rows();
-                self.status = format!(
-                    "replaced {} occurrence{} in {} file{}",
-                    report.occurrences,
-                    plural(report.occurrences),
-                    report.files,
-                    plural(report.files)
-                );
+        let unsaved = self.unsaved_paths();
+        let written = search::replace_all(self.tree.root_path(), find, replace, &opts, &|path| {
+            unsaved.contains(path)
+        });
+        let mut in_buffers = 0;
+        let mut occurrences = 0;
+        for path in &unsaved {
+            if let Some(ed) = self.buffers.get_mut(path) {
+                let (text, n) = find.replace_in(&ed.to_text(), replace);
+                if n > 0 {
+                    ed.replace_all(&text);
+                    in_buffers += 1;
+                    occurrences += n;
+                }
             }
-            Err(e) => self.status = format!("{e:#}"),
         }
+        // Whatever was written, the open files on it are behind now.
+        self.reread_clean_buffers();
+        self.tree.refresh_all();
+        self.rebuild_rows();
+        self.status = match written {
+            Ok(report) => {
+                let files = report.files + in_buffers;
+                let occurrences = report.occurrences + occurrences;
+                let unsaved = match in_buffers {
+                    0 => String::new(),
+                    1 => ", one of them open and not saved yet".into(),
+                    n => format!(", {n} of them open and not saved yet"),
+                };
+                format!(
+                    "replaced {occurrences} occurrence{} in {files} file{}{unsaved}",
+                    plural(occurrences),
+                    plural(files)
+                )
+            }
+            Err(e) => format!("{e:#}"),
+        };
     }
 }

@@ -32,7 +32,7 @@ use crate::text::search::{self, Hit, HitKind, Matcher, Needle, Report};
 use super::App;
 use super::mode::{Confirm, ConfirmKind, Focus, Mode, Window as AppWindow};
 use super::parts::{display_name, plural, safe_join};
-use super::preview::Preview;
+use super::preview::{Preview, read_editable};
 use super::sentence::{self, Place, Sentence, Target, Window};
 
 /// Most places a `goto` collects before it stops counting.
@@ -301,8 +301,16 @@ impl App {
     fn text_of(&self, path: &Path) -> Option<String> {
         match self.buffers.get(path) {
             Some(ed) => Some(ed.to_text()),
-            None => scan::read_text(path),
+            None => read_editable(path),
         }
+    }
+
+    /// Every file open with edits not yet saved.
+    pub(super) fn unsaved_paths(&self) -> std::collections::HashSet<PathBuf> {
+        self.dirty_buffers()
+            .into_iter()
+            .map(Path::to_path_buf)
+            .collect()
     }
 
     // ---- planning ---------------------------------------------------------
@@ -698,7 +706,22 @@ impl App {
         };
         match within {
             None => {
-                let report = search::count(self.tree.root_path(), &needle, &self.search_opts());
+                // A file open with unsaved edits is counted as it is on
+                // screen, which is the copy the replace will change.
+                let unsaved = self.unsaved_paths();
+                let mut report = search::count(
+                    self.tree.root_path(),
+                    &needle,
+                    &self.search_opts(),
+                    &|path| unsaved.contains(path),
+                );
+                for path in &unsaved {
+                    let n = needle.find_in(&self.buffers[path].to_text()).len();
+                    if n > 0 {
+                        report.files += 1;
+                        report.occurrences += n;
+                    }
+                }
                 if report.occurrences == 0 {
                     return Err(format!("`{find}` is not in this project{as_what}"));
                 }
@@ -931,7 +954,7 @@ impl App {
         count: usize,
     ) -> anyhow::Result<String> {
         if !self.buffers.contains_key(path) {
-            let text = scan::read_text(path)
+            let text = read_editable(path)
                 .ok_or_else(|| anyhow!("cannot open {} as text", self.rel(path)))?;
             self.buffers.insert(
                 path.to_path_buf(),

@@ -66,7 +66,7 @@ use std::time::{Duration, SystemTime};
 use super::App;
 use super::mode::Focus;
 use super::parts::display_name;
-use super::preview::Preview;
+use super::preview::{MAX_EDIT_BYTES, Preview};
 
 /// What a path looked like when we last stat'd it: modification time and size.
 ///
@@ -234,35 +234,54 @@ impl App {
 
     /// One file that is no longer what it was. Returns whether the screen
     /// needs redrawing.
-    fn take_on_disk(&mut self, path: &Path) -> bool {
+    pub(super) fn take_on_disk(&mut self, path: &Path) -> bool {
         let name = display_name(path);
-        let fresh = fs::read(path)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            // The same guard `load_file_preview` uses: a file that has become
-            // binary is not text that happens to decode.
-            .filter(|text| !text.contains('\0'));
         let dirty = self.is_dirty(path);
+        let fresh = match fs::metadata(path) {
+            // Grown past what the editor opens (a log left open, say), and so
+            // not read whole on every tick: classified afresh, like any file
+            // too large to edit.
+            Ok(meta) if meta.len() > MAX_EDIT_BYTES => Err("is too large to edit now"),
+            _ => match fs::read(path) {
+                // The same guard `load_file_preview` uses: a file that has
+                // become binary is not text that happens to decode.
+                Ok(bytes) => String::from_utf8(bytes)
+                    .ok()
+                    .filter(|text| !text.contains('\0'))
+                    .ok_or("is no longer text"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err("is gone from disk"),
+                // Busy rather than gone: Windows refuses a read while another
+                // program is writing, for one. Not a change to act on, so the
+                // stamp is forgotten and the next scan looks again.
+                Err(_) => {
+                    self.watch.files.insert(path.to_path_buf(), None);
+                    return false;
+                }
+            },
+        };
 
-        let Some(text) = fresh else {
-            // Deleted, unreadable, or no longer text.
-            if dirty {
-                // The buffer stays. There is no row to put the cursor back on,
-                // but the text is not lost: it is still listed on the way out,
-                // and saving it there writes the file back.
-                self.status = format!("{name} is gone from disk; your unsaved copy is kept");
+        let text = match fresh {
+            Ok(text) => text,
+            Err(what) if dirty => {
+                // The buffer stays. There may be no row to put the cursor back
+                // on, but the text is not lost: it is still listed on the way
+                // out, and saving it there writes the file back.
+                self.status = format!("{name} {what}; your unsaved copy is kept");
                 return true;
             }
-            let showing = matches!(&self.preview, Preview::Buffer { path: p, .. } if p == path);
-            self.buffers.remove(path);
-            self.highlight_cache.clear();
-            // Dropping the buffer is what lets the file be classified afresh
-            // if it comes back, since an open buffer always wins over disk.
-            if showing {
-                self.sync_preview();
+            Err(what) => {
+                let showing = matches!(&self.preview, Preview::Buffer { path: p, .. } if p == path);
+                self.buffers.remove(path);
+                // Dropping the buffer is what lets the file be classified
+                // afresh, since an open buffer always wins over disk.
+                if showing {
+                    self.sync_preview();
+                } else {
+                    self.sync_pinned();
+                }
+                self.status = format!("{name} {what}");
+                return true;
             }
-            self.status = format!("{name} is gone from disk");
-            return true;
         };
 
         if dirty {
@@ -276,11 +295,30 @@ impl App {
         if editor.to_text() == text {
             return false;
         }
+        // Marks every line changed, so both panes' saved highlighting of this
+        // file starts again, wherever it is drawn.
         editor.reload_from(&text);
-        // The cache holds parser state keyed by line number, and every line
-        // number in this file has just been reconsidered.
-        self.highlight_cache.clear();
         self.status = format!("{name} changed on disk, reloaded");
         true
+    }
+
+    /// Bring every clean buffer up to date with its file, in place, the way
+    /// a change the watcher noticed is taken on: the cursor and the scroll
+    /// stay where they were. One that is gone or no longer text is dropped,
+    /// and a dirty one is left alone, its edits being worth more than the
+    /// disk's copy. For `*reload`, and after a replace across the project.
+    pub(super) fn reread_clean_buffers(&mut self) {
+        let clean: Vec<PathBuf> = self
+            .buffers
+            .iter()
+            .filter(|(_, ed)| !ed.dirty)
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in clean {
+            // Stamped first, so a file too busy to read keeps the mark that
+            // has the next scan try it again.
+            self.note_file(&path);
+            self.take_on_disk(&path);
+        }
     }
 }

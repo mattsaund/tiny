@@ -200,3 +200,75 @@ fn a_plugin_command_can_change_a_setting_too() {
     command(&mut app, "plain");
     assert_eq!(app.config.glyphs, GlyphSet::Ascii);
 }
+
+#[test]
+fn a_hook_that_opens_a_file_does_not_hear_its_own_open() {
+    // Every open opens another: without a guard this recursed until the
+    // stack ran out, taking the terminal down with it.
+    let (_td, mut app) = with_plugins(&[(
+        "follow.lua",
+        r#"tiny.on("open", function(path) tiny.open("src/main.py") end)"#,
+    )]);
+    select(&mut app, "README.md");
+    app.on_key(k(KeyCode::Enter));
+    assert_eq!(
+        app.selected_path().and_then(|p| p.file_name()),
+        Some(std::ffi::OsStr::new("main.py")),
+        "the hook ran once, and its open happened: {}",
+        app.status
+    );
+}
+
+#[test]
+fn a_save_hook_works_on_the_file_being_saved_not_the_one_on_screen() {
+    let (td, mut app) = with_plugins(&[(
+        "stamp.lua",
+        r##"
+        tiny.on("save", function(path)
+          if path:match("%.py$") then tiny.set_text(tiny.text() .. "# saved\n") end
+        end)
+        "##,
+    )]);
+    // Edit the code, then look at the note and save the whole project from
+    // the root row: the hook hears about main.py while README.md is on
+    // screen.
+    select(&mut app, "main.py");
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, "x");
+    app.on_key(k(KeyCode::Esc));
+    select(&mut app, "README.md");
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, "y");
+    app.on_key(k(KeyCode::Esc));
+    app.on_key(k(KeyCode::Home));
+    app.on_key(ctrl('s'));
+
+    let code = &app.buffers[&td.path().join("src/main.py")];
+    assert!(
+        code.to_text().ends_with("# saved\n"),
+        "the hook's edit is in main.py: {:?}",
+        code.to_text()
+    );
+    let note = &app.buffers[&td.path().join("README.md")];
+    assert!(
+        !note.to_text().contains("# saved"),
+        "and not in the note on screen: {:?}",
+        note.to_text()
+    );
+}
+
+#[test]
+fn a_formatter_with_nothing_to_change_leaves_the_file_saved() {
+    let (_td, mut app) = with_plugins(&[(
+        "same.lua",
+        r#"tiny.on("save", function(path) tiny.set_text(tiny.text()) end)"#,
+    )]);
+    select(&mut app, "README.md");
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, "x");
+    app.on_key(ctrl('s'));
+    assert!(
+        !app.active_buffer().unwrap().dirty,
+        "the hook handed the text back unchanged, which is not an edit"
+    );
+}
