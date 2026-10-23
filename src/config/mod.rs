@@ -38,11 +38,13 @@
 //! should cost you an underline, never the program.
 
 pub mod glyphs;
+pub mod host;
 pub mod keys;
 pub mod keyspec;
 pub mod theme;
 
 pub use self::glyphs::{GlyphSet, Glyphs};
+pub use self::host::{Colors, Host};
 pub use self::theme::{Palette, Theme};
 
 use std::collections::BTreeMap;
@@ -103,6 +105,9 @@ pub struct Config {
     /// look right in any of them. Read from `markers` too, its old name.
     #[serde(alias = "markers")]
     pub glyphs: GlyphSet,
+    /// How many colors tiny draws with: `auto` for as many as the terminal
+    /// has, see [`host`], or fewer by hand.
+    pub colors: Colors,
     /// Draw boxes around the panes. Off gives a plainer, quieter screen.
     pub borders: bool,
 
@@ -130,7 +135,8 @@ impl Default for Config {
             tree_side: Side::Left,
             tree_width: 0.30,
             line_numbers: true,
-            glyphs: GlyphSet::Unicode,
+            glyphs: GlyphSet::Auto,
+            colors: Colors::Auto,
             borders: true,
             syntax_theme: "base16-ocean.dark".into(),
             search_ignore: [".git", "target", "node_modules", ".venv", "__pycache__"]
@@ -256,7 +262,8 @@ impl Config {
             ("tree_side", "left or right"),
             ("tree_width", "0.1 to 0.6"),
             ("line_numbers", ""),
-            ("glyphs", "unicode or ascii"),
+            ("glyphs", "auto, unicode or ascii"),
+            ("colors", "auto, truecolor, 256, 16 or none"),
             ("borders", ""),
             ("syntax_theme", "colors for code"),
             ("prose_extensions", "wrapped, not code"),
@@ -295,6 +302,7 @@ impl Config {
             "tree_width" => format!("{:.2}", self.tree_width),
             "line_numbers" => self.line_numbers.to_string(),
             "glyphs" => self.glyphs.name().into(),
+            "colors" => self.colors.name().into(),
             "borders" => self.borders.to_string(),
             "syntax_theme" => self.syntax_theme.clone(),
             "prose_extensions" => self.prose_extensions.join(" "),
@@ -346,8 +354,12 @@ impl Config {
             // `markers` was this setting's name before it covered more than
             // the browser, and is still what some people will type.
             "glyphs" | "markers" => {
-                self.glyphs =
-                    GlyphSet::parse(v).ok_or_else(|| anyhow!("glyphs must be unicode or ascii"))?
+                self.glyphs = GlyphSet::parse(v)
+                    .ok_or_else(|| anyhow!("glyphs must be auto, unicode or ascii"))?
+            }
+            "colors" => {
+                self.colors = Colors::parse(v)
+                    .ok_or_else(|| anyhow!("colors must be auto, truecolor, 256, 16 or none"))?
             }
             "borders" => self.borders = parse_bool(v)?,
             "syntax_theme" => {

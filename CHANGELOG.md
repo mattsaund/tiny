@@ -5,9 +5,12 @@ Each version is a `v` tag, with ready-made binaries on its
 
 ## 0.5.5 - 2026-10-23
 
-- **Any font.** A `glyphs` setting, `unicode` or `ascii`, picks every line,
-  bullet, rule and arrow tiny draws, so it fits whatever font and terminal
-  you use. Plugins can set it with the new `tiny.set`.
+- **Any font, any terminal.** tiny looks at the terminal it is running in
+  and draws to suit it: line drawing where the font has it and plain ASCII
+  where it may not (the Linux console, a vt100, Windows' own console), and
+  as many colors as the terminal shows, down to none for `NO_COLOR`. The
+  `glyphs` and `colors` settings override it, and plugins can set them with
+  the new `tiny.set`.
 - **Two panes.** `Ctrl+W` splits the space beside the browser in two, on
   every OS. `Shift+Left` and `Shift+Right` move between them.
 - **Windows on Arm** has its own build, and the installer picks it.
@@ -28,9 +31,10 @@ Each version is a `v` tag, with ready-made binaries on its
 - **Lighter:** files you only look at are not kept in memory, minified files
   no longer stall the editor, undo has a memory limit, and idle tiny draws
   nothing.
-- **Fixes:** Shift+Tab works in the map, tabs and wide characters keep the
-  cursor on its text, Ctrl+C stops the installer, and running the tests no
-  longer resets your `tiny.conf`.
+- **Fixes:** Backspace works on terminals that send it as Ctrl+H, Shift+Tab
+  works in the map, tabs and wide characters keep the cursor on its text,
+  Ctrl+C stops the installer, and running the tests no longer resets your
+  `tiny.conf`.
 
 ## 0.5.1 - 2026-10-21
 

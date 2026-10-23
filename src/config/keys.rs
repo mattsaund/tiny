@@ -1157,6 +1157,21 @@ mod tests {
     }
 
     #[test]
+    fn control_h_is_the_backspace_some_terminals_send() {
+        let back = from_terminal(ev(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(
+            (back.code, back.modifiers),
+            (KeyCode::Backspace, KeyModifiers::NONE)
+        );
+        // Any other chord with an h is left as it was.
+        let alt = from_terminal(ev(
+            KeyCode::Char('h'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(alt.code, KeyCode::Char('h'));
+    }
+
+    #[test]
     fn one_movement_is_one_action_in_every_pane_that_has_it() {
         let map = Keymap::default();
         let down = ev(KeyCode::Down, KeyModifiers::NONE);

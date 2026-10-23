@@ -165,7 +165,7 @@ fn a_misspelled_setting_is_an_error_at_the_line_that_wrote_it() {
         "and says which setting: {:?}",
         app.plugins.errors
     );
-    assert_eq!(app.config.glyphs, GlyphSet::Unicode, "nothing changed");
+    assert_eq!(app.config.glyphs, GlyphSet::Auto, "nothing changed");
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn a_plugin_command_can_change_a_setting_too() {
         "toggle.lua",
         r#"tiny.command("plain", function() tiny.set("glyphs", "ascii") end)"#,
     )]);
-    assert_eq!(app.config.glyphs, GlyphSet::Unicode);
+    assert_eq!(app.config.glyphs, GlyphSet::Auto);
     command(&mut app, "plain");
     assert_eq!(app.config.glyphs, GlyphSet::Ascii);
 }

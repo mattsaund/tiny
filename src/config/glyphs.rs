@@ -8,9 +8,12 @@
 //! a box or a question mark exactly where the shape of the screen should be.
 //!
 //! So the font question is really a character question, and it has one
-//! setting: `glyphs`, either `unicode` or `ascii`. [`Glyphs`] is everything
-//! each one draws. ASCII is the floor every font on every terminal has, so
-//! with it tiny looks right in all of them.
+//! setting: `glyphs`, which is `auto` until it is set, and otherwise
+//! `unicode` or `ascii`. [`Glyphs`] is everything each one draws. ASCII is the
+//! floor every font on every terminal has, so with it tiny looks right in all
+//! of them; `auto` picks it where the terminal tiny is running in might not
+//! have the rest (a Linux console, a `vt100`, Windows' own console), and
+//! Unicode everywhere else, see [`super::host`].
 //!
 //! # Where the set reaches
 //!
@@ -29,12 +32,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GlyphSet {
+    /// Whichever suits the terminal tiny is running in, see
+    /// [`Host`](super::host::Host).
+    #[default]
+    Auto,
     /// Box drawing, arrows and bullets.
     ///
     /// `arrows` is what tiny called this before it covered more than the
     /// browser's markers, in a setting called `markers`. Both old spellings
     /// are still read, so an old config keeps its look.
-    #[default]
     #[serde(alias = "arrows")]
     Unicode,
     /// Nothing outside ASCII, for a font or a terminal that has none of it.
@@ -45,6 +51,7 @@ impl GlyphSet {
     /// As it is written in the config.
     pub fn name(self) -> &'static str {
         match self {
+            GlyphSet::Auto => "auto",
             GlyphSet::Unicode => "unicode",
             GlyphSet::Ascii => "ascii",
         }
@@ -54,16 +61,28 @@ impl GlyphSet {
     /// `arrows` is accepted for the reason the variant says.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(GlyphSet::Auto),
             "unicode" | "arrows" => Some(GlyphSet::Unicode),
             "ascii" => Some(GlyphSet::Ascii),
             _ => None,
         }
     }
 
-    /// The characters this set draws.
+    /// The setting as this terminal draws it: `auto` is whichever set its
+    /// font can be counted on for.
+    pub fn resolve(self, host: &super::host::Host) -> Self {
+        match self {
+            GlyphSet::Auto if host.line_drawing => GlyphSet::Unicode,
+            GlyphSet::Auto => GlyphSet::Ascii,
+            fixed => fixed,
+        }
+    }
+
+    /// The characters this set draws. `auto` not yet resolved draws as a
+    /// modern terminal would, the assumption until tiny has looked.
     pub fn glyphs(self) -> &'static Glyphs {
         match self {
-            GlyphSet::Unicode => &UNICODE,
+            GlyphSet::Auto | GlyphSet::Unicode => &UNICODE,
             GlyphSet::Ascii => &ASCII,
         }
     }
