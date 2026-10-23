@@ -28,6 +28,7 @@
 //! one of them has a new modification time. There is still no inotify and no
 //! background thread; see `app::watch` for why polling was the cheaper answer.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -288,18 +289,24 @@ impl Tree {
         };
         match fresh {
             Ok(entries) => {
-                let old = std::mem::take(&mut node.children);
+                // By name, so a folder of ten thousand files being written to
+                // is matched up in one pass rather than ten thousand, and a
+                // kept subtree is moved across rather than copied.
+                let mut old: HashMap<String, Node> = std::mem::take(&mut node.children)
+                    .into_iter()
+                    .map(|n| (n.name.clone(), n))
+                    .collect();
                 node.children = entries
                     .into_iter()
                     .map(|mut fresh_child| {
-                        if let Some(prev) = old.iter().find(|o| o.name == fresh_child.name) {
-                            // Same entry as before: keep what the user had open.
-                            if prev.is_dir == fresh_child.is_dir {
-                                fresh_child.expanded = prev.expanded;
-                                fresh_child.loaded = prev.loaded;
-                                fresh_child.unreadable = prev.unreadable;
-                                fresh_child.children = prev.children.clone();
-                            }
+                        // Same entry as before: keep what the user had open.
+                        if let Some(prev) = old.remove(&fresh_child.name)
+                            && prev.is_dir == fresh_child.is_dir
+                        {
+                            fresh_child.expanded = prev.expanded;
+                            fresh_child.loaded = prev.loaded;
+                            fresh_child.unreadable = prev.unreadable;
+                            fresh_child.children = prev.children;
                         }
                         fresh_child
                     })

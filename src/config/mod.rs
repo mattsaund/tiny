@@ -26,8 +26,9 @@
 //! 4. Arms in [`Config::get`] and [`Config::set`].
 //!
 //! Miss (3) and the setting works from a config file but is invisible in the
-//! UI; miss (4) and `*set` reports it as unknown. The
-//! `every_setting_round_trips` test in this file catches most of this.
+//! UI; miss (4) and `*set` reports it as unknown. The tests
+//! `every_indexed_setting_can_be_read_and_written` and
+//! `roundtrips_through_the_conf_file` catch most of this.
 //!
 //! # Nothing here fails hard
 //!
@@ -230,6 +231,10 @@ impl Config {
     /// which a hand-edited `tree_width = 40` produces a tree wider than the
     /// window or a `tab_width = 0` produces an infinite loop.
     fn sanitized(mut self) -> Self {
+        // `nan` parses as a number, and clamping leaves it as it is.
+        if !self.tree_width.is_finite() {
+            self.tree_width = Config::default().tree_width;
+        }
         self.tree_width = self.tree_width.clamp(0.10, 0.60);
         self.tab_width = self.tab_width.clamp(1, 16);
         keys::migrate(&mut self.keys);
@@ -479,6 +484,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.set("tree_width", "0.99").unwrap();
         assert_eq!(cfg.tree_width, 0.60);
+        cfg.set("tree_width", "nan").unwrap();
+        assert_eq!(cfg.tree_width, 0.30, "not a number is not a width");
         cfg.set("tab_width", "0").unwrap();
         assert_eq!(cfg.tab_width, 1);
     }
