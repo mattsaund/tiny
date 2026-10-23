@@ -245,6 +245,16 @@ impl Tree {
         }
     }
 
+    /// Re-read these directories, and nothing else: the ones a scan of the
+    /// disk found changed. Given parents before children, the way
+    /// [`Tree::loaded_dirs`] lists them, a folder that has gone takes its
+    /// subtree with it before anything inside it is asked for.
+    pub fn refresh(&mut self, dirs: &[PathBuf]) {
+        for d in dirs {
+            self.load_children_at(d);
+        }
+    }
+
     /// Paths of every currently-loaded directory, parents before children so
     /// a refresh pass rebuilds the tree top-down.
     ///
@@ -283,11 +293,13 @@ impl Tree {
     /// the program.
     fn load_children_at(&mut self, dir: &Path) {
         let show_hidden = self.show_hidden;
-        let fresh = read_dir_sorted(dir, show_hidden);
-        let Some(node) = self.find_mut(dir) else {
+        // Not a folder any more: deleted and made again as a file since the
+        // list of folders to read was taken, which is a file to leave alone
+        // rather than a folder that could not be read.
+        let Some(node) = self.find_mut(dir).filter(|n| n.is_dir) else {
             return;
         };
-        match fresh {
+        match read_dir_sorted(dir, show_hidden) {
             Ok(entries) => {
                 // By name, so a folder of ten thousand files being written to
                 // is matched up in one pass rather than ten thousand, and a

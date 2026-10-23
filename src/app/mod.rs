@@ -93,8 +93,10 @@
 //! # Buffers outlive the selection
 //!
 //! `buffers` is keyed by path and is never cleared wholesale. Arrowing past a
-//! file opens it; arrowing away leaves it open, with any unsaved edits intact.
-//! Only three things remove entries: a delete (drops the file and anything
+//! file opens it; arrowing away leaves it open if anything in it is yours (an
+//! edit, a step to undo, a cursor moved) and lets it go otherwise, since
+//! reading the file again gives back exactly the same thing. Beyond that,
+//! only three things remove entries: a delete (drops the file and anything
 //! under it, once the question has said how many unsaved files go too), a
 //! rename (moves the entry to the new key so edits follow the file), and
 //! finding that a file with no unsaved edits has stopped being readable
@@ -245,6 +247,10 @@ pub struct App {
     /// command says. Kept while the bar is open, so it is not walked again on
     /// every keystroke; dropped when a command runs, see `plan`.
     names: Option<plan::Names>,
+    /// The last count across the project of what a replace would change, so
+    /// typing its replacement does not count the same thing again on every
+    /// pause. Forgotten along with `names`.
+    replace_count: Option<(search::Needle, search::Report)>,
     /// The last `goto` that went somewhere, and which of its places it went
     /// to, so running it again goes on to the next one.
     last_jump: Option<(String, usize)>,
@@ -357,6 +363,7 @@ impl App {
             update_by_hand: false,
             update_on_exit: None,
             names: None,
+            replace_count: None,
             last_jump: None,
             planning_for_preview: false,
             plugins: crate::plugins::Plugins::default(),

@@ -156,50 +156,75 @@ impl App {
     /// Entries appearing in or disappearing from the directories on screen.
     ///
     /// One stat per directory the tree has read; collapsed ones are not read,
-    /// so a project with a large unopened subtree costs nothing to watch. Any
-    /// difference re-reads the lot, because [`Tree::refresh_all`] is cheap
-    /// relative to the drawing that follows it and the alternative is a
-    /// per-directory merge that would have to reimplement it.
-    ///
-    /// [`Tree::refresh_all`]: crate::files::tree::Tree::refresh_all
+    /// so a project with a large unopened subtree costs nothing to watch. Only
+    /// a directory whose stamp moved, or is too young to trust, is read again,
+    /// and only a listing that came out different is redrawn: a build writing
+    /// into a folder, or an editor saving through a temporary file, moves the
+    /// stamp without changing a single row.
     fn rescan_dirs(&mut self) -> bool {
-        let mut changed = false;
+        let mut moved = Vec::new();
         let mut fresh: HashMap<PathBuf, Stamp> = HashMap::new();
         for dir in self.tree.loaded_dirs() {
             let now = stamp(&dir);
-            changed |= self
+            if self
                 .watch
                 .dirs
                 .get(&dir)
-                .is_some_and(|was| *was != now || racy(was));
+                .is_some_and(|was| *was != now || racy(was))
+            {
+                moved.push(dir.clone());
+            }
             fresh.insert(dir, now);
         }
         self.watch.dirs = fresh;
-        if !changed {
+        if moved.is_empty() {
             return false;
+        }
+        self.tree.refresh(&moved);
+        if self.tree.flatten() == self.rows {
+            // Nothing in the tree changed, but what a folder holds may have,
+            // in files the tree is not showing: hidden ones, or ones in a
+            // folder that was opened and closed again. A remembered size that
+            // takes in a moved folder is forgotten, and a folder under the
+            // cursor is looked at again, since its count and size are drawn.
+            self.size_cache
+                .retain(|p, _| !moved.iter().any(|m| m.starts_with(p)));
+            let on = self
+                .selected_row()
+                .filter(|r| r.is_dir)
+                .map(|r| r.path.clone());
+            if !on.is_some_and(|dir| moved.iter().any(|m| m.starts_with(&dir))) {
+                return false;
+            }
+            // Looking again is only news if it found something different.
+            let (preview, size) = (self.preview.clone(), self.cursor_size);
+            self.sync_preview();
+            return self.preview != preview || self.cursor_size != size;
         }
         // `rebuild_rows` re-derives the preview, which resets its scroll. That
         // is right when the cursor has moved to another file and wrong when it
         // has not: a file being written elsewhere in the project should not
         // send you back to the top of the one you are reading.
-        let before: Vec<PathBuf> = self.rows.iter().map(|r| r.path.clone()).collect();
         let was_on = self.selected_path().map(Path::to_path_buf);
         let scroll = self.preview_scroll;
-        self.tree.refresh_all();
         self.rebuild_rows();
         if was_on.as_deref() == self.selected_path() {
             self.preview_scroll = scroll;
-        } else if self.focus == Focus::Editor {
-            // The row the keyboard was in has gone, and the cursor has fallen
-            // onto a neighbor. Take the keyboard out of the file: otherwise
-            // the next thing typed is typed into whichever file that turned
-            // out to be. What happened to the file itself is `take_on_disk`'s
-            // to say.
+            return true;
+        }
+        // The row the cursor was on has gone, and it has fallen onto a
+        // neighbor. Said here, since a file only looked at has been let go of
+        // on the way, and so has no buffer for `take_on_disk` to speak for;
+        // one with unsaved edits does, and what that says comes after this.
+        if let Some(gone) = was_on.filter(|p| !p.exists()) {
+            self.status = format!("{} is gone from disk", display_name(&gone));
+        }
+        if self.focus == Focus::Editor {
+            // Take the keyboard out of the file: otherwise the next thing
+            // typed is typed into whichever file the cursor fell onto.
             self.focus_tree();
         }
-        // A racy stamp is a reason to look, not proof that anything moved, and
-        // looking and finding the same listing is not worth a frame.
-        !self.rows.iter().map(|r| &r.path).eq(before.iter())
+        true
     }
 
     /// Open files whose contents have been written by someone else.

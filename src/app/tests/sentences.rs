@@ -208,6 +208,29 @@ fn replace_with_no_in_asks_then_does_the_whole_project() {
     );
 }
 
+#[test]
+fn a_replace_is_counted_once_while_the_replacement_is_typed_and_again_on_enter() {
+    let (td, mut app) = project();
+    command_bar(&mut app);
+    type_str(&mut app, "replace widget with g");
+    // Another program adds one more while the bar is open. Typing on into the
+    // replacement does not count `widget` across the project again...
+    fs::write(td.path().join("more.md"), "a widget\n").unwrap();
+    type_str(&mut app, "adget");
+    let Mode::Bar(b) = &app.mode else {
+        panic!("the bar closed");
+    };
+    assert!(
+        matches!(&b.plan, Some(Ok(s)) if s.contains("2 occurrences")),
+        "{:?}",
+        b.plan
+    );
+    // ...and Enter counts afresh, since it acts on the disk as it is now.
+    app.on_key(k(KeyCode::Enter));
+    assert!(matches!(app.mode, Mode::Confirm(_)), "it asks first");
+    assert!(joined(&mut app).contains("3 occurrences"));
+}
+
 // ---- names ---------------------------------------------------------------
 
 #[test]
