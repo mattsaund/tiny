@@ -222,6 +222,19 @@ impl Tiny {
         self.wait_until(&format!("{text:?}"), |t| t.text().contains(text));
     }
 
+    /// Whether the screen comes to show `text` within `limit`, for what is
+    /// worth knowing but not worth failing over.
+    fn shows_within(&self, text: &str, limit: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < limit {
+            if self.text().contains(text) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
     /// What the pane beside the browser is titled: whatever the browser's
     /// cursor is on, since the pane follows it.
     fn on(&self) -> String {
@@ -446,14 +459,41 @@ fn typing_editing_and_saving_reach_the_file() {
 fn the_function_and_control_keys_open_what_they_should() {
     let mut tiny = Tiny::start("xterm-256color", 100, 30);
     tiny.wait_for("README.md");
-    // F1 both ways it is spelled: SS3 by xterm and most, CSI by the VT220
-    // family. Esc closes the help.
+    // The help, and Esc to close it.
     let help = "any other key closes";
-    for f1 in ["\x1bOP", "\x1b[11~"] {
-        tiny.send(f1);
+    if cfg!(windows) {
+        // A ConPTY turns what it is sent into key events, and which of the
+        // spellings of F1 it knows is its own business: Windows Terminal
+        // sends it keys in an encoding of Windows' own. `?` always arrives.
+        tiny.send("?");
         tiny.wait_for(help);
         tiny.send("\x1b");
         tiny.wait_until("the help to close", |t| !t.text().contains(help));
+        for (spelling, f1) in [
+            (
+                "Windows Terminal's",
+                "\x1b[112;59;0;1;0;1_\x1b[112;59;0;0;0;1_",
+            ),
+            ("xterm's", "\x1bOP"),
+            ("the VT220's", "\x1b[11~"),
+        ] {
+            tiny.send(f1);
+            let opened = tiny.shows_within(help, Duration::from_secs(3));
+            eprintln!("F1 spelled {spelling} way through a ConPTY: opened help {opened}");
+            if opened {
+                tiny.send("\x1b");
+                tiny.wait_until("the help to close", |t| !t.text().contains(help));
+            }
+        }
+    } else {
+        // Both ways F1 is spelled: SS3 by xterm and most, CSI by the VT220
+        // family.
+        for f1 in ["\x1bOP", "\x1b[11~"] {
+            tiny.send(f1);
+            tiny.wait_for(help);
+            tiny.send("\x1b");
+            tiny.wait_until("the help to close", |t| !t.text().contains(help));
+        }
     }
     // Ctrl+L, the project map, which also takes Shift+Tab as a terminal
     // sends it.
