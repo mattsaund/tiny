@@ -5,7 +5,7 @@ browser that lives in the terminal. Search, git, a project map and plugins are
 built in. Plain files in plain folders; nothing proprietary.
 
 **Full installation size:**\
-8.47 MB Linux (x86_64), 7.92 MB Linux (arm64)\
+8.48 MB Linux (x86_64), 7.92 MB Linux (arm64)\
 7.68 MB macOS (Intel), 7.28 MB macOS (Apple silicon)\
 7.93 MB Windows (x86_64), 7.44 MB Windows (arm64)
 
