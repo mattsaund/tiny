@@ -2,10 +2,9 @@
 //! ratatui spans.
 //!
 //! Highlighting is stateful (syntect has to walk a file from the top to know
-//! whether line 400 sits inside a block comment) so the window API below runs
-//! the parser from line 0 but only *collects* the lines actually on screen,
-//! then stops. Cost scales with scroll depth rather than file size, and no
-//! cache has to be invalidated on every keystroke.
+//! whether line 400 sits inside a block comment) so the window API below
+//! parses down to the window but only *collects* the lines actually on
+//! screen, then stops. Nothing below the window is ever read.
 //!
 //! # Resuming instead of restarting
 //!
@@ -82,6 +81,13 @@ pub struct Highlighter {
 /// being worth it and plain text still edits fine.
 const MAX_HIGHLIGHT_LINES: usize = 20_000;
 
+/// The longest line, in bytes, that is parsed for color. A longer one is
+/// drawn plain and the parser carries on below it as though it were not
+/// there: a minified script is one line of a megabyte or more, and parsing
+/// it took longer than a frame, every frame. Nobody reads a line that long
+/// for its colors; the lines around it still have theirs.
+const MAX_HIGHLIGHT_LINE: usize = 16 * 1024;
+
 /// File names whose grammar cannot be worked out from the extension.
 ///
 /// There is exactly one entry and it is tiny's own config file. `tiny.conf` is
@@ -104,10 +110,11 @@ const STRIDE: usize = 50;
 /// Saved parser state, so a window deep in a file is reached by resuming
 /// rather than by parsing everything above it again.
 ///
-/// One of these lives on `App` and follows whichever buffer is being edited.
-/// Switching files throws it away and rebuilds: you edit one file at a time,
-/// and a cache per buffer would have to be evicted, which is a second problem
-/// in exchange for a saving nobody would notice.
+/// Each pane that draws code keeps one (the editor, the pane set aside in a
+/// split, each side of the git diff) and it follows whichever file that pane
+/// shows. Switching files throws it away and rebuilds: a cache per file would
+/// have to be evicted, which is a second problem in exchange for a saving
+/// nobody would notice.
 #[derive(Default)]
 pub struct Resume {
     /// What these states describe. Anything else and they are meaningless:
@@ -162,7 +169,9 @@ impl Resume {
 
 impl Highlighter {
     /// A highlighter with the default theme, discarding the warning that
-    /// cannot happen for a name syntect is known to ship.
+    /// cannot happen for a name syntect is known to ship. The program always
+    /// names its theme, from the config; this is for tests.
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::with_theme("base16-ocean.dark").0
     }
@@ -291,9 +300,9 @@ impl Highlighter {
     /// string rather than as code, and `resume` is what keeps "above it" from
     /// meaning "all of them".
     ///
-    /// Two escape hatches drop to unstyled text rather than failing: files past
-    /// [`MAX_HIGHLIGHT_LINES`], and any line syntect refuses to parse. Neither
-    /// should stop you editing.
+    /// Three escape hatches drop to unstyled text rather than failing: files
+    /// past [`MAX_HIGHLIGHT_LINES`], a line past [`MAX_HIGHLIGHT_LINE`], and
+    /// any line syntect refuses to parse. None of them should stop you editing.
     fn window(
         &self,
         lines: &[String],
@@ -343,6 +352,12 @@ impl Highlighter {
             if i % STRIDE == 0 && resume.states.len() == i / STRIDE {
                 resume.states.push((parse.clone(), hl.clone()));
             }
+            if line.len() > MAX_HIGHLIGHT_LINE {
+                if i >= start {
+                    out.push(vec![(Style::default(), line.clone())]);
+                }
+                continue;
+            }
             buf.clear();
             buf.push_str(line);
             buf.push('\n');
@@ -377,12 +392,6 @@ impl Highlighter {
         let lines: Vec<String> = text.lines().map(str::to_string).collect();
         let n = lines.len();
         self.highlight_window(&lines, syntax, 0, n)
-    }
-}
-
-impl Default for Highlighter {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -459,6 +468,17 @@ mod tests {
             .iter()
             .map(|line| line.iter().map(|(_, t)| t.as_str()).collect())
             .collect()
+    }
+
+    #[test]
+    fn a_line_too_long_to_parse_is_drawn_plain_and_the_next_still_colors() {
+        let h = Highlighter::new();
+        let syntax = h.syntax_for_path(Path::new("x.js"), "");
+        let long = format!("var a = \"{}\";", "x".repeat(MAX_HIGHLIGHT_LINE));
+        let lines = vec![long.clone(), "var b = 1;".to_string()];
+        let out = h.highlight_window(&lines, syntax, 0, 2);
+        assert_eq!(out[0], vec![(Style::default(), long)]);
+        assert!(out[1].len() > 1, "still colored: {:?}", out[1]);
     }
 
     #[test]

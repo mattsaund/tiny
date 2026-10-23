@@ -205,7 +205,7 @@ pub(super) fn draw_results(f: &mut Frame, app: &App, area: Rect, b: &Bar) {
             // A raw tab is a cell holding nothing, so `x := 1\t// TODO` would
             // read as one word run into the next.
             let text = vec![Span::styled(
-                tabs::expand(&hit.text, tab_width, 0),
+                tabs::expand(&hit.text, tab_width, 0).into_owned(),
                 pal.text,
             )];
             match &query {

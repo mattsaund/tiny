@@ -11,6 +11,7 @@
 //! first time someone writes an accented letter.
 
 use super::{EditKind, Editor, byte_of_char};
+use crate::text::tabs;
 
 impl Editor {
     pub fn insert_char(&mut self, c: char) {
@@ -22,12 +23,16 @@ impl Editor {
         self.dirty = true;
     }
 
+    /// Tab types spaces up to the next tab stop, the way a tab character
+    /// would be drawn there, so text indented from part way along a line
+    /// still lines up with the stops.
     pub fn insert_tab(&mut self, width: usize) {
         self.push_undo(EditKind::Insert);
-        let byte = byte_of_char(&self.lines[self.cursor_line], self.cursor_col);
-        let spaces = " ".repeat(width.max(1));
-        self.lines[self.cursor_line].insert_str(byte, &spaces);
-        self.cursor_col += width.max(1);
+        let line = &self.lines[self.cursor_line];
+        let n = tabs::stop(tabs::column(line, self.cursor_col, width), width);
+        let byte = byte_of_char(line, self.cursor_col);
+        self.lines[self.cursor_line].insert_str(byte, &" ".repeat(n));
+        self.cursor_col += n;
         self.goal_col = self.cursor_col;
         self.dirty = true;
     }
@@ -103,8 +108,13 @@ impl Editor {
         self.dirty = true;
     }
 
-    /// Delete the whole current line, the way micro's Ctrl+K does.
+    /// Delete the whole current line, the way micro's Ctrl+K does. In a file
+    /// that is one empty line there is nothing to delete, and nothing is
+    /// marked unsaved.
     pub fn delete_line(&mut self) {
+        if self.lines.len() == 1 && self.lines[0].is_empty() {
+            return;
+        }
         self.push_undo(EditKind::Structural);
         if self.lines.len() == 1 {
             self.lines[0].clear();
@@ -167,6 +177,4 @@ impl Editor {
         self.clamp_cursor();
         self.goal_col = self.cursor_col;
     }
-
-    // ---- movement ---------------------------------------------------------
 }

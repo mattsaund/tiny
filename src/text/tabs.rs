@@ -26,6 +26,8 @@
 //! each would put everything after it (a tab stop, the cursor) a cell or two
 //! away from where it is drawn.
 
+use std::borrow::Cow;
+
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -36,7 +38,7 @@ pub const MARKDOWN: usize = 4;
 ///
 /// Never zero: a tab always moves at least one column, and a `tab_width` of
 /// zero would otherwise expand to nothing and put the bug back.
-fn stop(col: usize, tab_width: usize) -> usize {
+pub fn stop(col: usize, tab_width: usize) -> usize {
     let w = tab_width.max(1);
     w - (col % w)
 }
@@ -46,9 +48,12 @@ fn stop(col: usize, tab_width: usize) -> usize {
 ///
 /// A newline returns to column zero, so a chunk holding several lines expands
 /// each of them against its own left edge rather than against the one before.
-pub fn expand(text: &str, tab_width: usize, start: usize) -> String {
+///
+/// Text with no tab in it, which is nearly all of it, comes back borrowed:
+/// this runs on every piece of every line drawn.
+pub fn expand(text: &str, tab_width: usize, start: usize) -> Cow<'_, str> {
     if !text.contains('\t') {
-        return text.to_string();
+        return Cow::Borrowed(text);
     }
     let mut out = String::with_capacity(text.len());
     let mut col = start;
@@ -69,7 +74,7 @@ pub fn expand(text: &str, tab_width: usize, start: usize) -> String {
             }
         }
     }
-    out
+    Cow::Owned(out)
 }
 
 /// The column that `chars` characters of `line` reach, with tabs taken to
