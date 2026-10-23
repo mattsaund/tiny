@@ -4,8 +4,10 @@ Tiny is an IDE, text editor, personal knowledge management system, and file
 browser that lives in the terminal. Search, git, a project map and plugins are
 built in. Plain files in plain folders; nothing proprietary.
 
-**Full installation size:** 7.54 MB macOS (Intel), 7.15 MB macOS (Apple
-silicon), 8.32 MB Linux (x86_64), 7.78 MB Linux (arm64), 7.78 MB Windows
+**Full installation size:**\
+8.47 MB Linux (x86_64), 7.92 MB Linux (arm64)\
+7.68 MB macOS (Intel), 7.28 MB macOS (Apple silicon)\
+7.93 MB Windows (x86_64), 7.44 MB Windows (arm64)
 
 Try it here: https://msaunders.dev/tiny/
 
@@ -45,6 +47,14 @@ tiny ~/code/main.py  # that file
 
 `/` searches names and contents as you type. Start with `*` for a command.
 
+## Two panes
+
+![two files side by side](docs/split.png)
+
+`Ctrl+W` splits the editor in two, and again goes back to one.
+`Shift+Left` and `Shift+Right` move between them. Each pane keeps its own
+place, even in the same file.
+
 ## Git
 
 ![the git window](docs/git.png)
@@ -77,6 +87,8 @@ audio and PDFs open in your own viewer.
 | `Ctrl+S` | save (on a folder, all of it) |
 | `/`, `Ctrl+F` | search |
 | `Ctrl+G`, `Ctrl+L` | git, map |
+| `Ctrl+W` | two panes, and back to one |
+| `Shift+Left`, `Shift+Right` | the other pane |
 | `Ctrl+T`, `<` `>` | hide the browser, its width |
 | `Ctrl+N` | another tiny window |
 | `Ctrl+Q` | quit |
@@ -113,14 +125,19 @@ end)
 
 `tiny.command` `tiny.on("open"/"save")` `tiny.status` `tiny.text`
 `tiny.set_text` `tiny.insert` `tiny.cursor` `tiny.go` `tiny.path` `tiny.root`
-`tiny.open`
+`tiny.open` `tiny.set`
 
 ## Config
 
 `*config` opens the settings; `tiny --config` prints where `tiny.conf` is.
-Keys go in `[keys]`:
+tiny uses your terminal's font and colors, and picks its characters and
+colors to suit the terminal it is in. `glyphs` (`unicode`, `ascii`) and
+`colors` (`truecolor`, `256`, `16`, `none`) override that. Keys go in
+`[keys]`:
 
 ```toml
+glyphs = "ascii"
+
 [keys]
 down        = "z"
 editor.undo = "ctrl+u"
@@ -137,8 +154,9 @@ to follow specific guidelines:
    understand the code that is being written.
 
 **Tests.** `cargo test`, `cargo clippy` and `cargo fmt`. CI runs all three on
-Linux, macOS and Windows. A version is released by tagging it; see
-`.github/workflows/release.yml`.
+Linux, macOS and Windows, and starts tiny in a terminal there: under eleven
+terminal names, at several sizes, and inside tmux and GNU screen. A version
+is released by tagging it; see `.github/workflows/release.yml`.
 
 ## License and credits
 
