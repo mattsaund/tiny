@@ -463,20 +463,12 @@ fn the_function_and_control_keys_open_what_they_should() {
     let help = "any other key closes";
     if cfg!(windows) {
         // A ConPTY turns what it is sent into key events, and which of the
-        // spellings of F1 it knows is its own business: Windows Terminal
-        // sends it keys in an encoding of Windows' own. `?` always arrives.
+        // spellings of F1 it knows is its own business. `?` always arrives.
         tiny.send("?");
         tiny.wait_for(help);
         tiny.send("\x1b");
         tiny.wait_until("the help to close", |t| !t.text().contains(help));
-        for (spelling, f1) in [
-            (
-                "Windows Terminal's",
-                "\x1b[112;59;0;1;0;1_\x1b[112;59;0;0;0;1_",
-            ),
-            ("xterm's", "\x1bOP"),
-            ("the VT220's", "\x1b[11~"),
-        ] {
+        for (spelling, f1) in [("xterm's", "\x1bOP"), ("the VT220's", "\x1b[11~")] {
             tiny.send(f1);
             let opened = tiny.shows_within(help, Duration::from_secs(3));
             eprintln!("F1 spelled {spelling} way through a ConPTY: opened help {opened}");
@@ -506,6 +498,20 @@ fn the_function_and_control_keys_open_what_they_should() {
     tiny.send("\x17");
     tiny.wait_until("two panes", |t| t.row(0).matches('\u{250c}').count() == 3);
     tiny.quit();
+
+    if cfg!(windows) {
+        // F1 as Windows Terminal sends it to a ConPTY: a key event written
+        // out in full, down and then up. In a ConPTY of its own, since once
+        // one has read keys this way a lone Esc waits to be the start of
+        // another, so Esc goes the same way.
+        let mut tiny = Tiny::start("xterm-256color", 100, 30);
+        tiny.wait_for("README.md");
+        tiny.send("\x1b[112;59;0;1;0;1_\x1b[112;59;0;0;0;1_");
+        tiny.wait_for(help);
+        tiny.send("\x1b[27;1;27;1;0;1_\x1b[27;1;27;0;0;1_");
+        tiny.wait_until("the help to close", |t| !t.text().contains(help));
+        tiny.quit();
+    }
 }
 
 #[test]
