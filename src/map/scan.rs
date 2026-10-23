@@ -467,11 +467,16 @@ fn string_end(b: &[u8], mut i: usize, hashes: usize) -> usize {
 /// quote alone when it is a lifetime or a label (`'a`, `'outer:`).
 fn char_end(text: &str, i: usize) -> usize {
     let rest = &text[i + 1..];
-    if rest.starts_with('\\') {
-        // `'\n'`, `'\''`, `'\u{1F600}'`: up to the quote after the escape.
-        return rest[2..]
+    if let Some(escaped) = rest.strip_prefix('\\') {
+        // `'\n'`, `'\''`, `'\u{1F600}'`: up to the quote after the escaped
+        // character, which is stepped over whole, however many bytes it is.
+        let Some(first) = escaped.chars().next() else {
+            return text.len();
+        };
+        let skip = first.len_utf8();
+        return escaped[skip..]
             .find('\'')
-            .map_or(text.len(), |n| i + 1 + 2 + n + 1);
+            .map_or(text.len(), |n| i + 2 + skip + n + 1);
     }
     let mut chars = rest.chars();
     match (chars.next(), chars.next()) {
@@ -627,9 +632,13 @@ pub(super) fn collect_path_calls(text: &str, f: &mut Facts) {
         if bytes.get(after) == Some(&b'(') {
             f.call(&text[start..end], true);
             // The type the call goes through, when there is one.
+            // Past the whole of the character before it, which is not always
+            // one byte: `// 调用Config::load()`.
             let owner_start = text[..colons]
-                .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .map_or(0, |n| n + 1);
+                .char_indices()
+                .rev()
+                .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_'))
+                .map_or(0, |(n, c)| n + c.len_utf8());
             let owner = &text[owner_start..colons];
             if owner.starts_with(|c: char| c.is_ascii_uppercase()) && owner != "Self" {
                 f.call(owner, true);

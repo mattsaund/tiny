@@ -28,8 +28,8 @@
 
 use std::borrow::Cow;
 
+use ratatui::buffer::CellWidth;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 /// The tab stop CommonMark defines, for anything drawn as markdown.
 pub const MARKDOWN: usize = 4;
@@ -43,16 +43,32 @@ pub fn stop(col: usize, tab_width: usize) -> usize {
     w - (col % w)
 }
 
-/// `text` with every tab replaced by the spaces that reach the next stop,
-/// starting from column `start`.
+/// How many cells one grapheme cluster takes, measured the way ratatui
+/// draws it, so text and the cursor in it can never disagree.
+///
+/// A cluster holding a control character (an Esc, a stray `\r`) is not drawn
+/// at all, so it takes none, where `unicode-width` would count it as one. The
+/// rest are ratatui's own count, which also gives the halfwidth sound marks
+/// `ﾞ` and `ﾟ` the cell terminals draw them in.
+pub fn cluster_width(g: &str) -> usize {
+    if g.contains(char::is_control) {
+        0
+    } else {
+        usize::from(g.cell_width())
+    }
+}
+
+/// `text` as it is drawn: every tab replaced by the spaces that reach the
+/// next stop, starting from column `start`, and every other control
+/// character left out, since ratatui does not draw one.
 ///
 /// A newline returns to column zero, so a chunk holding several lines expands
 /// each of them against its own left edge rather than against the one before.
 ///
-/// Text with no tab in it, which is nearly all of it, comes back borrowed:
-/// this runs on every piece of every line drawn.
+/// Text with no control character in it, which is nearly all of it, comes
+/// back borrowed: this runs on every piece of every line drawn.
 pub fn expand(text: &str, tab_width: usize, start: usize) -> Cow<'_, str> {
-    if !text.contains('\t') {
+    if !text.contains(char::is_control) {
         return Cow::Borrowed(text);
     }
     let mut out = String::with_capacity(text.len());
@@ -68,8 +84,11 @@ pub fn expand(text: &str, tab_width: usize, start: usize) -> Cow<'_, str> {
                 out.push_str(g);
                 col = 0;
             }
+            // Left in a span it would still be counted when the next span is
+            // placed, and push everything after it one cell along.
+            _ if g.contains(char::is_control) => {}
             _ => {
-                col += g.width();
+                col += cluster_width(g);
                 out.push_str(g);
             }
         }
@@ -95,7 +114,7 @@ pub fn column(line: &str, chars: usize, tab_width: usize) -> usize {
         col += if g == "\t" {
             stop(col, tab_width)
         } else {
-            g.width()
+            cluster_width(g)
         };
     }
     col
@@ -104,6 +123,24 @@ pub fn column(line: &str, chars: usize, tab_width: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_control_character_takes_no_cell_because_none_is_drawn() {
+        // A log line with its colors written in: the Esc bytes are not drawn,
+        // so the X is in cell fourteen and the cursor before it has to be.
+        let log = "\x1b[31mERROR\x1b[0m: X";
+        let x = log.chars().position(|c| c == 'X').unwrap();
+        assert_eq!(column(log, x, 4), 14);
+        assert_eq!(column("b\rX", 2, 4), 1, "a stray carriage return");
+        assert_eq!(expand("a\x1bb\rc", 4, 0), "abc", "and none is kept to draw");
+    }
+
+    #[test]
+    fn a_halfwidth_sound_mark_takes_the_cell_terminals_give_it() {
+        // `ｶﾞ` is one cluster, and ratatui draws it two cells wide.
+        assert_eq!(cluster_width("\u{ff76}\u{ff9e}"), 2);
+        assert_eq!(column("\u{ff76}\u{ff9e}x", 2, 4), 2);
+    }
 
     #[test]
     fn a_tab_reaches_the_next_stop_rather_than_a_fixed_width() {

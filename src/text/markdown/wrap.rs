@@ -30,7 +30,7 @@ pub(super) fn clip(s: &str, max_w: usize) -> String {
     let mut out = String::new();
     let mut w = 0;
     for g in s.graphemes(true) {
-        let gw = g.width();
+        let gw = crate::text::tabs::cluster_width(g);
         if w + gw > max_w {
             break;
         }
