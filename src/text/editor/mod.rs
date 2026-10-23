@@ -101,6 +101,7 @@ pub struct View {
     pub cursor_col: usize,
     goal_col: usize,
     pub scroll_y: usize,
+    pub scroll_rows: usize,
     pub scroll_x: usize,
 }
 
@@ -125,6 +126,10 @@ pub struct Editor {
     /// drawn. Owned here but written by [`Editor::sync_scroll`], which `ui`
     /// calls once the pane size is known.
     pub scroll_y: usize,
+    /// In a note drawn formatted, how many drawn rows of the block that
+    /// starts at `scroll_y` are above the pane: one block can be many rows,
+    /// and a pane can begin part way down it. Written by `ui`.
+    pub scroll_rows: usize,
     pub scroll_x: usize,
     /// The file's own line ending, sampled on open and restored on save, so a
     /// CRLF file edited on Linux stays CRLF.
@@ -199,6 +204,7 @@ impl Editor {
             dirty: false,
             goal_col: 0,
             scroll_y: 0,
+            scroll_rows: 0,
             scroll_x: 0,
             line_ending,
             trailing_newline,
@@ -254,12 +260,13 @@ impl Editor {
     /// somebody else's write.
     pub fn reload_from(&mut self, content: &str) {
         let (line, col) = (self.cursor_line, self.cursor_col);
-        let (y, x) = (self.scroll_y, self.scroll_x);
+        let (y, rows, x) = (self.scroll_y, self.scroll_rows, self.scroll_x);
         let path = std::mem::take(&mut self.path);
         *self = Self::from_str(path, content);
         self.cursor_line = line;
         self.cursor_col = col;
         self.scroll_y = y.min(self.lines.len().saturating_sub(1));
+        self.scroll_rows = rows;
         self.scroll_x = x;
         self.clamp_cursor();
         // Every line may differ from what was there, so anything saved about
@@ -327,6 +334,7 @@ impl Editor {
             cursor_col: self.cursor_col,
             goal_col: self.goal_col,
             scroll_y: self.scroll_y,
+            scroll_rows: self.scroll_rows,
             scroll_x: self.scroll_x,
         }
     }
@@ -340,6 +348,7 @@ impl Editor {
         self.scroll_x = view.scroll_x;
         self.clamp_cursor();
         self.scroll_y = view.scroll_y.min(self.lines.len().saturating_sub(1));
+        self.scroll_rows = view.scroll_rows;
     }
 
     /// Clamp the cursor into the buffer. Called after every mutation so no

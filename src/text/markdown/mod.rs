@@ -31,16 +31,16 @@
 //! ```text
 //! source ──▶ pulldown-cmark events ──▶ Renderer ──▶ Vec<Line>
 //!                                        │
-//!                                        ├─ spans:      the inline run being built
+//!                                        ├─ spans:       the inline run being built
 //!                                        ├─ style_stack: nested emphasis/strong/link
-//!                                        ├─ list_stack:  one entry per nesting level
-//!                                        └─ out:        finished lines
+//!                                        ├─ nest:        quotes, lists and items a line is in
+//!                                        └─ out:         finished lines
 //! ```
 //!
 //! The `Renderer` is a small state machine. Inline text accumulates into
-//! `spans` until something block-level ends, at which point `flush_inline` or
-//! `flush_item` wraps it into `out` and clears it. Almost every bug in here
-//! comes from a missing flush before a block boundary.
+//! `spans` until something block-level begins or ends, at which point `flush`
+//! wraps it into `out`, behind whatever the containers it is in put in front
+//! of each line, and clears it.
 //!
 //! Everything is measured in *display width* (`unicode-width`), not character
 //! count, so CJK text and emoji do not overflow the pane.
@@ -60,7 +60,7 @@ mod testing;
 mod render;
 mod wrap;
 
-use pulldown_cmark::{Options, Parser};
+use pulldown_cmark::{BrokenLink, CowStr, Options, Parser, TextMergeStream};
 
 use crate::text::tabs;
 use ratatui::text::{Line, Span};
@@ -246,6 +246,11 @@ impl Block {
 ///    paragraphs either side of it.
 /// 4. Anything else groups with the non-blank lines next to it.
 ///
+/// One exception to the second rule: a list item goes on past a blank line
+/// when what follows is indented under it, its second paragraph or a fence
+/// inside it, all of it one block. Split at the blank line, the indented
+/// paragraph would be drawn alone, as the code block four spaces make it.
+///
 /// Deliberately *not* a rule: a `---` under a line of text stays with it.
 /// That is a setext heading, and pulling the underline into its own block
 /// would turn a title into a paragraph plus a horizontal rule.
@@ -253,7 +258,11 @@ pub fn blocks(lines: &[String]) -> Vec<Block> {
     let mut out: Vec<Block> = Vec::new();
     let mut start: Option<usize> = None;
     let mut fence: Option<(char, usize)> = None;
+    // Whether the open fence is inside the list item `start` began, rather
+    // than a block of its own.
+    let mut fence_in_item = false;
     let mut i = 0;
+    let in_item = |start: Option<usize>| start.is_some_and(|s| is_list_item(&lines[s]));
 
     let close = |out: &mut Vec<Block>, start: &mut Option<usize>, at: usize| {
         if let Some(s) = start.take() {
@@ -266,22 +275,38 @@ pub fn blocks(lines: &[String]) -> Vec<Block> {
         if let Some((ch, len)) = fence {
             if closes_fence(line, ch, len) {
                 fence = None;
-                out.push(Block {
-                    start: start.take().expect("a fence opened a block"),
-                    end: i + 1,
-                });
+                // A fence in a list item goes on as the item's; any other
+                // is a block of its own, and ends here.
+                if !fence_in_item {
+                    out.push(Block {
+                        start: start.take().expect("a fence opened a block"),
+                        end: i + 1,
+                    });
+                }
             }
             i += 1;
             continue;
         }
         if let Some((ch, len)) = opens_fence(line) {
-            close(&mut out, &mut start, i);
+            fence_in_item = in_item(start) && is_item_body(line);
+            if !fence_in_item {
+                close(&mut out, &mut start, i);
+                start = Some(i);
+            }
             fence = Some((ch, len));
-            start = Some(i);
             i += 1;
             continue;
         }
         if line.trim().is_empty() {
+            let more_of_the_item = in_item(start)
+                && lines[i + 1..]
+                    .iter()
+                    .find(|l| !l.trim().is_empty())
+                    .is_some_and(|l| is_item_body(l));
+            if more_of_the_item {
+                i += 1;
+                continue;
+            }
             close(&mut out, &mut start, i);
             out.push(Block {
                 start: i,
@@ -305,6 +330,25 @@ pub fn blocks(lines: &[String]) -> Vec<Block> {
     // An unclosed fence, or the last paragraph, runs to the end of the file.
     close(&mut out, &mut start, lines.len());
     out
+}
+
+/// Whether a line begins a list item: `-`, `*` or `+`, or a number and `.` or
+/// `)`, then a space.
+fn is_list_item(line: &str) -> bool {
+    let t = line.trim_start();
+    if let Some(rest) = t.strip_prefix(['-', '*', '+']) {
+        return rest.starts_with([' ', '\t']);
+    }
+    let digits = t.chars().take_while(char::is_ascii_digit).count();
+    (1..=9).contains(&digits)
+        && t[digits..]
+            .strip_prefix(['.', ')'])
+            .is_some_and(|rest| rest.starts_with([' ', '\t']))
+}
+
+/// Whether a line is indented as the body of a list item, under its text.
+fn is_item_body(line: &str) -> bool {
+    line.starts_with("  ") || line.starts_with('\t')
 }
 
 /// The fence character and its length, for a line that opens a code fence.
@@ -348,17 +392,48 @@ fn is_atx_heading(line: &str) -> bool {
 /// A blank-line block renders to nothing ([`render()`] trims trailing blanks)
 /// so it comes back as one empty line instead, because the gap between two
 /// paragraphs is a row on the screen and has to stay one.
+///
+/// `labels` are the note's link reference definitions, from [`link_labels`]:
+/// a block alone does not know about a `[1]: https://...` further down the
+/// note, and without them `[the spec][1]` would be drawn as it was typed.
 pub fn render_block(
     lines: &[String],
     width: usize,
     pal: &Palette,
     hl: &Highlighter,
+    labels: &[String],
 ) -> Vec<Line<'static>> {
-    let made = render(&lines.join("\n"), width, pal, hl);
+    let made = render_with(&lines.join("\n"), width, pal, hl, labels);
     if made.is_empty() {
         return vec![Line::default()];
     }
     made
+}
+
+/// The labels of every link reference definition in a note, `[1]` of a
+/// `[1]: https://...` line, as markdown compares them: case and runs of
+/// spaces ignored.
+pub fn link_labels(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            let t = line.trim_start();
+            if line.len() - t.len() > 3 {
+                return None;
+            }
+            let (label, _) = t.strip_prefix('[')?.split_once("]:")?;
+            (!label.starts_with('^') && !label.trim().is_empty()).then(|| same_label(label))
+        })
+        .collect()
+}
+
+/// A link label as markdown matches it.
+fn same_label(label: &str) -> String {
+    label
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Render markdown to styled lines fitted to `width`.
@@ -370,6 +445,18 @@ pub fn render_block(
 /// Trailing blank lines are trimmed so a note does not open with dead space at
 /// the bottom of the pane.
 pub fn render(source: &str, width: usize, pal: &Palette, hl: &Highlighter) -> Vec<Line<'static>> {
+    render_with(source, width, pal, hl, &[])
+}
+
+/// [`render()`], with link labels defined somewhere else in the note, see
+/// [`render_block`].
+fn render_with(
+    source: &str,
+    width: usize,
+    pal: &Palette,
+    hl: &Highlighter,
+    labels: &[String],
+) -> Vec<Line<'static>> {
     let width = width.max(8);
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_STRIKETHROUGH);
@@ -378,7 +465,22 @@ pub fn render(source: &str, width: usize, pal: &Palette, hl: &Highlighter) -> Ve
     opts.insert(Options::ENABLE_FOOTNOTES);
 
     let mut r = Renderer::new(width, pal, hl);
-    for event in Parser::new_ext(source, opts) {
+    let (yaml, body) = front_matter(source);
+    if let Some(yaml) = yaml {
+        r.front_matter(yaml);
+    }
+    // Adjacent text merged into one event: the parser hands over each `[`
+    // and `]` of a `[[wikilink]]` on its own, and the renderer has to see the
+    // link whole to draw it as one.
+    // A label this text does not define, but the note does, is a link: the
+    // renderer draws the text it covers and nothing of where it goes.
+    let mut known = |link: BrokenLink<'_>| {
+        labels
+            .contains(&same_label(&link.reference))
+            .then(|| (CowStr::from(""), CowStr::from("")))
+    };
+    let parser = Parser::new_with_broken_link_callback(body, opts, Some(&mut known));
+    for event in TextMergeStream::new(parser) {
         r.event(event);
     }
     let mut out = r.finish();
@@ -387,6 +489,38 @@ pub fn render(source: &str, width: usize, pal: &Palette, hl: &Highlighter) -> Ve
         out.pop();
     }
     out
+}
+
+/// The YAML front matter at the top of a note, and the rest of it.
+///
+/// Obsidian, Jekyll and Hugo keep a note's settings there: a `---` line, then
+/// `key: value` lines, then `---` or `...`. Read as markdown it is a rule and
+/// a heading underlined by the closing fence. The first line inside has to
+/// look like a key, or a note that simply starts with a rule would lose its
+/// first section to this.
+fn front_matter(source: &str) -> (Option<&str>, &str) {
+    let open = ["---\n", "---\r\n"]
+        .iter()
+        .find_map(|fence| source.strip_prefix(fence));
+    let Some(rest) = open else {
+        return (None, source);
+    };
+    let key = rest.lines().next().unwrap_or("");
+    let looks_like_yaml = key.split_once(':').is_some_and(|(k, _)| {
+        !k.is_empty() && k.chars().all(|c| c.is_alphanumeric() || "_-".contains(c))
+    });
+    if !looks_like_yaml {
+        return (None, source);
+    }
+    let mut at = 0;
+    for line in rest.split_inclusive('\n') {
+        if matches!(line.trim_end(), "---" | "...") {
+            let after = source.len() - rest.len() + at + line.len();
+            return (Some(&rest[..at]), &source[after..]);
+        }
+        at += line.len();
+    }
+    (None, source)
 }
 
 pub(super) fn is_blank(l: &Line<'_>) -> bool {
@@ -457,10 +591,44 @@ mod tests {
     }
 
     #[test]
+    fn a_list_item_goes_on_past_a_blank_line_when_more_of_it_follows() {
+        // Split at the blank line, the indented paragraph would be drawn on
+        // its own, as the code block four spaces of indent make it.
+        let lines = lines_of("1. Step\n\n    details\n\nAfter");
+        let got = blocks(&lines);
+        assert_eq!(got[0], Block { start: 0, end: 3 }, "{got:?}");
+        assert_eq!(got.last(), Some(&Block { start: 4, end: 5 }));
+
+        // A fence inside the item, blank line and all, is the item's too.
+        let lines = lines_of("- item\n\n  ```\n  code\n\n  more\n  ```\n\nnext");
+        let got = blocks(&lines);
+        assert_eq!(got[0], Block { start: 0, end: 7 }, "{got:?}");
+    }
+
+    #[test]
+    fn a_block_knows_the_link_labels_the_rest_of_the_note_defines() {
+        let pal = Palette::default();
+        let hl = Highlighter::new();
+        let note = lines_of("See [the spec][1].\n\n[1]: https://example.com");
+        let labels = link_labels(&note);
+        assert_eq!(labels, ["1"]);
+        let linked = |labels: &[String]| -> Vec<String> {
+            render_block(&note[..1], 40, &pal, &hl, labels)[0]
+                .spans
+                .iter()
+                .filter(|s| s.style == pal.text.patch(pal.link))
+                .map(|s| s.content.to_string())
+                .collect()
+        };
+        assert_eq!(linked(&labels), ["the spec"]);
+        assert!(linked(&[]).is_empty(), "with nothing defined, it is text");
+    }
+
+    #[test]
     fn a_blank_line_block_still_renders_as_a_row() {
         let pal = Palette::default();
         let hl = Highlighter::new();
-        let out = render_block(&[String::new()], 40, &pal, &hl);
+        let out = render_block(&[String::new()], 40, &pal, &hl, &[]);
         assert_eq!(out.len(), 1, "the gap between paragraphs is a row");
     }
 
@@ -479,8 +647,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let whole = render("# Title\n\n- a\n- b\n", 40, &pal, &hl);
-        let heading = render_block(&lines_of("# Title"), 40, &pal, &hl);
-        let list = render_block(&lines_of("- a\n- b"), 40, &pal, &hl);
+        let heading = render_block(&lines_of("# Title"), 40, &pal, &hl, &[]);
+        let list = render_block(&lines_of("- a\n- b"), 40, &pal, &hl, &[]);
         assert_eq!(
             text(&heading),
             text(&whole)[..2],

@@ -90,17 +90,23 @@ pub(super) fn draw_editor(
     };
 
     let (rows, top) = if live {
-        live_rows(app, path, text_w, height, scroll_y, cur_line)
+        let rows_down = app.buffers[path].scroll_rows;
+        live_rows(app, path, text_w, height, (scroll_y, rows_down), cur_line)
     } else {
+        // A screenful: on a hundred-thousand-line log, a row for every line
+        // below the top of the pane was megabytes a keystroke for nothing.
         let ed = &app.buffers[path];
-        let rows = (scroll_y..ed.line_count()).map(Row::Raw).collect();
+        let end = ed.line_count().min(scroll_y + height);
+        let rows = (scroll_y..end).map(Row::Raw).collect();
         (rows, 0)
     };
     if live {
-        // Keep the anchor honest for the next frame: the source line at the
-        // top of the pane is what `Editor` scrolls by.
-        let line = rows.get(top).and_then(Row::line).unwrap_or(0);
-        app.buffers.get_mut(path).expect("checked above").scroll_y = line;
+        // Keep the anchor honest for the next frame: where the top row of the
+        // pane is, as a line and how far down its block.
+        let (line, down) = rows.get(top).map(Row::anchor).unwrap_or((0, 0));
+        let ed = app.buffers.get_mut(path).expect("checked above");
+        ed.scroll_y = line;
+        ed.scroll_rows = down;
     }
 
     let ed = &app.buffers[path];
@@ -205,10 +211,13 @@ pub(super) fn draw_editor(
 enum Row {
     /// A source line, drawn raw: the block the cursor is in.
     Raw(usize),
-    /// A rendered line. `line` carries the block's first source line on its
-    /// first row and `None` after, so the gutter numbers the block once.
+    /// A rendered line: the `nth` drawn from the block that starts at source
+    /// line `block`. `line` carries that first line on the block's first row
+    /// and `None` after, so the gutter numbers the block once.
     Made {
         line: Option<usize>,
+        block: usize,
+        nth: usize,
         content: Line<'static>,
     },
 }
@@ -228,6 +237,15 @@ impl Row {
             Row::Made { .. } => None,
         }
     }
+
+    /// Where this row is, as a scroll position: a source line, and how many
+    /// rows down that line's block it is.
+    fn anchor(&self) -> (usize, usize) {
+        match self {
+            Row::Raw(n) => (*n, 0),
+            Row::Made { block, nth, .. } => (*block, *nth),
+        }
+    }
 }
 
 /// Lay a markdown buffer out for editing: every block formatted except the one
@@ -243,19 +261,26 @@ impl Row {
 /// the whole buffer, then a window is chosen: the drawn height of a block is
 /// not known until it is rendered, so there is nothing to scroll by until the
 /// layout exists. [`FORMAT_LIMIT`] is what keeps that affordable.
+///
+/// The window is anchored where the last frame left it: a source line and a
+/// number of rows down its block (`scroll_rows`), since a pane can begin part
+/// way down a block of many rows. Anchored on the line alone, a pane that
+/// began mid-block had no line to name, fell back to the top of the note, and
+/// the next frame pulled the cursor to the bottom row, so Up scrolled the
+/// text instead of moving the cursor.
 fn live_rows(
     app: &App,
     path: &std::path::Path,
     width: usize,
     height: usize,
-    scroll_y: usize,
+    (scroll_y, scroll_rows): (usize, usize),
     cur_line: usize,
 ) -> (Vec<Row>, usize) {
-    let pal = app.palette;
     let ed = &app.buffers[path];
     let mut rows: Vec<Row> = Vec::new();
     let mut top = None;
     let mut cursor_row = 0;
+    let labels = markdown::link_labels(ed.lines());
 
     for b in markdown::blocks(ed.lines()) {
         if b.contains(cur_line) {
@@ -270,14 +295,17 @@ fn live_rows(
             }
             continue;
         }
+        let made = block_rows(app, &ed.lines()[b.start..b.end], width, &labels);
         if b.start >= scroll_y && top.is_none() {
-            top = Some(rows.len());
+            // Part way down this block, if that is where the pane began.
+            let down = if b.start == scroll_y { scroll_rows } else { 0 };
+            top = Some(rows.len() + down.min(made.len().saturating_sub(1)));
         }
-        let made =
-            markdown::render_block(&ed.lines()[b.start..b.end], width, &pal, &app.highlighter);
         for (i, content) in made.into_iter().enumerate() {
             rows.push(Row::Made {
                 line: (i == 0).then_some(b.start),
+                block: b.start,
+                nth: i,
                 content,
             });
         }
@@ -292,6 +320,38 @@ fn live_rows(
         top = cursor_row + 1 - height;
     }
     (rows, top)
+}
+
+/// One block of a note, formatted, from the cache when it has not changed.
+///
+/// Every frame lays the whole note out, because the height of a block is not
+/// known until it is formatted. Formatting each block again, its code fences
+/// highlighted from scratch, is what made a keystroke in a long note slow; a
+/// block not being typed in is the same text at the same width as the frame
+/// before, and so the same rows.
+///
+/// The note's link labels are part of what a block is drawn from, so they
+/// are part of the key: a definition added further down turns `[spec][1]`
+/// into a link.
+fn block_rows(app: &App, lines: &[String], width: usize, labels: &[String]) -> Vec<Line<'static>> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    lines.hash(&mut h);
+    width.hash(&mut h);
+    labels.hash(&mut h);
+    let key = h.finish();
+    if let Some(made) = app.block_rows.borrow().get(&key) {
+        return made.clone();
+    }
+    let made = markdown::render_block(lines, width, &app.palette, &app.highlighter, labels);
+    let mut cache = app.block_rows.borrow_mut();
+    // Kept from growing without end as text is typed and deleted: whatever
+    // is on screen is back in a frame.
+    if cache.len() >= 4096 {
+        cache.clear();
+    }
+    cache.insert(key, made.clone());
+    made
 }
 
 /// One line's styled pieces, as much of them as fits between column

@@ -12,29 +12,43 @@
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 /// Total display width of a run of spans, in terminal cells.
 pub(super) fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|s| s.content.width()).sum()
 }
 
-/// Truncate to a display width, respecting character boundaries.
+/// Truncate to a display width, a grapheme cluster at a time.
 ///
-/// Width, not character count: a double-width character is only kept if both
-/// its cells fit, so clipping can never leave half a glyph behind.
+/// Width, not character count, and whole clusters, the way the screen draws
+/// them: a double-width character, or a picture made of several characters,
+/// is only kept if all its cells fit, so clipping can never leave half a
+/// glyph behind.
 pub(super) fn clip(s: &str, max_w: usize) -> String {
     let mut out = String::new();
     let mut w = 0;
-    for c in s.chars() {
-        let cw = c.width().unwrap_or(0);
-        if w + cw > max_w {
+    for g in s.graphemes(true) {
+        let gw = g.width();
+        if w + gw > max_w {
             break;
         }
-        w += cw;
-        out.push(c);
+        w += gw;
+        out.push_str(g);
     }
     out
+}
+
+/// Put a token on the line, into the last span when it has the same style:
+/// a sentence in one style is one span, not one per word and space. Spans
+/// before `keep` are the line's prefix and are never added to.
+fn push_token(cur: &mut Vec<Span<'static>>, keep: usize, style: Style, tok: &str) {
+    let ours = cur.len() > keep;
+    match cur.last_mut() {
+        Some(last) if ours && last.style == style => last.content.to_mut().push_str(tok),
+        _ => cur.push(Span::styled(tok.to_string(), style)),
+    }
 }
 
 /// Push a wrapped line, dropping whitespace that ran off the end of it.
@@ -91,6 +105,7 @@ pub(super) fn wrap(
     let first_w = spans_width(&first_prefix);
     let cont_w = spans_width(&cont_prefix);
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut keep = first_prefix.len();
     let mut cur = first_prefix;
     let mut cur_w = first_w;
     let mut indent_w = first_w;
@@ -120,13 +135,14 @@ pub(super) fn wrap(
             // Never start a wrapped line with the space that caused the break,
             // and never let a trailing space push the line past the width.
             if cur_w > indent_w && cur_w + tw <= width {
-                cur.push(Span::styled(tok, style));
+                push_token(&mut cur, keep, style, &tok);
                 cur_w += tw;
             }
             continue;
         }
         if cur_w + tw > width && cur_w > indent_w {
             push_trimmed(&mut lines, std::mem::replace(&mut cur, cont_prefix.clone()));
+            keep = cur.len();
             cur_w = cont_w;
             indent_w = cont_w;
         }
@@ -141,15 +157,16 @@ pub(super) fn wrap(
                 }
                 cur_w += chunk.width();
                 rest = &rest[chunk.len()..];
-                cur.push(Span::styled(chunk, style));
+                push_token(&mut cur, keep, style, &chunk);
                 if !rest.is_empty() {
                     push_trimmed(&mut lines, std::mem::replace(&mut cur, cont_prefix.clone()));
+                    keep = cur.len();
                     cur_w = cont_w;
                     indent_w = cont_w;
                 }
             }
         } else {
-            cur.push(Span::styled(tok, style));
+            push_token(&mut cur, keep, style, &tok);
             cur_w += tw;
         }
     }

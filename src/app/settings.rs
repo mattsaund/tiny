@@ -52,6 +52,8 @@ impl App {
     /// visibility changed.
     pub(super) fn apply_config(&mut self) {
         self.palette = Palette::from_theme(&self.config.theme).with_glyphs(self.config.glyphs);
+        // Formatted in the old palette.
+        self.block_rows.borrow_mut().clear();
         let (keymap, warning) = Keymap::new(&self.config.keys, self.keyboard);
         self.keymap = keymap;
         if let Some(w) = warning {
