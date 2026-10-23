@@ -387,14 +387,14 @@ const TABLE: &[Row] = &[
     ),
     (
         Action::First,
-        &[Context::Tree, Context::View],
+        &[Context::Tree, Context::View, Context::Source],
         "first",
         "",
         "home I",
     ),
     (
         Action::Last,
-        &[Context::Tree, Context::View],
+        &[Context::Tree, Context::View, Context::Source],
         "last",
         "",
         "end K",

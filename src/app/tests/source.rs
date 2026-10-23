@@ -780,3 +780,169 @@ fn a_letter_in_the_message_is_a_letter_and_not_a_key() {
     // also what git wants at the end of a message.
     assert_eq!(message, "refactor\n", "{}", app.status);
 }
+
+/// The repository, with sixty more files git has never seen: a change list
+/// far longer than the window it is drawn in.
+fn crowded_repo() -> (tempfile::TempDir, App) {
+    let (td, _) = repo();
+    for n in 0..60 {
+        fs::write(td.path().join(format!("new-{n:02}.txt")), "x\n").unwrap();
+    }
+    let app = App::new(target(td.path(), None), Config::default(), None).unwrap();
+    (td, app)
+}
+
+/// The change list as drawn, a row of text per screen row, and the text of
+/// the rows drawn as the cursor.
+fn change_list(app: &mut App, w: u16, h: u16) -> (Vec<String>, String) {
+    let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+    t.draw(|f| crate::ui::draw(f, app)).unwrap();
+    let (x0, x1) = app.git.list_cols.expect("the list was drawn");
+    let buf = t.backend().buffer();
+    let mut rows = Vec::new();
+    let mut cursor = String::new();
+    for y in 0..buf.area.height {
+        let mut row = String::new();
+        for x in x0..x1 {
+            let cell = &buf[(x, y)];
+            row.push_str(cell.symbol());
+            if cell.modifier.contains(Modifier::REVERSED) {
+                cursor.push_str(cell.symbol());
+            }
+        }
+        rows.push(row);
+    }
+    (rows, cursor)
+}
+
+/// The name of the file the cursor is on.
+fn current_name(app: &App) -> String {
+    app.git.current().expect("on a file").0.path.clone()
+}
+
+#[test]
+fn a_change_list_longer_than_the_window_scrolls_to_the_cursor() {
+    let (_td, mut app) = crowded_repo();
+    source(&mut app);
+    let (rows, _) = change_list(&mut app, 100, 24);
+    assert!(
+        rows.iter().any(|r| r.contains(" more ")),
+        "what is out of sight is counted on the border:\n{}",
+        rows.join("\n")
+    );
+
+    for _ in 0..50 {
+        app.on_key(k(KeyCode::Down));
+    }
+    let name = current_name(&app);
+    let (rows, cursor) = change_list(&mut app, 100, 24);
+    assert!(
+        cursor.contains(&name),
+        "the cursor's row is on screen, as the cursor: {cursor:?}\n{}",
+        rows.join("\n")
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("fetch")),
+        "and the top of the list has scrolled away to make room:\n{}",
+        rows.join("\n")
+    );
+}
+
+#[test]
+fn home_and_end_reach_both_ends_of_the_change_list() {
+    let (_td, mut app) = crowded_repo();
+    source(&mut app);
+    change_list(&mut app, 100, 24);
+
+    app.on_key(k(KeyCode::End));
+    assert_eq!(app.git.selected, app.git.rows.len() - 1);
+    let name = current_name(&app);
+    let (rows, cursor) = change_list(&mut app, 100, 24);
+    assert!(cursor.contains(&name), "{cursor:?}\n{}", rows.join("\n"));
+    assert!(
+        !rows.iter().any(|r| r.contains(" more ")),
+        "nothing is left below the last row:\n{}",
+        rows.join("\n")
+    );
+
+    app.on_key(k(KeyCode::Home));
+    assert_eq!(app.git.selected, 0, "the buttons");
+    let (rows, _) = change_list(&mut app, 100, 24);
+    assert!(
+        rows.iter().any(|r| r.contains("fetch")),
+        "{}",
+        rows.join("\n")
+    );
+}
+
+#[test]
+fn the_wheel_over_the_change_list_moves_its_cursor() {
+    let (_td, mut app) = crowded_repo();
+    source(&mut app);
+    change_list(&mut app, 100, 24);
+    let (x0, _) = app.git.list_cols.unwrap();
+    let before = app.git.selected;
+
+    for _ in 0..40 {
+        app.on_scroll(true, x0 + 2);
+    }
+    assert_eq!(app.git.selected, before + 40, "one notch, one row");
+    let name = current_name(&app);
+    let (_, cursor) = change_list(&mut app, 100, 24);
+    assert!(cursor.contains(&name), "and the list follows: {cursor:?}");
+}
+
+#[test]
+fn the_wheel_over_the_diff_scrolls_the_diff() {
+    let (_td, mut app) = long_repo();
+    source(&mut app);
+    cursor_on(&mut app, "long.txt");
+    change_list(&mut app, 100, 30);
+    let (_, x1) = app.git.list_cols.unwrap();
+    let selected = app.git.selected;
+
+    app.on_scroll(true, x1 + 5);
+    app.on_scroll(true, x1 + 5);
+    assert_eq!(app.git.diff_scroll, 2);
+    assert_eq!(app.git.selected, selected, "the list stays where it was");
+}
+
+#[test]
+fn the_wheel_in_the_git_window_leaves_the_browser_alone() {
+    let (_td, mut app) = repo();
+    joined(&mut app);
+    let (x0, _) = app.last_tree_cols.expect("the browser was drawn");
+    let selected = app.selected;
+    source(&mut app);
+    joined(&mut app);
+
+    // Where the browser was is where the change list is now.
+    app.on_scroll(true, x0 + 1);
+    assert_eq!(app.selected, selected, "the browser is not on screen");
+}
+
+#[test]
+fn a_commit_message_longer_than_its_box_scrolls() {
+    let (_td, mut app) = long_repo();
+    source(&mut app);
+    cursor_on(&mut app, "long.txt");
+    app.on_key(k(KeyCode::Enter));
+    press_commit(&mut app);
+    type_str(&mut app, "summary");
+    for n in 0..40 {
+        app.on_key(k(KeyCode::Enter));
+        type_str(&mut app, &format!("body-{n:02}"));
+    }
+    let out = screen(&mut app, 100, 24).join("\n");
+    assert!(out.contains("body-39"), "the line being typed:\n{out}");
+    assert!(
+        !out.contains("body-00"),
+        "the top has scrolled away:\n{out}"
+    );
+
+    // And across: the end of a line wider than the box is where typing is.
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, &format!("{}END", "x".repeat(150)));
+    let out = screen(&mut app, 100, 24).join("\n");
+    assert!(out.contains("xEND"), "{out}");
+}

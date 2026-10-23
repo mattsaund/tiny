@@ -148,7 +148,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 fn draw_overlay(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let pal = app.palette;
     match &app.mode {
-        Mode::Help(scroll) => draw_help(f, app, area, &pal, *scroll),
+        Mode::Help(scroll) => {
+            let scroll = *scroll;
+            let shown = draw_help(f, app, area, &pal, scroll);
+            app.mode = Mode::Help(shown);
+        }
         Mode::Settings(s) => {
             let s = s.clone();
             draw_settings(f, app, area, &s);
