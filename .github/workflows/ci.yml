@@ -34,7 +34,7 @@ jobs:
       # information worth having.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest, windows-11-arm]
     steps:
       - uses: actions/checkout@v7
 

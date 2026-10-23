@@ -82,6 +82,17 @@
 
     # --- the ready-made binary ----------------------------------------------
 
+    # Whether this is Arm64 Windows. Asked of the machine as well as of this
+    # process, which may be an x64 PowerShell running under emulation.
+    function Test-Arm64 {
+        if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') {
+            return $true
+        }
+        $machine = Get-ItemProperty -ErrorAction SilentlyContinue `
+            -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+        return [bool]($machine -and $machine.PROCESSOR_ARCHITECTURE -eq 'ARM64')
+    }
+
     # The release workflow's zip for this machine, unpacked into $Prefix.
     # Returns whether it worked. Every way it can fail (no release yet, no
     # network, a repository that is not on GitHub) is a reason to build
@@ -93,21 +104,30 @@
         if ($slug -match '://' -or $slug -notmatch '^[^/]+/[^/]+$') { return $false }
         $release = if ($Ref -eq 'main') { 'latest/download' } else { "download/$Ref" }
 
-        # One Windows build, for x64. ARM64 Windows runs it under emulation.
-        $asset = 'tiny-x86_64-pc-windows-msvc.zip'
-        $url = "https://github.com/$slug/releases/$release/$asset"
+        # Arm64 Windows has a build of its own. A release from before it had
+        # one still has the x64 build, which Arm64 Windows runs under
+        # emulation, so that is the one to fall back to.
+        $assets = @('tiny-x86_64-pc-windows-msvc.zip')
+        if (Test-Arm64) { $assets = @('tiny-aarch64-pc-windows-msvc.zip') + $assets }
         $work = Join-Path ([IO.Path]::GetTempPath()) ('tiny-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $work | Out-Null
         try {
             Write-Host 'downloading tiny ... ' -NoNewline
-            $zip = Join-Path $work $asset
             # The progress bar Invoke-WebRequest draws in 5.1 slows a download
             # down by an order of magnitude.
             $ProgressPreference = 'SilentlyContinue'
-            try {
-                Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip -ErrorAction Stop
+            $zip = $null
+            foreach ($asset in $assets) {
+                $path = Join-Path $work $asset
+                try {
+                    Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -OutFile $path `
+                        -Uri "https://github.com/$slug/releases/$release/$asset"
+                    $zip = $path
+                    break
+                }
+                catch { }
             }
-            catch {
+            if (-not $zip) {
                 Write-Host 'none published for it, so building from source instead'
                 return $false
             }

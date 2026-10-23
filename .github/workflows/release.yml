@@ -74,6 +74,10 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+          # Built on Arm rather than cross-built, so it is run before it ships
+          # like the others are.
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
           # Apple silicon natively, and Intel cross-built on the same runner:
           # Apple's toolchain builds both, and Intel runners are going away.
           - os: macos-latest
