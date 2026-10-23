@@ -21,6 +21,7 @@ use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};
 
 use super::glyphs::{GlyphSet, Glyphs};
+use super::host::Colors;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -97,6 +98,10 @@ pub struct Palette {
     /// palette, so a setting that changes how the screen is built reaches all
     /// of it without a second thing to pass around.
     pub glyphs: &'static Glyphs,
+    /// How many colors the frame is drawn in, from the `colors` setting,
+    /// resolved: never `Auto`. Everything draws in any color it likes, and
+    /// the finished frame is brought down to these, see `ui::colors`.
+    pub colors: Colors,
 }
 
 impl Palette {
@@ -114,13 +119,20 @@ impl Palette {
             marker: parse_style(&t.marker),
             map_in: parse_style(&t.map_in),
             map_out: parse_style(&t.map_out),
-            glyphs: GlyphSet::default().glyphs(),
+            glyphs: GlyphSet::Unicode.glyphs(),
+            colors: Colors::Truecolor,
         }
     }
 
     /// The same palette, drawing with `set`.
     pub fn with_glyphs(mut self, set: GlyphSet) -> Self {
         self.glyphs = set.glyphs();
+        self
+    }
+
+    /// The same palette, drawn in `colors`, which has been resolved.
+    pub fn with_colors(mut self, colors: Colors) -> Self {
+        self.colors = colors;
         self
     }
 }

@@ -13,7 +13,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::keys::{Action, Keyboard, Keymap};
-use crate::config::{Config, Palette};
+use crate::config::{Config, Host};
 
 use super::App;
 use super::mode::{BUTTONS, Confirm, ConfirmKind, KEYBIND_BUTTONS, Keybinds, Mode, Settings};
@@ -44,6 +44,20 @@ impl App {
         }
     }
 
+    /// Take on what the terminal tiny is running in can show, see [`Host`].
+    ///
+    /// Called once, from `main`, before the first frame. The `glyphs` and
+    /// `colors` settings left at `auto` follow it; ones set by hand do not.
+    pub fn set_host(&mut self, host: Host) {
+        if self.host == host {
+            return;
+        }
+        self.host = host;
+        self.palette = super::palette_for(&self.config, &self.host);
+        // Formatted with the characters the palette had before.
+        self.block_rows.borrow_mut().clear();
+    }
+
     /// Re-derive everything a settings change can affect.
     ///
     /// Must be called after any successful `Config::set`, or the change sits in
@@ -56,7 +70,7 @@ impl App {
     /// place of whatever it would have said.
     pub(super) fn apply_config(&mut self) -> Option<String> {
         let mut warning = None;
-        self.palette = Palette::from_theme(&self.config.theme).with_glyphs(self.config.glyphs);
+        self.palette = super::palette_for(&self.config, &self.host);
         // Formatted in the old palette.
         self.block_rows.borrow_mut().clear();
         // The map's names were cut with the old glyph set's ellipsis.

@@ -76,7 +76,7 @@ use crossterm::execute;
 
 use app::App;
 use config::keys::Keyboard;
-use config::{CONF_NAME, Config, PLUGINS_NAME};
+use config::{CONF_NAME, Config, Host, PLUGINS_NAME};
 
 /// `--help` output. Kept here as one literal rather than assembled from an
 /// argument parser: there are only six options, and a contributor changing
@@ -207,6 +207,9 @@ fn real_main() -> Result<()> {
     // Which keys the terminal keeps for itself is known from the environment
     // alone, so it is settled before the first frame, see `Keyboard`.
     app.set_keyboard(Keyboard::detect());
+    // And what it can draw: which characters, and how many colors. The
+    // settings that are left at `auto` follow it, see `config::host`.
+    app.set_host(Host::detect());
     // The plugins, from the one real folder: the app is only ever told where
     // it is from here, so a test never loads anybody's plugins.
     app.plugins_dir = Config::plugins_dir();

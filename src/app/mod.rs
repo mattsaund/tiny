@@ -151,7 +151,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 
 use crate::config::keys::{Keyboard, Keymap};
-use crate::config::{Config, Palette};
+use crate::config::{Config, Host, Palette};
 use crate::files::project;
 use crate::files::size::Size;
 use crate::files::tree::{Row, Tree};
@@ -205,6 +205,10 @@ pub struct App {
     /// keyboard the program has. Assumed whole until `main` has asked, see
     /// [`App::set_keyboard`].
     pub keyboard: Keyboard,
+    /// What the terminal tiny is running in can show, which the `glyphs` and
+    /// `colors` settings follow while they are `auto`. Assumed modern until
+    /// `main` has looked, see [`App::set_host`].
+    pub host: Host,
     /// Parsed styles. Rebuilt from `config.theme` by [`App::apply_config`], so
     /// a theme change repaints without a restart.
     pub palette: Palette,
@@ -307,6 +311,14 @@ pub struct App {
     watch: Watch,
 }
 
+/// The palette `config` draws with in a terminal that can show what `host`
+/// says: its theme, in the characters and colors the settings come to there.
+fn palette_for(config: &Config, host: &Host) -> Palette {
+    Palette::from_theme(&config.theme)
+        .with_glyphs(config.glyphs.resolve(host))
+        .with_colors(config.colors.resolve(host))
+}
+
 impl App {
     /// Build the initial state from a resolved target and a loaded config.
     ///
@@ -327,7 +339,8 @@ impl App {
         let (keymap, keys_warning) = Keymap::new(&config.keys, keyboard);
         let tree = Tree::new(root, config.show_hidden);
         let rows = tree.flatten();
-        let palette = Palette::from_theme(&config.theme).with_glyphs(config.glyphs);
+        let host = Host::default();
+        let palette = palette_for(&config, &host);
 
         let opening = if target.created {
             "new project, ? for help".to_string()
@@ -350,6 +363,7 @@ impl App {
             config,
             keymap,
             keyboard,
+            host,
             palette,
             highlighter,
             highlight_cache: Resume::default(),
