@@ -182,23 +182,32 @@ impl App {
         }
         self.tree.refresh(&moved);
         if self.tree.flatten() == self.rows {
-            // Nothing in the tree changed, but what a folder holds may have,
-            // in files the tree is not showing: hidden ones, or ones in a
-            // folder that was opened and closed again. A remembered size that
-            // takes in a moved folder is forgotten, and a folder under the
-            // cursor is looked at again, since its count and size are drawn.
+            // Nothing in the tree changed, but what is in it may have: a
+            // hidden file, one in a folder opened and closed again, or the
+            // very file under the cursor, written to a temporary name and
+            // renamed over itself. A remembered size that takes in a moved
+            // folder is forgotten, and what is under the cursor is looked at
+            // again if it is in one, since its picture and size are drawn.
             self.size_cache
                 .retain(|p, _| !moved.iter().any(|m| m.starts_with(p)));
-            let on = self
-                .selected_row()
-                .filter(|r| r.is_dir)
-                .map(|r| r.path.clone());
-            if !on.is_some_and(|dir| moved.iter().any(|m| m.starts_with(&dir))) {
+            let touched = self.selected_row().is_some_and(|r| {
+                if r.is_dir {
+                    moved.iter().any(|m| m.starts_with(&r.path))
+                } else {
+                    r.path
+                        .parent()
+                        .is_some_and(|dir| moved.iter().any(|m| m == dir))
+                }
+            });
+            if !touched {
                 return false;
             }
-            // Looking again is only news if it found something different.
-            let (preview, size) = (self.preview.clone(), self.cursor_size);
+            // Looking again is only news if it found something different,
+            // and it is no reason to lose the place in what is being read.
+            let (preview, size, scroll) =
+                (self.preview.clone(), self.cursor_size, self.preview_scroll);
             self.sync_preview();
+            self.preview_scroll = scroll;
             return self.preview != preview || self.cursor_size != size;
         }
         // `rebuild_rows` re-derives the preview, which resets its scroll. That

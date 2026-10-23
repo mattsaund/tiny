@@ -337,6 +337,24 @@ fn tab_reads_the_same_verbs_the_command_does() {
 }
 
 #[test]
+fn tab_reads_past_a_polite_start_and_into_an_open_quote() {
+    let (td, mut app) = fixture();
+    fs::write(td.path().join("my notes.md"), "").unwrap();
+    command(&mut app, "reload");
+    assert_eq!(
+        completed(&mut app, "please go to func"),
+        "please go to function"
+    );
+    assert_eq!(
+        completed(&mut app, "can you copy READ"),
+        "can you copy README.md"
+    );
+    // Inside a quote a space is part of the name, so what is offered is the
+    // rest of the name, not the `to` that would follow a finished one.
+    assert_eq!(completed(&mut app, "copy \"my "), "copy \"my notes.md");
+}
+
+#[test]
 fn completion_leaves_dotfiles_alone_unless_asked_for() {
     let (td, mut app) = fixture();
     fs::write(td.path().join(".secret.md"), "").unwrap();

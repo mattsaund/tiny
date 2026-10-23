@@ -329,7 +329,7 @@ fn rest_from(w: &[Word], i: usize) -> &[Word] {
 
 /// Take `please`, `can you` and their like off the front. Returns how many
 /// words went, so free text can be found again in the line as it was typed.
-fn drop_leading_politeness(w: &mut Vec<Word>) -> usize {
+pub(super) fn drop_leading_politeness(w: &mut Vec<Word>) -> usize {
     let before = w.len();
     loop {
         if w.first().is_some_and(|x| x.is(POLITE)) {

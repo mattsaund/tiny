@@ -107,15 +107,11 @@ impl App {
         }
         let value = args[1..].join(" ");
         self.config.set(key, &value)?;
-        // `apply_config` speaks only to warn (a theme that does not exist,
-        // say), and a warning is worth more than the value said back.
-        let before = std::mem::take(&mut self.status);
-        self.apply_config();
-        if self.status.is_empty() {
-            self.status = before;
-            return Ok(format!("{key} = {value}"));
-        }
-        Ok(std::mem::take(&mut self.status))
+        // A warning (a key that cannot be bound, say) is worth more than the
+        // value said back.
+        Ok(self
+            .apply_config()
+            .unwrap_or_else(|| format!("{key} = {value}")))
     }
 
     /// `*reload`: read the disk, and the plugins folder, again.

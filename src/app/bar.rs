@@ -121,23 +121,38 @@ pub fn completion_for(
     known: &[String],
 ) -> Option<String> {
     use super::sentence::{
-        COPY, DELETE, GOTO, KINDS, MOVE, NEW_FILE, NEW_FOLDER, RENAME, REPLACE, VERBS, words,
+        COPY, DELETE, GOTO, KINDS, MOVE, NEW_FILE, NEW_FOLDER, RENAME, REPLACE, VERBS,
+        drop_leading_politeness, words,
     };
 
     // The sigil is not part of the command, so completion never sees it. The
     // replacement at the bottom still works on `b.input`, because whatever is
     // being completed is a suffix of both.
     let line = b.command();
-    let mut args: Vec<String> = words(line).into_iter().map(|w| w.text).collect();
-    let trailing_space = line.ends_with(' ');
-    // Which argument the cursor is in the middle of. A trailing space means the
-    // one after the last complete argument has been started but not typed into.
-    let mut position = if trailing_space {
-        args.len()
+    let mut found = words(line);
+    // A space inside a quote that is still open is part of the name being
+    // typed, not the end of a word.
+    let open_quote = line.matches('"').count() % 2 == 1;
+    let trailing_space = line.ends_with(' ') && !open_quote;
+    // Which word the cursor is in the middle of. A trailing space means the
+    // one after the last complete word has been started but not typed into.
+    let typing = if trailing_space {
+        found.len()
     } else {
-        args.len().saturating_sub(1)
+        found.len().saturating_sub(1)
     };
-    let typed = if trailing_space {
+    // A polite start (`please`, `can you`) is passed over, the way the
+    // reading passes over it, once it has been typed in full.
+    let mut done = found[..typing].to_vec();
+    let polite = drop_leading_politeness(&mut done);
+    found.drain(..polite);
+    let mut args: Vec<String> = found.into_iter().map(|w| w.text).collect();
+    let mut position = typing - polite;
+    let typed = if open_quote {
+        // Exactly as typed since the quote, spaces and all: the word read
+        // out of the line has had its end trimmed.
+        line.rsplit('"').next().unwrap_or_default().to_string()
+    } else if trailing_space {
         String::new()
     } else {
         args.last().cloned().unwrap_or_default()

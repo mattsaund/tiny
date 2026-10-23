@@ -271,3 +271,23 @@ fn moving_to_the_other_pane_ends_a_run_of_typing() {
     assert!(!text.contains("bar"), "the second pane's typing is undone");
     assert!(text.contains("foo"), "and the first pane's is not: {text}");
 }
+
+#[test]
+fn the_other_pane_reads_its_file_again_after_a_rename() {
+    let (td, mut app) = fixture();
+    fs::write(td.path().join("notes.txt"), "plain words\n").unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "notes.txt");
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(ctrl('w'));
+    // The keyboard goes back to the browser, and the live pane on to another
+    // file, leaving notes.txt in the pane set aside.
+    app.on_key(k(KeyCode::Esc));
+    select(&mut app, "README.md");
+    command(&mut app, "rename notes.txt to notes.rs");
+    let pinned = &app.split.as_ref().expect("still two panes").pinned.preview;
+    assert!(
+        matches!(pinned, Preview::Buffer { path, kind: TextKind::Code } if path.ends_with("notes.rs")),
+        "{pinned:?}"
+    );
+}

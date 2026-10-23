@@ -350,7 +350,10 @@ impl Config {
                     GlyphSet::parse(v).ok_or_else(|| anyhow!("glyphs must be unicode or ascii"))?
             }
             "borders" => self.borders = parse_bool(v)?,
-            "syntax_theme" => self.syntax_theme = v.to_string(),
+            "syntax_theme" => {
+                crate::text::highlight::check_theme(v).map_err(|e| anyhow!(e))?;
+                self.syntax_theme = v.to_string();
+            }
             "prose_extensions" => self.prose_extensions = parse_list(v),
             "search_ignore" => self.search_ignore = parse_list(v),
             "theme.text" => self.theme.text = v.to_string(),

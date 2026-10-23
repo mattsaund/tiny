@@ -32,7 +32,7 @@ use crate::text::search::{self, Hit, HitKind, Matcher, Needle, Report};
 
 use super::App;
 use super::mode::{Confirm, ConfirmKind, Focus, Mode, Window as AppWindow};
-use super::parts::{display_name, plural, safe_join};
+use super::parts::{as_on_disk, display_name, plural, safe_join};
 use super::preview::{Preview, read_editable};
 use super::sentence::{Place, Sentence, Target, Window};
 
@@ -229,7 +229,7 @@ impl App {
         let mut escaped = None;
         for base in [self.creation_base(), root.clone()] {
             match safe_join(&base, name, &root) {
-                Ok(p) if fits(&p) => return Ok(p),
+                Ok(p) if fits(&p) => return Ok(as_on_disk(&p, &root)),
                 Ok(_) => escaped = None,
                 Err(e) => escaped = escaped.or(Some(format!("{e:#}"))),
             }
@@ -365,11 +365,24 @@ impl App {
         }
     }
 
-    /// Every file open with edits not yet saved.
-    pub(super) fn unsaved_paths(&self) -> std::collections::HashSet<PathBuf> {
-        self.dirty_buffers()
+    /// Every file open with edits not yet saved that a walk of the project
+    /// reaches: the ones a replace across the project changes in their
+    /// buffers. One the search skips (in an ignored folder, hidden, or
+    /// behind a link) is left alone, the way its copy on disk would be.
+    pub(super) fn unsaved_in_reach(&mut self) -> std::collections::HashSet<PathBuf> {
+        let dirty: Vec<PathBuf> = self
+            .dirty_buffers()
             .into_iter()
             .map(Path::to_path_buf)
+            .collect();
+        if dirty.is_empty() {
+            return Default::default();
+        }
+        self.names();
+        let names = self.names.as_ref().expect("listed just above");
+        dirty
+            .into_iter()
+            .filter(|p| names.files.contains(p))
             .collect()
     }
 
@@ -512,6 +525,12 @@ impl App {
             from.parent().map(Path::to_path_buf).unwrap_or(root.clone())
         };
         let path = safe_join(&base, to, &root).map_err(|e| format!("{e:#}"))?;
+        // The folders on the way as the disk spells them, and the name itself
+        // as typed: a rename may be changing exactly its case.
+        let path = match (path.parent(), path.file_name()) {
+            (Some(dir), Some(name)) => as_on_disk(dir, &root).join(name),
+            _ => path,
+        };
         // On a disk that ignores case, a rename to `readme.md` finds
         // `README.md` already there, being itself.
         if path.exists() && !super::fileops::same_file(&path, from) {
@@ -799,8 +818,8 @@ impl App {
     /// How many times, and in how many files, `needle` is in the project.
     /// A file open with unsaved edits is counted as it is on screen, which
     /// is the copy the replace will change.
-    fn count_in_project(&self, needle: &Needle) -> Report {
-        let unsaved = self.unsaved_paths();
+    fn count_in_project(&mut self, needle: &Needle) -> Report {
+        let unsaved = self.unsaved_in_reach();
         let mut report = search::count(
             self.tree.root_path(),
             needle,

@@ -377,3 +377,22 @@ fn a_hidden_file_arriving_in_the_folder_under_the_cursor_is_counted() {
     assert!(app.rescan_disk());
     assert!(joined(&mut app).contains("2 entries"));
 }
+
+#[test]
+fn a_picture_saved_over_itself_is_described_again() {
+    // Written to a temporary name and renamed over the old one, the way many
+    // programs save: the folder's listing comes out the same, the file not.
+    let (td, mut app) = fixture();
+    select(&mut app, "logo.png");
+    let mut png = vec![0x89u8, b'P', b'N', b'G'];
+    png.resize(5000, 0);
+    fs::write(td.path().join("logo.tmp"), &png).unwrap();
+    fs::rename(td.path().join("logo.tmp"), td.path().join("logo.png")).unwrap();
+    assert!(app.rescan_disk(), "worth a frame");
+    assert!(
+        matches!(app.preview, Preview::Media { size: 5000, .. }),
+        "{:?}",
+        app.preview
+    );
+    assert_eq!(app.cursor_size.map(|s| s.bytes), Some(5000));
+}

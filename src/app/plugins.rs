@@ -152,7 +152,11 @@ impl App {
                 // asked, so this does not fail in practice; if it ever did,
                 // the reason goes on the status line rather than nowhere.
                 Effect::Set(name, value) => match self.config.set(&name, &value) {
-                    Ok(()) => self.apply_config(),
+                    Ok(()) => {
+                        if let Some(warning) = self.apply_config() {
+                            self.status = format!("plugin: {warning}");
+                        }
+                    }
                     Err(e) => self.status = format!("plugin: {e}"),
                 },
             }
