@@ -154,8 +154,8 @@ impl App {
         }
     }
 
-    /// One step of `Ctrl+Shift+Left` / `Ctrl+Shift+Right`: a narrower or a
-    /// wider browser, and the file pane takes whatever it gives up.
+    /// One step of `<` or `>`: a narrower or a wider browser, and the file
+    /// pane takes whatever it gives up.
     ///
     /// The two ends of the range meet the fold key rather than stopping dead.
     /// Narrowing past the minimum folds the browser away, and widening from
