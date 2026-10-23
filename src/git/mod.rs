@@ -105,10 +105,11 @@ pub struct Change {
 }
 
 impl Change {
-    /// `old.md → new.md` for a rename, and just the path for everything else.
-    pub fn label(&self) -> String {
+    /// `old.md → new.md` for a rename, and just the path for everything else,
+    /// joined by `arrow`: the glyph set's, since this is drawn on screen.
+    pub fn label(&self, arrow: &str) -> String {
         match &self.from {
-            Some(from) => format!("{from} → {}", self.path),
+            Some(from) => format!("{from} {arrow} {}", self.path),
             None => self.path.clone(),
         }
     }
@@ -124,11 +125,14 @@ pub struct Branch {
 }
 
 impl Branch {
-    /// `main → origin/main  ahead 2, behind 1`, as short as it can honestly be.
-    pub fn summary(&self) -> String {
+    /// `main → origin/main  ahead 2, behind 1`, as short as it can honestly be,
+    /// with `arrow` between the branch and its upstream.
+    pub fn summary(&self, arrow: &str) -> String {
         let mut out = self.name.clone();
         if let Some(up) = &self.upstream {
-            out.push_str(" → ");
+            out.push(' ');
+            out.push_str(arrow);
+            out.push(' ');
             out.push_str(up);
         }
         match (self.ahead, self.behind) {

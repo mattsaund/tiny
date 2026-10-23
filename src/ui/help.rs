@@ -73,33 +73,33 @@ const KEYS: &[KeyRow] = &[
     Merged(&[Action::EditorWordLeft, Action::EditorWordRight], "word"),
     Merged(
         &[Action::EditorDocStart, Action::EditorDocEnd],
-        "top · bottom",
+        "top, bottom",
     ),
-    Bound(&[Action::Open], "open · stage"),
-    Bound(&[Action::Back], "back · quit"),
+    Bound(&[Action::Open], "open, stage"),
+    Bound(&[Action::Back], "back, quit"),
     Fixed("wheel", "scroll"),
     Blank,
     Heading("FILES"),
     Bound(&[Action::Save], "save"),
-    Bound(&[Action::EditorUndo, Action::EditorRedo], "undo · redo"),
+    Bound(&[Action::EditorUndo, Action::EditorRedo], "undo, redo"),
     Bound(&[Action::EditorDeleteLine], "delete line"),
-    Bound(&[Action::Copy, Action::Paste], "copy · paste"),
+    Bound(&[Action::Copy, Action::Paste], "copy, paste"),
     Bound(&[Action::TreeHidden], "dotfiles"),
     Blank,
     Heading("WINDOWS"),
-    Bound(&[Action::Bar], "search · *command"),
+    Bound(&[Action::Bar], "search, *command"),
     Bound(&[Action::WindowSource], "git"),
     Bound(&[Action::WindowMap], "map"),
     Bound(&[Action::NewWindow], "new window"),
     Merged(
         &[Action::ToggleTreePane, Action::Narrower, Action::Wider],
-        "browser · width",
+        "browser, width",
     ),
     Bound(&[Action::Help], "help"),
     Bound(&[Action::Quit], "quit"),
     Blank,
-    Heading("GIT · MAP"),
-    Merged(&[Action::SourceOpen, Action::MapNext], "edit · next file"),
+    Heading("GIT AND THE MAP"),
+    Merged(&[Action::SourceOpen, Action::MapNext], "edit, next file"),
     Bound(&[Action::Refresh], "refresh"),
     Merged(
         &[Action::MapWikilinks, Action::MapLinks, Action::MapCalls],
@@ -210,7 +210,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("*reload", ""),
     ("*commit [message]", "what is staged"),
     ("*set tab_width to 2", ""),
-    ("*config", "settings · keys"),
+    ("*config", "settings, keys"),
     ("*update", "newest tiny"),
 ];
 
@@ -270,6 +270,7 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect, pal: &Palette, scr
     f.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(pal.glyphs.border)
         .border_style(pal.border_focus)
         .title(Line::from(Span::styled(
             " Help ",
@@ -277,7 +278,7 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect, pal: &Palette, scr
         )))
         .title_bottom(Line::from(Span::styled(
             if scrolls {
-                " up/down scroll · any other key closes "
+                " up/down scroll | any other key closes "
             } else {
                 " any key closes "
             },

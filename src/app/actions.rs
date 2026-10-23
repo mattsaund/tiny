@@ -93,7 +93,7 @@ impl App {
             Preview::Buffer { path, .. } => {
                 let path = path.clone();
                 self.focus = Focus::Editor;
-                self.status = "editing — Ctrl+S save, Esc back".into();
+                self.status = "editing: Ctrl+S save, Esc back".into();
                 self.plugin_event("open", &path);
             }
             Preview::Media { path, .. } => {
@@ -104,7 +104,7 @@ impl App {
                 };
             }
             Preview::Binary { kind, .. } => {
-                self.status = format!("{kind} — not editable");
+                self.status = format!("{kind}, not editable");
             }
             _ => {}
         }
@@ -140,17 +140,17 @@ impl App {
     /// The message names the key from the keymap rather than spelling it out,
     /// because this one is rebindable and a hint that lies is worse than none.
     pub(super) fn toggle_tree_pane(&mut self) {
-        let key = self.keymap.spec(Action::ToggleTreePane);
+        let key = self.key_name(Action::ToggleTreePane);
         if self.tree_hidden {
             self.tree_hidden = false;
             // Back to whichever pane had it, so the key is a true toggle.
             self.focus = self.focus_before_hide;
-            self.status = format!("tree back — {key} to hide");
+            self.status = format!("browser back, {key} hides it");
         } else {
             self.tree_hidden = true;
             self.focus_before_hide = self.focus;
             self.focus = Focus::Editor;
-            self.status = format!("tree hidden — {key} to bring it back");
+            self.status = format!("browser hidden, {key} brings it back");
         }
     }
 
@@ -304,7 +304,7 @@ impl App {
                 // later Ctrl+Q should quit, not install something.
                 self.update_on_exit = None;
                 self.status = format!(
-                    "saved {saved}, {} failed — {first}; still open",
+                    "saved {saved}, {} failed: {first}; still open",
                     failed.len()
                 )
             }

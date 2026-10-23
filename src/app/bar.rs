@@ -265,9 +265,9 @@ impl App {
         // may have moved on since the last one.
         self.forget_names();
         self.status = if filtering {
-            "filter the map — Enter keeps it | Esc clears it".into()
+            "filter the map: Enter keeps it | Esc clears it".into()
         } else {
-            format!("search — or {COMMAND_SIGIL} for a command, like {COMMAND_SIGIL}copy a to b")
+            format!("search, or {COMMAND_SIGIL} for a command, like {COMMAND_SIGIL}copy a to b")
         };
     }
 
@@ -283,7 +283,7 @@ impl App {
         };
         view.set_filter(query);
         let summary = view.summary();
-        self.status = format!("project map — {summary}");
+        self.status = format!("project map: {summary}");
     }
 
     /// Keys for the search and command bar.

@@ -266,7 +266,7 @@ impl App {
                     String::new()
                 };
                 Err(format!(
-                    "{} things are called {name}: {}{more} — say which, like {}",
+                    "{} things are called {name}: {}{more}. Say which, like {}",
                     many.len(),
                     listed.join(", "),
                     listed[0]
@@ -313,7 +313,7 @@ impl App {
     /// twice knows to go on to the next place rather than back to the first.
     pub(super) fn plan(&mut self, said: &Sentence, line: &str) -> Result<Plan, String> {
         match said {
-            Sentence::Empty => Err("type a command — ? lists them".into()),
+            Sentence::Empty => Err("type a command, ? lists them".into()),
             Sentence::Incomplete(how) => Err(how.clone()),
             Sentence::Goto { target, within } => self.plan_goto(target, within.as_ref(), line),
             Sentence::Copy { from, to } => {
@@ -390,14 +390,14 @@ impl App {
                         Ok(p) => Ok(Plan::Open(p)),
                         Err(e) if !e.starts_with("no ") => Err(e),
                         Err(_) => Err(format!(
-                            "`{whole}` is not a command — Tab completes one, ? lists them"
+                            "`{whole}` is not a command. Tab completes one, ? lists them"
                         )),
                     };
                 }
                 self.plan_goto(&Target::Anything(whole.clone()), None, line)
                     .map_err(|_| {
                         format!(
-                            "`{whole}` is not a command or a name in this project — ? lists them"
+                            "`{whole}` is not a command or a name in this project. ? lists them"
                         )
                     })
             }
@@ -455,7 +455,7 @@ impl App {
             Target::Line(n) => {
                 let path = file;
                 if path.is_none() && !matches!(self.preview, Preview::Buffer { .. }) {
-                    return Err(format!("no file open — say which: line {n} in notes.md"));
+                    return Err(format!("no file open, say which: line {n} in notes.md"));
                 }
                 if *n == 0 {
                     return Err("lines are counted from 1".into());
@@ -740,7 +740,7 @@ impl App {
                 } else {
                     let files = distinct_files(spots);
                     format!(
-                        "goes to {what} at {place} — {} of {}{} in {files} file{}; again for the next",
+                        "goes to {what} at {place}: {} of {}{} in {files} file{}; again for the next",
                         which + 1,
                         spots.len(),
                         if spots.len() >= MAX_SPOTS { "+" } else { "" },
@@ -767,7 +767,7 @@ impl App {
             Plan::Move { from, to } => {
                 format!("moves {} to {}", self.rel(from), self.rel(to))
             }
-            Plan::Delete(p) => format!("deletes {} — asks first", self.rel(p)),
+            Plan::Delete(p) => format!("deletes {}, asks first", self.rel(p)),
             Plan::New { path, folder } => format!(
                 "makes the {} {}",
                 if *folder { "folder" } else { "file" },
@@ -778,7 +778,7 @@ impl App {
                 with,
                 report,
             } => format!(
-                "replaces {} occurrence{} of `{}` with `{with}` across {} file{} — asks first",
+                "replaces {} occurrence{} of `{}` with `{with}` across {} file{}, asks first",
                 report.occurrences,
                 plural(report.occurrences),
                 needle.text,
@@ -791,7 +791,7 @@ impl App {
                 with,
                 count,
             } => format!(
-                "replaces {count} occurrence{} of `{}` with `{with}` in {} — Ctrl+Z undoes it",
+                "replaces {count} occurrence{} of `{}` with `{with}` in {}, Ctrl+Z undoes it",
                 plural(*count),
                 needle.text,
                 self.rel(path)
@@ -822,10 +822,10 @@ impl App {
                 self.jump_to(hit);
                 self.last_jump = Some((line.trim().to_string(), which));
                 Ok(if spots.len() == 1 {
-                    format!("{what} — {}:{}", self.rel(&hit.path), hit.line + 1)
+                    format!("{what} at {}:{}", self.rel(&hit.path), hit.line + 1)
                 } else {
                     format!(
-                        "{what} — {} of {} · run it again for the next",
+                        "{what}: {} of {}, run it again for the next",
                         which + 1,
                         spots.len()
                     )
@@ -953,7 +953,7 @@ impl App {
             self.focus_editor();
         }
         Ok(format!(
-            "replaced {count} occurrence{} of `{}` in {}{} — Ctrl+Z undoes it",
+            "replaced {count} occurrence{} of `{}` in {}{}, Ctrl+Z undoes it",
             plural(count),
             needle.text,
             self.rel(path),
@@ -986,7 +986,7 @@ fn what_of(target: &Target) -> String {
         Target::Function(n) => format!("function {n}"),
         Target::Heading(n) => format!("heading {n}"),
         Target::Word(n) => format!("word {n}"),
-        Target::Text(n) => format!("“{n}”"),
+        Target::Text(n) => format!("\"{n}\""),
         Target::Anything(n) => n.clone(),
         Target::Line(n) => format!("line {n}"),
         Target::File(n) | Target::Folder(n) => n.clone(),

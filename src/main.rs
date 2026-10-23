@@ -172,7 +172,7 @@ fn real_main() -> Result<()> {
         }
         Some("--uninstall") => return uninstall(),
         Some(a) if a.starts_with('-') => {
-            return Err(anyhow!("unknown option `{a}` — try `tiny --help`"));
+            return Err(anyhow!("unknown option `{a}`, try `tiny --help`"));
         }
         _ => {}
     }
@@ -230,7 +230,7 @@ fn real_main() -> Result<()> {
     if let Some(version) = app.update_on_exit.take() {
         println!("updating tiny {} to {version}\n", update::running());
         let exe = update::install(&version)?;
-        println!("\ntiny {version} installed — starting it");
+        println!("\ntiny {version} installed, starting it");
         update::relaunch(&exe)?;
     }
     Ok(())
@@ -485,7 +485,7 @@ impl Removal {
         // what to do about it rather than only that it did not work.
         if let Err(e) = std::fs::remove_file(bin) {
             let hint = if cfg!(target_os = "windows") {
-                " — Windows will not delete a running program; close tiny and delete it"
+                ". Windows will not delete a running program: close tiny and delete it"
             } else {
                 ""
             };
@@ -506,7 +506,7 @@ fn uninstall() -> Result<()> {
     let removal = Removal::plan(bin, Config::user_path());
     let lines = removal.lines();
     if lines.is_empty() {
-        println!("nothing to remove — no tiny binary or config file found");
+        println!("nothing to remove: no tiny binary or config file found");
         return Ok(());
     }
 
@@ -522,7 +522,7 @@ fn uninstall() -> Result<()> {
     if std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut reply).is_err()
         || !matches!(reply.trim(), "y" | "Y" | "yes" | "Yes")
     {
-        println!("canceled — nothing was removed");
+        println!("canceled, nothing was removed");
         return Ok(());
     }
 

@@ -434,7 +434,7 @@ fn goto(w: &[Word]) -> Sentence {
                 Ok(n) => Target::Line(n),
                 Err(_) => {
                     return Sentence::Incomplete(format!(
-                        "`{n}` is not a line number — say it like: line 42"
+                        "`{n}` is not a line number. Say it like: line 42"
                     ));
                 }
             },

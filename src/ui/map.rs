@@ -19,7 +19,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::ink::{Glyphs, Ink, InkStyle, route};
+use super::ink::{Ink, InkStyle, route};
 
 use crate::app::App;
 use crate::map::graph::EdgeKind;
@@ -41,7 +41,6 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     let pal = app.palette;
-    let markers = app.config.markers;
 
     // The picture, then a strip describing whatever the cursor is on. It is
     // the only thing on the map that says which way a connection runs, so it
@@ -60,7 +59,11 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     // The border is fixed, so the pane inside it can be measured before the
     // block that will carry the titles exists — and the titles need the
     // layout, which needs the size.
-    let bordered = || Block::default().borders(Borders::ALL);
+    let bordered = || {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_set(pal.glyphs.border)
+    };
     let inner = bordered().inner(rows[0]);
     if inner.width < 8 || inner.height < 3 {
         f.render_widget(bordered().border_style(pal.border_focus), rows[0]);
@@ -107,7 +110,7 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
         // view follows the cursor, so moving it is what reaches the rest.
         block = block.title_bottom(
             Line::from(Span::styled(
-                format!(" {} more — arrow to reach them ", placement.offscreen),
+                format!(" {} more, arrow to reach them ", placement.offscreen),
                 pal.dim,
             ))
             .right_aligned(),
@@ -122,7 +125,7 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
         slot_of.insert(p.node, n);
     }
 
-    let glyphs = Glyphs::for_markers(markers);
+    let glyphs = pal.glyphs;
     let mut ink = Ink::new(inner.width as usize, inner.height as usize);
 
     // Lines first, so a box always sits on top of whatever runs past it.
@@ -168,7 +171,7 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             InkStyle::Far
         };
-        ink.draw_box(p, view.label(p.node), style, &glyphs);
+        ink.draw_box(p, view.label(p.node), style, glyphs);
     }
 
     for g in &placement.folders {
@@ -180,7 +183,7 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
             InkStyle::Folder,
         );
     }
-    f.render_widget(Paragraph::new(ink.render(&glyphs, &pal)), inner);
+    f.render_widget(Paragraph::new(ink.render(glyphs, &pal)), inner);
 
     if detail_h > 0 {
         draw_map_detail(f, app, view, rows[1]);

@@ -274,7 +274,7 @@ fn the_two_directions_can_be_recolored_from_the_config() {
 #[test]
 fn the_map_can_be_drawn_without_box_characters() {
     let cfg = Config {
-        markers: Markers::Ascii,
+        glyphs: GlyphSet::Ascii,
         ..Config::default()
     };
     let (_td, mut app) = linked_fixture_with(cfg);

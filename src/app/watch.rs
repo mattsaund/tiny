@@ -250,7 +250,7 @@ impl App {
                 // The buffer stays. There is no row to put the cursor back on,
                 // but the text is not lost: it is still listed on the way out,
                 // and saving it there writes the file back.
-                self.status = format!("{name} is gone from disk — your unsaved copy is kept");
+                self.status = format!("{name} is gone from disk; your unsaved copy is kept");
                 return true;
             }
             let showing = matches!(&self.preview, Preview::Buffer { path: p, .. } if p == path);
@@ -266,7 +266,7 @@ impl App {
         };
 
         if dirty {
-            self.status = format!("{name} changed on disk — your unsaved copy is what you see");
+            self.status = format!("{name} changed on disk; your unsaved copy is what you see");
             return true;
         }
         let Some(editor) = self.buffers.get_mut(path) else {
@@ -280,7 +280,7 @@ impl App {
         // The cache holds parser state keyed by line number, and every line
         // number in this file has just been reconsidered.
         self.highlight_cache.clear();
-        self.status = format!("{name} changed on disk — reloaded");
+        self.status = format!("{name} changed on disk, reloaded");
         true
     }
 }

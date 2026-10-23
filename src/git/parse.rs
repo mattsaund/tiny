@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(s.staged[0].code, Code::Renamed);
         assert_eq!(s.staged[0].path, "new.md");
         assert_eq!(s.staged[0].from.as_deref(), Some("old.md"));
-        assert_eq!(s.staged[0].label(), "old.md → new.md");
+        assert_eq!(s.staged[0].label("→"), "old.md → new.md");
     }
 
     #[test]

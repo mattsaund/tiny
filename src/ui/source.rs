@@ -103,11 +103,12 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let focused = git.focus == GitFocus::List;
     let after = match (&git.error, &git.job) {
         (Some(_), _) => String::new(),
-        (_, Some(job)) => format!(" {}… ", job.what),
-        _ => format!(" {} ", git.status.branch.summary()),
+        (_, Some(job)) => format!(" {}{} ", job.what, pal.glyphs.ellipsis),
+        _ => format!(" {} ", git.status.branch.summary(pal.glyphs.arrow)),
     };
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(pal.glyphs.border)
         .border_style(if focused {
             pal.border_focus
         } else {
@@ -171,7 +172,7 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
                         format!(" {} ", change.code.letter()),
                         code_style(change.code, pal),
                     ),
-                    Span::styled(change.label(), pal.text),
+                    Span::styled(change.label(pal.glyphs.arrow), pal.text),
                 ];
                 // The same full-width bar the browser draws, and the same
                 // quiet version of it when the keyboard is elsewhere.
@@ -244,7 +245,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
         .current()
         .map(|(c, staged)| {
             let where_ = if staged { "staged" } else { "not staged" };
-            format!(" {}  {} ", c.label(), where_)
+            format!(" {}  {} ", c.label(pal.glyphs.arrow), where_)
         })
         .unwrap_or_else(|| " nothing selected ".to_string());
 
@@ -270,7 +271,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
         let title = if i == 0 {
             format!(" {side} ")
         } else {
-            format!(" {side} —{name}")
+            format!(" {side}:{name}")
         };
         // The border says which half the arrow keys are in, the same way the
         // two panes of the main window do.
@@ -281,6 +282,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
         };
         let block = Block::default()
             .borders(Borders::ALL)
+            .border_set(pal.glyphs.border)
             .border_style(border)
             .title(Line::from(Span::styled(title, pal.dim)));
         let inner = block.inner(*half);
@@ -364,7 +366,7 @@ fn gap_label(lines: &[DiffLine], n: usize, before: bool) -> Option<String> {
     // A gap on the left is what the right gained; a gap on the right is what
     // it lost.
     let what = if before { "added" } else { "removed" };
-    Some(format!("· {run} line{plural} {what}"))
+    Some(format!("  {run} line{plural} {what}"))
 }
 
 /// One line of one side: a two-character gutter, then the line itself in
@@ -432,13 +434,14 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let files = if staged == 1 { "file" } else { "files" };
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(pal.glyphs.border)
         .border_style(pal.border_focus)
         .title(Line::from(vec![
             Span::styled(" commit message ", pal.text.add_modifier(Modifier::BOLD)),
-            Span::styled(format!("— {staged} staged {files} "), pal.dim),
+            Span::styled(format!("for {staged} staged {files} "), pal.dim),
         ]))
         .title_bottom(Line::from(Span::styled(
-            " Ctrl+S commits · Esc puts it down ",
+            " Ctrl+S commits | Esc puts it down ",
             pal.dim,
         )));
     let inner = block.inner(area);
@@ -483,6 +486,7 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
 fn draw_graph(f: &mut Frame, app: &App, area: Rect, pal: &Palette) {
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(pal.glyphs.border)
         .border_style(pal.border)
         .title(Line::from(Span::styled(" branches ", pal.dim)));
     let inner = block.inner(area);

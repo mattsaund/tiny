@@ -141,7 +141,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 
 use crate::config::keys::{Keyboard, Keymap};
-use crate::config::{Config, Markers, Palette};
+use crate::config::{Config, Palette};
 use crate::files::project;
 use crate::files::size::Size;
 use crate::files::tree::{Row, Tree};
@@ -291,10 +291,10 @@ impl App {
         let (keymap, keys_warning) = Keymap::new(&config.keys, keyboard);
         let tree = Tree::new(root, config.show_hidden);
         let rows = tree.flatten();
-        let palette = Palette::from_theme(&config.theme);
+        let palette = Palette::from_theme(&config.theme).with_glyphs(config.glyphs);
 
         let opening = if target.created {
-            "new project — ? for help".to_string()
+            "new project, ? for help".to_string()
         } else {
             "? for help".to_string()
         };
@@ -423,12 +423,32 @@ impl App {
             .any(|(p, e)| e.dirty && p.starts_with(path))
     }
 
-    /// Glyphs for an open folder, a closed folder, and a file.
+    /// The first key bound to an action, written the way someone would say
+    /// it: `Ctrl+G`, `F1`, `/`.
+    ///
+    /// Read from the live keymap, so a hint or a message names what will
+    /// actually work: after a rebinding, and on Windows, where a few keys
+    /// differ. Never caret notation; `^V` is a thing you have to know already.
+    pub fn key_name(&self, action: crate::config::keys::Action) -> String {
+        let spec = self.keymap.spec(action);
+        let first = spec.split_whitespace().next().unwrap_or_default();
+        first
+            .split('+')
+            .map(|part| {
+                let mut chars = part.chars();
+                match chars.next() {
+                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("+")
+    }
+
+    /// What goes in front of an open folder, a closed folder, and a file.
     pub fn tree_markers(&self) -> (&'static str, &'static str, &'static str) {
-        match self.config.markers {
-            Markers::Arrows => ("▾ ", "▸ ", "  "),
-            Markers::Ascii => ("- ", "+ ", "  "),
-        }
+        let g = self.palette.glyphs;
+        (g.folder_open, g.folder_closed, "  ")
     }
 
     /// Settings the link graph is built with, derived from the live config so
@@ -462,9 +482,12 @@ impl App {
                 self.status = match &self.git.error {
                     Some(e) => e.clone(),
                     None if self.git.status.is_clean() => {
-                        format!("{} — nothing to commit", self.git.status.branch.summary())
+                        format!(
+                            "{}, nothing to commit",
+                            self.git.status.branch.summary(self.palette.glyphs.arrow)
+                        )
                     }
-                    None => self.git.status.branch.summary(),
+                    None => self.git.status.branch.summary(self.palette.glyphs.arrow),
                 };
             }
             Window::Main => self.status = "back to the browser".into(),
@@ -476,11 +499,12 @@ impl App {
     fn open_map(&mut self) {
         let root = self.root().to_path_buf();
         let options = self.graph_options();
-        let view = ProjectMap::build(&root, &options);
+        let mut view = ProjectMap::build(&root, &options);
+        view.label_with(self.palette.glyphs.ellipsis);
         self.status = if view.graph.nodes.is_empty() {
             "nothing on the map yet".into()
         } else {
-            format!("project map — {}", view.summary())
+            format!("project map: {}", view.summary())
         };
         self.project_map = Some(view);
     }

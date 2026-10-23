@@ -215,13 +215,17 @@ fn a_block_added_on_one_side_is_a_labeled_gap_on_the_other() {
     cursor_on(&mut app, "block.py");
 
     let out = joined(&mut app);
-    // Once, saying what the gap is — not a mark on every row of it, which
+    // Once, saying what the gap is, and not a mark on every row of it, which
     // read as a column of ragged indent where the file's own text should be.
     assert!(
-        out.contains("· 4 lines added"),
-        "the gap says what it is:\n{out}"
+        out.contains("  4 lines added"),
+        "the gap says what it is, lined up with the code:\n{out}"
     );
-    assert_eq!(out.matches('·').count(), 1, "and says it once:\n{out}");
+    assert_eq!(
+        out.matches("lines added").count(),
+        1,
+        "and says it once:\n{out}"
+    );
     assert!(!out.contains('~'), "no per-line filler marks left:\n{out}");
     // The file as it was is still all there and still lined up.
     assert!(out.contains("  before"), "{out}");
@@ -250,7 +254,7 @@ fn a_gap_on_the_after_side_says_removed_instead() {
     cursor_on(&mut app, "block.py");
 
     let out = joined(&mut app);
-    assert!(out.contains("· 2 lines removed"), "{out}");
+    assert!(out.contains("  2 lines removed"), "{out}");
 }
 
 #[test]

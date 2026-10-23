@@ -28,6 +28,8 @@ impl App {
             return;
         };
         self.plugins = Plugins::load(&dir);
+        let asked = std::mem::take(&mut self.plugins.startup);
+        self.apply_plugin_effects(asked);
         if let Some(first) = self.plugins.errors.first() {
             self.status = format!("plugin {first}");
         }
@@ -127,6 +129,12 @@ impl App {
                     };
                     self.open_path(&path);
                 }
+                // Already checked when the plugin asked, so this only fails if
+                // two plugins disagree in a way one setting cannot hold.
+                Effect::Set(name, value) => match self.config.set(&name, &value) {
+                    Ok(()) => self.apply_config(),
+                    Err(e) => self.status = format!("plugin: {e}"),
+                },
             }
         }
     }
@@ -145,11 +153,11 @@ impl App {
         }
         self.status = match media::open_with_desktop(&dir) {
             Ok(()) => format!(
-                "{} — drop a .lua file in, then *reload ({} loaded)",
+                "{}: drop a .lua file in, then *reload ({} loaded)",
                 dir.display(),
                 self.plugins.loaded.len()
             ),
-            Err(e) => format!("{e:#} — the folder is {}", dir.display()),
+            Err(e) => format!("{e:#}; the folder is {}", dir.display()),
         };
     }
 }

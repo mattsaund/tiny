@@ -36,10 +36,12 @@
 //! numbers are clamped by [`Config::sanitized`]. A typo in a config file
 //! should cost you an underline, never the program.
 
+pub mod glyphs;
 pub mod keys;
 pub mod keyspec;
 pub mod theme;
 
+pub use self::glyphs::{GlyphSet, Glyphs};
 pub use self::theme::{Palette, Theme};
 
 use std::collections::BTreeMap;
@@ -61,16 +63,6 @@ pub const PLUGINS_NAME: &str = "plugins";
 pub enum Side {
     Left,
     Right,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-/// Glyph set for the tree's expand/collapse indicators.
-#[serde(rename_all = "lowercase")]
-pub enum Markers {
-    /// `▾ ▸` — geometric shapes, present in every terminal font.
-    Arrows,
-    /// `- +` — for terminals with no Unicode at all.
-    Ascii,
 }
 
 /// Every setting, in one flat struct.
@@ -105,7 +97,11 @@ pub struct Config {
     pub tree_width: f32,
     /// Number the lines of a file being edited.
     pub line_numbers: bool,
-    pub markers: Markers,
+    /// Which characters tiny draws its lines and markers with. See
+    /// [`glyphs`]: the font is the terminal's, so this is how tiny is made to
+    /// look right in any of them. Read from `markers` too, its old name.
+    #[serde(alias = "markers")]
+    pub glyphs: GlyphSet,
     /// Draw boxes around the panes. Off gives a plainer, quieter screen.
     pub borders: bool,
 
@@ -133,7 +129,7 @@ impl Default for Config {
             tree_side: Side::Left,
             tree_width: 0.30,
             line_numbers: true,
-            markers: Markers::Arrows,
+            glyphs: GlyphSet::Unicode,
             borders: true,
             syntax_theme: "base16-ocean.dark".into(),
             search_ignore: [".git", "target", "node_modules", ".venv", "__pycache__"]
@@ -255,7 +251,7 @@ impl Config {
             ("tree_side", "left or right"),
             ("tree_width", "0.1 to 0.6"),
             ("line_numbers", ""),
-            ("markers", "arrows or ascii"),
+            ("glyphs", "unicode or ascii"),
             ("borders", ""),
             ("syntax_theme", "colors for code"),
             ("prose_extensions", "wrapped, not code"),
@@ -293,10 +289,7 @@ impl Config {
             "tree_side" => side_name(self.tree_side).into(),
             "tree_width" => format!("{:.2}", self.tree_width),
             "line_numbers" => self.line_numbers.to_string(),
-            "markers" => match self.markers {
-                Markers::Arrows => "arrows".into(),
-                Markers::Ascii => "ascii".into(),
-            },
+            "glyphs" => self.glyphs.name().into(),
             "borders" => self.borders.to_string(),
             "syntax_theme" => self.syntax_theme.clone(),
             "prose_extensions" => self.prose_extensions.join(" "),
@@ -345,12 +338,11 @@ impl Config {
                     .map_err(|_| anyhow!("tree_width must be a number like 0.3"))?
             }
             "line_numbers" => self.line_numbers = parse_bool(v)?,
-            "markers" => {
-                self.markers = match v.to_ascii_lowercase().as_str() {
-                    "arrows" => Markers::Arrows,
-                    "ascii" => Markers::Ascii,
-                    _ => return Err(anyhow!("markers must be arrows or ascii")),
-                }
+            // `markers` was this setting's name before it covered more than
+            // the browser, and is still what some people will type.
+            "glyphs" | "markers" => {
+                self.glyphs =
+                    GlyphSet::parse(v).ok_or_else(|| anyhow!("glyphs must be unicode or ascii"))?
             }
             "borders" => self.borders = parse_bool(v)?,
             "syntax_theme" => self.syntax_theme = v.to_string(),
@@ -571,6 +563,19 @@ mod tests {
         let (cfg, warning) = Config::load_from(Some(&path));
         assert_eq!(cfg.tab_width, 4, "falls back to the default");
         assert!(warning.is_some_and(|w| w.contains(CONF_NAME)));
+    }
+
+    #[test]
+    fn a_config_from_before_glyphs_keeps_its_look() {
+        // `markers` was the setting's old name, and `arrows` its old value.
+        let cfg: Config = toml::from_str("markers = \"ascii\"\n").unwrap();
+        assert_eq!(cfg.glyphs, GlyphSet::Ascii);
+        let cfg: Config = toml::from_str("markers = \"arrows\"\n").unwrap();
+        assert_eq!(cfg.glyphs, GlyphSet::Unicode);
+
+        let mut cfg = Config::default();
+        cfg.set("markers", "ascii").unwrap();
+        assert_eq!(cfg.get("glyphs").as_deref(), Some("ascii"));
     }
 
     #[test]

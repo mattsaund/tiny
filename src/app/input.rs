@@ -298,7 +298,7 @@ impl App {
         }
         // The counts move as filters change, so keep them in front of you.
         if let Some(view) = self.project_map.as_ref() {
-            self.status = format!("project map — {}", view.summary());
+            self.status = format!("project map: {}", view.summary());
         }
     }
 

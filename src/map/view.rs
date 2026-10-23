@@ -110,6 +110,18 @@ pub fn kind_index(kind: EdgeKind) -> usize {
 }
 
 impl ProjectMap {
+    /// Shorten every name to fit its box again, cut with `ellipsis`: the
+    /// glyph set's, so a map drawn in ASCII has nothing else in it either.
+    /// Labels are as long either way, so nothing has to be laid out again.
+    pub fn label_with(&mut self, ellipsis: &str) {
+        self.labels = self
+            .graph
+            .nodes
+            .iter()
+            .map(|n| layout::label_of(&n.name, ellipsis))
+            .collect();
+    }
+
     /// Build the graph and put the cursor somewhere sensible. Laying it out
     /// is `place`'s job, and happens per frame against the pane it has.
     ///
@@ -122,10 +134,11 @@ impl ProjectMap {
             touching[e.from].push(n);
             touching[e.to].push(n);
         }
+        let ellipsis = crate::config::glyphs::UNICODE.ellipsis;
         let labels = graph
             .nodes
             .iter()
-            .map(|n| layout::label_of(&n.name))
+            .map(|n| layout::label_of(&n.name, ellipsis))
             .collect();
         let (folder, folders) = layout::folders_of(&graph.nodes);
         let mut view = Self {
