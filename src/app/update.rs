@@ -36,12 +36,20 @@ impl App {
         if let Some(answer) = self.update_check.as_ref().and_then(|c| c.finished()) {
             self.update_check = None;
             match answer {
-                Some(version) => self.update_found = Some(version),
-                None if self.update_by_hand => {
+                update::Answer::Newer(version) => self.update_found = Some(version),
+                update::Answer::Newest if self.update_by_hand => {
                     self.status = format!("tiny {} is the newest", update::running());
                     changed = true;
                 }
-                None => {}
+                // Not "the newest": nobody could be asked.
+                update::Answer::Unknown if self.update_by_hand => {
+                    self.status = format!(
+                        "could not ask GitHub (offline, or no curl?); this is tiny {}",
+                        update::running()
+                    );
+                    changed = true;
+                }
+                _ => {}
             }
         }
         if self.update_found.is_some() && self.can_ask_about_update() {

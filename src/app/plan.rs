@@ -1078,11 +1078,15 @@ fn spot(path: &Path, line: usize, col: usize, text: &str) -> Hit {
     }
 }
 
-/// How many files a list of places is spread over.
+/// How many files a list of places is spread over. Counted as a set: the
+/// places are not always in file order (headings that say a name exactly come
+/// before the ones that only contain it).
 fn distinct_files(spots: &[Hit]) -> usize {
-    let mut paths: Vec<&Path> = spots.iter().map(|h| h.path.as_path()).collect();
-    paths.dedup();
-    paths.len()
+    spots
+        .iter()
+        .map(|h| h.path.as_path())
+        .collect::<std::collections::HashSet<_>>()
+        .len()
 }
 
 /// The words for what a `goto` looks for, as the status line says them.

@@ -79,7 +79,7 @@ use config::keys::Keyboard;
 use config::{CONF_NAME, Config, PLUGINS_NAME};
 
 /// `--help` output. Kept here as one literal rather than assembled from an
-/// argument parser: there are only seven options, and a contributor changing
+/// argument parser: there are only six options, and a contributor changing
 /// the CLI should be able to see the whole surface in one place.
 const USAGE: &str = "\
 tiny: an IDE, text editor, knowledge manager and file browser in the terminal
@@ -148,7 +148,19 @@ fn main() {
 /// survives to the status bar, the more urgent first: a broken config file
 /// beats "we just wrote you a config file".
 fn real_main() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // A name that is not UTF-8 is said to be one, where `env::args` would
+    // have panicked on it.
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|a| {
+            a.into_string().map_err(|a| {
+                anyhow!(
+                    "{} is not a name tiny can open: it is not valid UTF-8",
+                    a.to_string_lossy()
+                )
+            })
+        })
+        .collect::<Result<_>>()?;
     match args.first().map(String::as_str) {
         Some("-h") | Some("--help") => {
             emit(USAGE);
@@ -299,8 +311,9 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                 }
                 continue;
             }
-            dispatch(app, event::read()?);
-            break;
+            if dispatch(app, event::read()?) {
+                break;
+            }
         }
         // Whatever else arrived while that was being handled (fast typing, a
         // paste) is taken now, before the one frame it will all appear in.
@@ -313,26 +326,39 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
     }
 }
 
-/// Hand one terminal event to the app.
-fn dispatch(app: &mut App, event: Event) {
+/// Hand one terminal event to the app. Returns whether there is anything new
+/// to draw.
+///
+/// Mouse reporting, once on, reports every movement across the window, and
+/// Windows reports every key's release as well as its press. Each of those
+/// is nothing to tiny, and drawing a frame for each was most of what it did
+/// while the mouse moved over a long note.
+fn dispatch(app: &mut App, event: Event) -> bool {
     match event {
-        // Windows terminals report releases too; only presses, and the
-        // repeats from holding a key down, should reach the app.
+        // Only presses, and the repeats from holding a key down.
         Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
-            app.handle_key(k)
+            app.handle_key(k);
+            true
         }
         // One notch, one line. Everything else the mouse reports (moves,
         // clicks, drags) is deliberately ignored: tiny is a keyboard program,
         // and the wheel is only here because three-line jumps make a page hard
         // to read.
         Event::Mouse(m) => match m.kind {
-            MouseEventKind::ScrollDown => app.on_scroll(true, m.column),
-            MouseEventKind::ScrollUp => app.on_scroll(false, m.column),
-            _ => {}
+            MouseEventKind::ScrollDown => {
+                app.on_scroll(true, m.column);
+                true
+            }
+            MouseEventKind::ScrollUp => {
+                app.on_scroll(false, m.column);
+                true
+            }
+            _ => false,
         },
-        // A resize, a paste, a key release: nothing to handle, but the screen
-        // is redrawn for it exactly as it always was.
-        _ => {}
+        // Nothing to handle, but everything has to be laid out again.
+        Event::Resize(..) => true,
+        // A key's release, focus coming and going.
+        _ => false,
     }
 }
 

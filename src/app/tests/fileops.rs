@@ -478,3 +478,28 @@ fn a_note_named_like_the_new_name_without_its_extension_is_not_in_the_way() {
         app.status
     );
 }
+
+#[test]
+fn deleting_a_folder_asks_with_everything_at_stake_counted() {
+    // Every file however deep, not the folder's top level, and the unsaved
+    // edits that go with them.
+    let (td, mut app) = fixture();
+    fs::create_dir_all(td.path().join("notes/deep/deeper")).unwrap();
+    fs::write(td.path().join("notes/deep/a.md"), "a\n").unwrap();
+    fs::write(td.path().join("notes/deep/deeper/b.md"), "b\n").unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "design.md");
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, "x");
+    app.on_key(k(KeyCode::Esc));
+    command(&mut app, "delete notes");
+    let Mode::Confirm(c) = &app.mode else {
+        panic!("no question: {}", app.status)
+    };
+    assert!(
+        c.message
+            .contains("the 3 files in it, one with unsaved edits"),
+        "{}",
+        c.message
+    );
+}
