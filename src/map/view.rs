@@ -38,7 +38,7 @@
 //! `move_towards(0.0, 1.0)`. Navigation then walks the picture exactly as it
 //! is drawn.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::config::keys::Action;
@@ -58,9 +58,9 @@ pub enum Intent {
     Close,
     /// Open this file in the editor, closing the map.
     Open(PathBuf),
-    /// Read the project again and draw a fresh map of it. The layout is
-    /// deterministic, so redrawing the same files is a no-op: what this is
-    /// for is picking up files and links that changed on disk.
+    /// Read the project again and draw a fresh map of it, kept as it was
+    /// being looked at (see [`ProjectMap::carry_over`]): what this is for is
+    /// picking up files and links that changed on disk.
     Rebuild,
 }
 
@@ -92,6 +92,11 @@ pub struct ProjectMap {
     touching: Vec<Vec<usize>>,
     /// Each file's name as drawn in its box, see [`layout::label_of`].
     pub(super) labels: Vec<String>,
+    /// Each file's name as the detail strip lists it, see [`short_names`].
+    short: Vec<String>,
+    /// How many connections are drawn, as the title counts them. Counted
+    /// when what is drawn changes rather than on every frame.
+    links_drawn: usize,
     /// The folder each file sits in, as an index into `folders`.
     pub(super) folder: Vec<usize>,
     /// Every folder holding a file, in path order, without a trailing slash.
@@ -109,6 +114,37 @@ pub fn kind_index(kind: EdgeKind) -> usize {
     }
 }
 
+/// What to call each file in a list of names: its name, or as much of the end
+/// of its path as tells it apart from the files that share the name, so a
+/// Rust project's `out:` reads `app/mod.rs ui/mod.rs` rather than `mod.rs
+/// mod.rs`.
+fn short_names(nodes: &[Node]) -> Vec<String> {
+    let mut by_name: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, n) in nodes.iter().enumerate() {
+        by_name.entry(n.name.as_str()).or_default().push(i);
+    }
+    nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let same = &by_name[n.name.as_str()];
+            if same.len() == 1 {
+                return n.name.clone();
+            }
+            let parts: Vec<&str> = n.rel.split('/').collect();
+            (2..=parts.len())
+                .map(|k| parts[parts.len() - k..].join("/"))
+                .find(|end| {
+                    same.iter().filter(|j| **j != i).all(|&j| {
+                        let other = &nodes[j].rel;
+                        other != end && !other.ends_with(&format!("/{end}"))
+                    })
+                })
+                .unwrap_or_else(|| n.rel.clone())
+        })
+        .collect()
+}
+
 impl ProjectMap {
     /// Shorten every name to fit its box again, cut with `ellipsis`: the
     /// glyph set's, so a map drawn in ASCII has nothing else in it either.
@@ -122,38 +158,37 @@ impl ProjectMap {
             .collect();
     }
 
-    /// Build the graph and put the cursor somewhere sensible. Laying it out
-    /// is `place`'s job, and happens per frame against the pane it has.
+    /// Build the graph and put the cursor somewhere sensible, with names cut
+    /// short with `ellipsis`. Laying it out is `place`'s job, and happens per
+    /// frame against the pane it has.
     ///
     /// Everything expensive happens here, synchronously; this is what
     /// opening the map costs.
-    pub fn build(root: &Path, opts: &graph::Options) -> Self {
+    pub fn build(root: &Path, opts: &graph::Options, ellipsis: &str) -> Self {
         let graph = graph::build(root, opts);
         let mut touching = vec![Vec::new(); graph.nodes.len()];
         for (n, e) in graph.edges.iter().enumerate() {
             touching[e.from].push(n);
             touching[e.to].push(n);
         }
-        let ellipsis = crate::config::glyphs::UNICODE.ellipsis;
-        let labels = graph
-            .nodes
-            .iter()
-            .map(|n| layout::label_of(&n.name, ellipsis))
-            .collect();
         let (folder, folders) = layout::folders_of(&graph.nodes);
         let mut view = Self {
             pos: vec![(0.0, 0.0); graph.nodes.len()],
             shown: vec![true; graph.nodes.len()],
+            short: short_names(&graph.nodes),
             graph,
             root: root.to_path_buf(),
             selected: 0,
             kinds: [true; 3],
             filter: String::new(),
             touching,
-            labels,
+            labels: Vec::new(),
+            links_drawn: 0,
             folder,
             folders,
         };
+        view.label_with(ellipsis);
+        view.recount();
         view.select_busiest();
         // `pos` is written by `place`, which only runs when a frame is drawn.
         // Seed it against a nominal pane so the arrow keys mean something if a
@@ -183,6 +218,28 @@ impl ProjectMap {
     /// A file's name as it is written in its box.
     pub fn label(&self, i: usize) -> &str {
         &self.labels[i]
+    }
+
+    /// A file's name as the detail strip lists it, see [`short_names`].
+    pub fn short_name(&self, i: usize) -> &str {
+        &self.short[i]
+    }
+
+    /// Look at the project the way `old` was looking at it: the same kinds
+    /// of connection switched off, the same filter, and the cursor on the
+    /// same file if it is still there. What `r` does after reading the
+    /// project again, so a rebuilt map is the old one brought up to date
+    /// rather than a fresh one.
+    pub fn carry_over(&mut self, old: &ProjectMap) {
+        self.kinds = old.kinds;
+        self.set_filter(&old.filter);
+        if let Some(rel) = old.selected_node().map(|n| &n.rel)
+            && let Some(i) = self.graph.nodes.iter().position(|n| &n.rel == rel)
+        {
+            self.selected = i;
+        }
+        self.ensure_selection();
+        self.recount();
     }
 
     /// Whether any connection reaches this file, in either direction.
@@ -298,10 +355,12 @@ impl ProjectMap {
                 .filter(|&&e| self.kind_on(&self.graph.edges[e]))
                 .count()
         };
+        // The first of the busiest, so a project with no links at all opens
+        // on its first file rather than its last.
         if let Some(i) = self
             .visible_indices()
             .into_iter()
-            .max_by_key(|i| degree(*i))
+            .max_by(|a, b| degree(*a).cmp(&degree(*b)).then(b.cmp(a)))
         {
             self.selected = i;
         }
@@ -414,13 +473,19 @@ impl ProjectMap {
             *shown = wanted.is_empty() || n.rel.to_lowercase().contains(&wanted);
         }
         self.ensure_selection();
+        self.recount();
     }
 
-    /// Turn one kind of connection on or off, and make sure the cursor is
-    /// still on something that is drawn.
+    /// Turn one kind of connection on or off. No file is hidden by it (see
+    /// [`ProjectMap::node_visible`]), so the cursor stays where it is.
     fn toggle_kind(&mut self, i: usize) {
         self.kinds[i] = !self.kinds[i];
-        self.ensure_selection();
+        self.recount();
+    }
+
+    /// Count the connections drawn, for the title.
+    fn recount(&mut self) {
+        self.links_drawn = self.links().len();
     }
 
     /// Keep the cursor on something that is actually drawn.
@@ -436,11 +501,14 @@ impl ProjectMap {
         // Connections, not edges: the picture draws one line per pair of
         // files, so counting per-symbol edges here would promise lines that
         // are not there.
-        let links = self.links().len();
+        let links = self.links_drawn;
         let hidden = self.graph.nodes.len() - shown;
         let mut out = format!("{shown}/{} files | {links} links", self.graph.nodes.len());
         if hidden > 0 {
             out.push_str(&format!(" | {hidden} hidden"));
+        }
+        if self.graph.truncated {
+            out.push_str(&format!(" | the first {} of more", graph::MAX_FILES));
         }
         out
     }
@@ -717,12 +785,9 @@ mod tests {
     }
 
     #[test]
-    fn r_lays_the_graph_out_again_to_the_same_place() {
+    fn r_asks_for_the_project_to_be_read_again() {
+        // Reading it is `App`'s; what the rebuilt map keeps is tested there.
         let (_td, mut view) = fixture();
-        let before = view.pos.clone();
-        view.on_key(act(ch('r')));
-        for (a, b) in before.iter().zip(view.pos.iter()) {
-            assert!((a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9);
-        }
+        assert!(matches!(view.on_key(act(ch('r'))), Intent::Rebuild));
     }
 }

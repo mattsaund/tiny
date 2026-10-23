@@ -19,11 +19,12 @@
 //! # Channels
 //!
 //! [`Channels`] is the contract with the drawing code: a row under every box
-//! and a column beside every slot that the layout guarantees nothing is
-//! written into. Lines are only allowed to turn there, which is what keeps a
+//! and a column beside every slot that the layout guarantees no box is ever
+//! drawn in. Lines are only allowed to turn there, which is what keeps a
 //! connection between two distant files from disappearing behind a third one.
-//! Change the slot arithmetic here and `ui::ink` starts drawing
-//! through boxes.
+//! A folder heading may run across one, and where a line crosses it the line
+//! wins. Change the slot arithmetic here and `ui::ink` starts drawing through
+//! boxes.
 //!
 //! # Unconnected files are still files
 //!
@@ -33,6 +34,9 @@
 //! open the map to find.
 
 use std::collections::BTreeMap;
+
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use super::graph::Node;
 use super::view::ProjectMap;
@@ -181,7 +185,7 @@ pub(super) fn folders_of(nodes: &[Node]) -> (Vec<usize>, Vec<String>) {
     (index, folders.into_iter().map(str::to_string).collect())
 }
 
-/// Longest file name drawn inside a box before it is shortened.
+/// Widest file name drawn inside a box before it is shortened, in columns.
 ///
 /// Every slot on the grid is the same size, so one very long name would
 /// otherwise set the column width for the whole picture and fit half as many
@@ -193,16 +197,27 @@ const MAX_LABEL: usize = 18;
 ///
 /// The front is what goes: `…ent/reducers.js` tells you more than
 /// `components/red…`, because the end of a file name is the part that differs.
-/// However long the ellipsis, the label is never longer than [`MAX_LABEL`],
-/// so the glyph set cannot change how the boxes are laid out.
+/// However long the ellipsis, the label is never wider than [`MAX_LABEL`],
+/// so the glyph set cannot change how the boxes are laid out. Measured in
+/// columns, as the box around it is: a name in Chinese is twice as wide as
+/// its character count, and a box sized by the count would leave it hanging
+/// out of the side.
 pub fn label_of(name: &str, ellipsis: &str) -> String {
-    let count = name.chars().count();
-    if count <= MAX_LABEL {
+    if name.width() <= MAX_LABEL {
         return name.to_string();
     }
-    let keep = MAX_LABEL.saturating_sub(ellipsis.chars().count());
-    let tail: String = name.chars().skip(count - keep).collect();
-    format!("{ellipsis}{tail}")
+    let room = MAX_LABEL.saturating_sub(ellipsis.width());
+    let mut tail: Vec<&str> = Vec::new();
+    let mut used = 0;
+    for g in name.graphemes(true).rev() {
+        if used + g.width() > room {
+            break;
+        }
+        used += g.width();
+        tail.push(g);
+    }
+    tail.reverse();
+    format!("{ellipsis}{}", tail.concat())
 }
 
 /// A box or a heading before the pane is applied. Rows are counted in `u32`
@@ -248,7 +263,7 @@ impl ProjectMap {
         // having grown a tail.
         let widest = visible
             .iter()
-            .map(|i| self.labels[*i].chars().count())
+            .map(|i| self.labels[*i].width())
             .max()
             .unwrap_or(1);
         let slot_w = (widest + 6).max(8) as u16;
@@ -291,7 +306,7 @@ impl ProjectMap {
                         node: i,
                         col: c as u16 * slot_w,
                         row: 0, // set once the pane is applied
-                        width: self.labels[i].chars().count() as u16 + 2,
+                        width: self.labels[i].width() as u16 + 2,
                     },
                     row: row + r as u32 * u32::from(slot_h),
                     group: headings.len() - 1,
@@ -359,8 +374,9 @@ impl ProjectMap {
     ///
     /// Both clamps are still here and still matter. A layout shorter than the
     /// pane never scrolls, so the top of the map does not float away from the
-    /// top of the window; and the heading above the cursor stays visible,
-    /// because a box with no folder over it is a box you cannot place.
+    /// top of the window; and a box in its folder's first row keeps the
+    /// heading above it on screen, because a box with no folder over it is a
+    /// box you cannot place.
     fn scroll_to(&self, boxes: &[Unbounded<Placed>], height: u32, total: u32) -> u32 {
         if total <= height {
             return 0;
@@ -563,7 +579,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         write(td.path(), "design.md", "see [[architecture]]\n");
         write(td.path(), "architecture.md", "back to [[design]]\n");
-        let mut view = ProjectMap::build(td.path(), &graph::Options::default());
+        let mut view = ProjectMap::build(td.path(), &graph::Options::default(), "…");
         let place = view.place(90, 40);
         let root = td.path().file_name().unwrap().to_string_lossy().to_string();
         assert_eq!(
@@ -581,7 +597,7 @@ mod tests {
     fn root_files_come_before_the_folders() {
         let (td, _) = fixture();
         write(td.path(), "README.md", "see [[design]]\n");
-        let mut view = ProjectMap::build(td.path(), &graph::Options::default());
+        let mut view = ProjectMap::build(td.path(), &graph::Options::default(), "…");
         let place = view.place(90, 40);
         let labels: Vec<&str> = place.folders.iter().map(|g| g.label.as_str()).collect();
         assert!(
@@ -599,11 +615,11 @@ mod tests {
         write(
             &root,
             "notes.md",
-            "escape to [[secret]] and [../secret.md](x)\n",
+            "escape to [[secret]] and [x](../secret.md)\n",
         );
         write(&root, "inside.md", "see [[notes]]\n");
 
-        let mut view = ProjectMap::build(&root, &graph::Options::default());
+        let mut view = ProjectMap::build(&root, &graph::Options::default(), "…");
         for n in &view.graph.nodes {
             assert!(
                 root.join(&n.rel).starts_with(&root),
@@ -683,7 +699,7 @@ mod tests {
             );
             write(td.path(), &format!("d{i:02}/note{i}.md", i = i), "a note\n");
         }
-        let view = ProjectMap::build(td.path(), &graph::Options::default());
+        let view = ProjectMap::build(td.path(), &graph::Options::default(), "…");
         (td, view)
     }
 
@@ -764,7 +780,7 @@ mod tests {
     #[test]
     fn the_layout_is_the_same_every_time() {
         let (td, mut a) = fixture();
-        let mut b = ProjectMap::build(td.path(), &graph::Options::default());
+        let mut b = ProjectMap::build(td.path(), &graph::Options::default(), "…");
         let (pa, pb) = (a.place(90, 40), b.place(90, 40));
         assert_eq!(pa, pb, "the same project draws the same picture");
         assert_eq!(a.pos, b.pos);
@@ -802,7 +818,7 @@ mod tests {
     fn a_single_file_project_lays_out_without_trouble() {
         let td = tempfile::tempdir().unwrap();
         write(td.path(), "only.md", "alone\n");
-        let mut view = ProjectMap::build(td.path(), &graph::Options::default());
+        let mut view = ProjectMap::build(td.path(), &graph::Options::default(), "…");
         assert_eq!(view.pos.len(), 1);
         let placed = view.place(60, 20).boxes;
         assert_eq!(placed.len(), 1);
@@ -812,7 +828,7 @@ mod tests {
     #[test]
     fn an_empty_project_does_not_panic() {
         let td = tempfile::tempdir().unwrap();
-        let mut view = ProjectMap::build(td.path(), &graph::Options::default());
+        let mut view = ProjectMap::build(td.path(), &graph::Options::default(), "…");
         assert!(view.graph.nodes.is_empty());
         assert!(view.visible_indices().is_empty());
         assert_eq!(view.place(60, 20), Placement::default());

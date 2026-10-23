@@ -54,6 +54,10 @@ impl App {
         self.palette = Palette::from_theme(&self.config.theme).with_glyphs(self.config.glyphs);
         // Formatted in the old palette.
         self.block_rows.borrow_mut().clear();
+        // The map's names were cut with the old glyph set's ellipsis.
+        if let Some(map) = &mut self.project_map {
+            map.label_with(self.palette.glyphs.ellipsis);
+        }
         let (keymap, warning) = Keymap::new(&self.config.keys, self.keyboard);
         self.keymap = keymap;
         if let Some(w) = warning {

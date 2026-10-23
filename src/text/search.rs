@@ -602,11 +602,20 @@ pub struct Walked {
     /// Every folder under the root, empty ones included, in the same sorted
     /// order. The root itself is not one of them.
     pub folders: Vec<PathBuf>,
+    /// Whether the walk stopped at its limit with more still to see.
+    pub truncated: bool,
 }
 
 /// [`walk`], keeping the folders: what a command looks a name up in, since
 /// `goto folder notes` has to find a folder with nothing in it too.
 pub fn walk_all(root: &Path, opts: &Opts) -> Walked {
+    walk_up_to(root, opts, usize::MAX)
+}
+
+/// [`walk_all`], stopping once it has found `max_files` files: for the map,
+/// which reads every one of them while the user waits, and opened on a home
+/// folder would otherwise read everything in it.
+pub fn walk_up_to(root: &Path, opts: &Opts, max_files: usize) -> Walked {
     let mut out = Walked::default();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -639,6 +648,11 @@ pub fn walk_all(root: &Path, opts: &Opts) -> Walked {
         }
         files.sort();
         out.files.extend(files);
+        if out.files.len() >= max_files {
+            out.truncated = out.files.len() > max_files || !stack.is_empty() || !dirs.is_empty();
+            out.files.truncate(max_files);
+            break;
+        }
         dirs.sort();
         // Pushed reversed so the stack pops them in sorted order.
         for d in dirs.into_iter().rev() {
