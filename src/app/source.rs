@@ -136,8 +136,12 @@ pub struct GitPane {
     pub diff_height: usize,
     /// A push or a pull, still running.
     pub job: Option<Job>,
-    /// Rows the pane had on the last draw, for paging. Written by `ui`.
-    pub last_height: usize,
+    /// The first line of the list on screen. Nudged by `ui` as little as
+    /// keeps the cursor's row in view, the way the browser's is.
+    pub list_scroll: usize,
+    /// The columns the list covered in the last frame, as `[x0, x1)`, so the
+    /// wheel can tell the list from the diff. Written by `ui`.
+    pub list_cols: Option<(u16, u16)>,
 }
 
 impl GitPane {
@@ -260,6 +264,41 @@ impl App {
         if self.git.focus == GitFocus::Diff {
             return self.scroll_git_diff(delta);
         }
+        self.move_git_selection(delta);
+    }
+
+    /// Home and End: the first row of the list or the last, or the top or the
+    /// bottom of the diff, whichever half has the keyboard.
+    pub(super) fn git_to_end(&mut self, last: bool) {
+        // Further than either can go, and both clamp.
+        let far = self.git.rows.len().max(self.git.diff.len()) as isize;
+        self.move_git_cursor(if last { far } else { -far });
+    }
+
+    /// One notch of the wheel in the git window: over the list it moves the
+    /// list's cursor, the way the wheel over the browser does, and anywhere
+    /// else it scrolls what is drawn there.
+    pub(super) fn scroll_git(&mut self, down: bool, column: u16) {
+        let step = if down { 1 } else { -1 };
+        let over_list = matches!(self.git.list_cols, Some((x0, x1)) if column >= x0 && column < x1);
+        match (over_list, &mut self.git.message) {
+            // A message being written keeps the keyboard: moving the list's
+            // cursor would read another diff and take the keyboard with it.
+            (true, _) if self.git.focus == GitFocus::Message => {}
+            (true, _) => self.move_git_selection(step),
+            (false, Some(editor)) => {
+                if down {
+                    editor.move_down();
+                } else {
+                    editor.move_up();
+                }
+            }
+            (false, None) => self.scroll_git_diff(step),
+        }
+    }
+
+    /// Move the list's cursor, and read the diff of whatever it lands on.
+    fn move_git_selection(&mut self, delta: isize) {
         let last = self.git.rows.len().saturating_sub(1);
         let next = (self.git.selected as isize + delta).clamp(0, last as isize) as usize;
         if next == self.git.selected {

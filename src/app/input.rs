@@ -183,15 +183,17 @@ impl App {
         let Some(action) = self.keymap.resolve(KeyContext::Source, &key) else {
             return;
         };
-        // The global chords work here too: `Ctrl+P` is how `*commit` is typed,
-        // and a window you cannot run a command from is a window with a hole
-        // in it.
+        // The global chords work here too: the bar opens over this window, so
+        // `*commit` can be typed from it, and a window you cannot run a
+        // command from is a window with a hole in it.
         if self.on_global_action(action) {
             return;
         }
         match action {
             Action::Up => self.move_git_cursor(-1),
             Action::Down => self.move_git_cursor(1),
+            Action::First => self.git_to_end(false),
+            Action::Last => self.git_to_end(true),
             Action::Left => self.move_git_button(-1),
             Action::Right => self.move_git_button(1),
             Action::Open => self.activate_git(),
@@ -461,6 +463,26 @@ impl App {
     /// view once it reaches an edge, and never leaves you looking at somewhere
     /// you cannot type.
     pub fn on_scroll(&mut self, down: bool, column: u16) {
+        // The wheel goes to what is drawn under it: an overlay first, then
+        // the window that is up, never a window that is not on screen.
+        match &mut self.mode {
+            Mode::Help(scroll) => {
+                *scroll = if down {
+                    *scroll + 1
+                } else {
+                    scroll.saturating_sub(1)
+                };
+                return;
+            }
+            Mode::Settings(_) | Mode::Keybinds(_) => return,
+            _ => {}
+        }
+        match self.window {
+            Window::Source => return self.scroll_git(down, column),
+            // One screen, walked with the arrows: nothing to scroll.
+            Window::Map => return,
+            Window::Main => {}
+        }
         let step: isize = if down { 1 } else { -1 };
         if self.over_tree(column) {
             // The preview follows the tree cursor, so moving the view on its

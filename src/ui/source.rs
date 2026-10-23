@@ -98,6 +98,10 @@ pub(super) fn draw_source(f: &mut Frame, app: &mut App, area: Rect) {
 /// rather than reversed. Two panes that both hold a list have to say "you are
 /// not typing here" the same way, or the answer to "which one is live" becomes
 /// a thing you work out instead of see.
+///
+/// Scrolls the way the browser does too: by as little as keeps the cursor's
+/// row on screen. Counted in drawn lines rather than rows, because the button
+/// row wraps to as many lines as the width needs.
 fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let git = &app.git;
     let focused = git.focus == GitFocus::List;
@@ -127,7 +131,6 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
             Span::styled(after, pal.dim),
         ]));
     let inner = block.inner(area);
-    f.render_widget(block, area);
 
     if let Some(error) = &git.error {
         let lines = vec![
@@ -135,13 +138,17 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
             Line::from(""),
             Line::from(Span::styled("  Esc back to the browser", pal.dim)),
         ];
+        f.render_widget(block, area);
         f.render_widget(Paragraph::new(lines), inner);
         return;
     }
 
     let mut lines: Vec<Line> = Vec::new();
+    // The lines the cursor's row was drawn on.
+    let mut cursor = 0..0;
     for (i, row) in git.rows.iter().enumerate() {
         let on = i == git.selected;
+        let first = lines.len();
         match row {
             GitRow::Buttons => {
                 lines.extend(button_lines(git.button, on && focused, inner.width, pal))
@@ -182,14 +189,39 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
                 lines.push(Line::from(spans));
             }
         }
+        if on {
+            cursor = first..lines.len();
+        }
     }
     if git.rows.len() <= 1 {
         lines.push(Line::from(Span::styled("  nothing to commit", pal.dim)));
     }
-    // Written back the way every other pane's height is: the key handler
-    // cannot know how tall this is until it has been drawn.
-    app.git.last_height = inner.height as usize;
-    f.render_widget(Paragraph::new(lines), inner);
+
+    let height = inner.height as usize;
+    let mut scroll = app.git.list_scroll;
+    if cursor.start < scroll {
+        scroll = cursor.start;
+    } else if cursor.end > scroll + height {
+        // A row taller than the pane shows its top.
+        scroll = (cursor.end - height).min(cursor.start);
+    }
+    let scroll = scroll.min(lines.len().saturating_sub(height));
+    app.git.list_scroll = scroll;
+    app.git.list_cols = Some((area.x, area.x + area.width));
+
+    // What is out of sight below, said on the border, since a list cut off
+    // at a row boundary looks exactly like a list that ends there.
+    let below = lines.len().saturating_sub(scroll + height);
+    let block = if below > 0 {
+        block.title_bottom(
+            Line::from(Span::styled(format!(" {below} more "), pal.dim)).right_aligned(),
+        )
+    } else {
+        block
+    };
+    f.render_widget(block, area);
+    let shown: Vec<Line> = lines.into_iter().skip(scroll).take(height).collect();
+    f.render_widget(Paragraph::new(shown), inner);
 }
 
 /// The button row, wrapped to the pane's width.
@@ -425,12 +457,14 @@ fn diff_line(
 /// Drawn from a real [`Editor`](crate::text::editor::Editor), so it has a
 /// cursor you can see and a keyboard that works the way the editor pane's does.
 /// The first line is shown apart from the rest because git treats it apart:
-/// it is the summary every log and every UI shows on its own.
+/// it is the summary every log and every UI shows on its own. A message taller
+/// or wider than the box scrolls to keep the cursor in it, as the editor does.
 fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
-    let Some(editor) = &app.git.message else {
+    let tab_width = app.config.tab_width;
+    let staged = app.git.status.staged.len();
+    let Some(editor) = app.git.message.as_mut() else {
         return;
     };
-    let staged = app.git.status.staged.len();
     let files = if staged == 1 { "file" } else { "files" };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -447,39 +481,58 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let mut lines: Vec<Line> = Vec::new();
-    for (n, text) in editor.lines().iter().enumerate() {
-        if n >= inner.height as usize {
-            break;
-        }
-        // The summary line reads as the title it is; the body is body text.
-        let style = if n == 0 {
-            pal.text.add_modifier(Modifier::BOLD)
-        } else {
-            pal.text
-        };
-        lines.push(Line::from(Span::styled(format!(" {text}"), style)));
-    }
-    // An empty box says what it is for rather than sitting there blank.
-    if editor.lines().iter().all(String::is_empty) {
-        lines = vec![Line::from(Span::styled(
+    // The text starts one column in, so that is one column less to show it.
+    let text_w = inner.width.saturating_sub(1) as usize;
+    let height = inner.height as usize;
+    editor.sync_scroll(text_w.saturating_sub(1), height);
+    let (scroll_y, scroll_x) = (editor.scroll_y, editor.scroll_x);
+
+    let lines: Vec<Line> = if editor.lines().iter().all(String::is_empty) {
+        // An empty box says what it is for rather than sitting there blank.
+        vec![Line::from(Span::styled(
             " a line saying what changed, then a blank line, then why",
             pal.dim,
-        ))];
-    }
+        ))]
+    } else {
+        editor
+            .lines()
+            .iter()
+            .enumerate()
+            .skip(scroll_y)
+            .take(height)
+            .map(|(n, text)| {
+                // The summary line reads as the title it is; the body is body
+                // text.
+                let style = if n == 0 {
+                    pal.text.add_modifier(Modifier::BOLD)
+                } else {
+                    pal.text
+                };
+                // Tabs reach the stops they would from the line's own start,
+                // however far it is scrolled.
+                let from = tabs::column(text, scroll_x, tab_width);
+                let rest: String = text.chars().skip(scroll_x).collect();
+                let shown = tabs::expand(&rest, tab_width, from);
+                Line::from(Span::styled(format!(" {shown}"), style))
+            })
+            .collect()
+    };
     f.render_widget(Paragraph::new(lines), inner);
 
-    // The real cursor, so typing looks like typing.
-    let x = inner.x
-        + 1
-        + editor
-            .cursor_col
-            .min(inner.width.saturating_sub(2) as usize) as u16;
-    let y = inner.y
-        + editor
-            .cursor_line
-            .min(inner.height.saturating_sub(1) as usize) as u16;
-    f.set_cursor_position((x, y));
+    // The real cursor, so typing looks like typing: counted in columns, the
+    // way the text was drawn, so a tab or a wide character before it does
+    // not leave it blinking somewhere the text is not.
+    let line = editor
+        .lines()
+        .get(editor.cursor_line)
+        .map(String::as_str)
+        .unwrap_or("");
+    let col = tabs::column(line, editor.cursor_col, tab_width)
+        .saturating_sub(tabs::column(line, scroll_x, tab_width));
+    let row = editor.cursor_line.saturating_sub(scroll_y);
+    if col < text_w && row < height {
+        f.set_cursor_position((inner.x + 1 + col as u16, inner.y + row as u16));
+    }
 }
 
 /// The branch map, exactly as `git log --graph` drew it.

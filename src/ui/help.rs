@@ -218,7 +218,16 @@ const COMMANDS: &[(&str, &str)] = &[
 
 /// The keymap overlay. Scrollable, because the full list does not fit a short
 /// terminal: the footer says which of the two situations you are in.
-pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect, pal: &Palette, scroll: usize) {
+///
+/// Returns the scroll it drew at, held to the end of the list, so a key or a
+/// wheel notch past the bottom is not saved up for the way back.
+pub(super) fn draw_help(
+    f: &mut Frame,
+    app: &App,
+    area: Rect,
+    pal: &Palette,
+    scroll: usize,
+) -> usize {
     // Keys on the left, commands on the right, so `?` answers both halves of
     // "how do I do this" at once. Every width here is measured from the tables
     // rather than written down, so adding a row with a long description
@@ -308,6 +317,7 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect, pal: &Palette, scr
         let field = field_width(&stacked);
         f.render_widget(help_column(&stacked, scroll, height, field, pal), inner);
     }
+    scroll
 }
 
 /// How wide the first field has to be for every row of `rows` to line up.

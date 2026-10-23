@@ -363,3 +363,175 @@ fn saving_and_quitting_are_keys_and_not_commands() {
     app.on_key(ctrl('q'));
     assert!(app.should_quit);
 }
+
+/// The fixture, plus a folder of three hundred files: far more rows than any
+/// window shows at once.
+fn with_a_crowded_folder() -> (tempfile::TempDir, App) {
+    let (td, mut app) = fixture();
+    let many = td.path().join("many");
+    fs::create_dir(&many).unwrap();
+    for n in 0..300 {
+        fs::write(many.join(format!("item-{n:03}.txt")), "").unwrap();
+    }
+    command(&mut app, "reload");
+    (td, app)
+}
+
+/// The browser as drawn, a row of text per screen row, and the text of the
+/// row drawn as the cursor.
+///
+/// Read off the browser's own columns, because the preview's title names the
+/// selected file too, and a name found there would prove nothing about the
+/// list.
+fn browser(app: &mut App, w: u16, h: u16) -> (Vec<String>, String) {
+    let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+    t.draw(|f| crate::ui::draw(f, app)).unwrap();
+    let (x0, x1) = app.last_tree_cols.expect("the browser was drawn");
+    let buf = t.backend().buffer();
+    let mut rows = Vec::new();
+    let mut cursor = String::new();
+    for y in 0..buf.area.height {
+        let mut row = String::new();
+        for x in x0..x1 {
+            let cell = &buf[(x, y)];
+            row.push_str(cell.symbol());
+            if cell.modifier.contains(Modifier::REVERSED) {
+                cursor.push_str(cell.symbol());
+            }
+        }
+        rows.push(row);
+    }
+    (rows, cursor)
+}
+
+/// The name of the row the cursor is on.
+fn selected_name(app: &App) -> String {
+    app.rows[app.selected].name.clone()
+}
+
+/// That the cursor's row is on screen, and is the one drawn as the cursor.
+fn cursor_shown(app: &mut App, w: u16, h: u16) {
+    let name = selected_name(app);
+    let (rows, cursor) = browser(app, w, h);
+    assert!(
+        cursor.contains(&name),
+        "{name} should be on screen as the cursor, got {cursor:?}:\n{}",
+        rows.join("\n")
+    );
+}
+
+#[test]
+fn a_crowded_folder_scrolls_to_keep_the_cursor_on_screen() {
+    let (_td, mut app) = with_a_crowded_folder();
+    select(&mut app, "item-000.txt");
+    cursor_shown(&mut app, 100, 30);
+
+    for _ in 0..250 {
+        app.on_key(k(KeyCode::Down));
+    }
+    assert_eq!(selected_name(&app), "item-250.txt");
+    cursor_shown(&mut app, 100, 30);
+    let (rows, _) = browser(&mut app, 100, 30);
+    assert!(
+        !rows.iter().any(|r| r.contains("item-000.txt")),
+        "the top of the folder has scrolled away:\n{}",
+        rows.join("\n")
+    );
+
+    // And back up, all the way.
+    for _ in 0..250 {
+        app.on_key(k(KeyCode::Up));
+    }
+    assert_eq!(selected_name(&app), "item-000.txt");
+    cursor_shown(&mut app, 100, 30);
+}
+
+#[test]
+fn page_keys_and_the_ends_keep_the_cursor_on_screen_in_a_crowded_folder() {
+    let (_td, mut app) = with_a_crowded_folder();
+    select(&mut app, "item-000.txt");
+    browser(&mut app, 100, 30);
+
+    for _ in 0..3 {
+        app.on_key(k(KeyCode::PageDown));
+        cursor_shown(&mut app, 100, 30);
+    }
+    assert!(app.selected > 60, "three pages down, not three rows");
+
+    app.on_key(k(KeyCode::End));
+    assert_eq!(app.selected, app.rows.len() - 1, "the very last row");
+    cursor_shown(&mut app, 100, 30);
+
+    app.on_key(k(KeyCode::PageUp));
+    cursor_shown(&mut app, 100, 30);
+
+    app.on_key(k(KeyCode::Home));
+    assert_eq!(app.selected, 0);
+    cursor_shown(&mut app, 100, 30);
+}
+
+#[test]
+fn the_wheel_through_a_crowded_folder_keeps_the_cursor_on_screen() {
+    let (_td, mut app) = with_a_crowded_folder();
+    select(&mut app, "item-000.txt");
+    browser(&mut app, 100, 30);
+    let (x0, _) = app.last_tree_cols.unwrap();
+
+    for _ in 0..120 {
+        app.on_scroll(true, x0 + 1);
+    }
+    assert_eq!(selected_name(&app), "item-120.txt", "one notch, one row");
+    cursor_shown(&mut app, 100, 30);
+}
+
+#[test]
+fn a_shorter_window_still_shows_the_cursor() {
+    let (_td, mut app) = with_a_crowded_folder();
+    select(&mut app, "item-200.txt");
+    cursor_shown(&mut app, 100, 40);
+    // The terminal is made smaller with the cursor near the bottom of what
+    // was on screen.
+    cursor_shown(&mut app, 100, 10);
+    cursor_shown(&mut app, 100, 6);
+}
+
+#[test]
+fn folding_a_crowded_folder_from_deep_inside_it_leaves_no_gap() {
+    let (_td, mut app) = with_a_crowded_folder();
+    select(&mut app, "item-280.txt");
+    cursor_shown(&mut app, 100, 30);
+
+    // Left goes up to the folder, and left again folds it.
+    app.on_key(k(KeyCode::Left));
+    assert_eq!(selected_name(&app), "many");
+    app.on_key(k(KeyCode::Left));
+    assert!(!app.rows[app.selected].expanded, "folded");
+    cursor_shown(&mut app, 100, 30);
+    let (rows, _) = browser(&mut app, 100, 30);
+    assert!(
+        rows.iter().any(|r| r.contains("README.md")),
+        "the whole short list is back on screen, from the top:\n{}",
+        rows.join("\n")
+    );
+}
+
+#[test]
+fn the_wheel_scrolls_the_help_and_stops_at_its_end() {
+    let (_td, mut app) = fixture();
+    app.on_key(ch('?'));
+    let top = screen(&mut app, 90, 14).join("\n");
+    for _ in 0..500 {
+        app.on_scroll(true, 10);
+    }
+    let end = screen(&mut app, 90, 14).join("\n");
+    assert_ne!(top, end, "the wheel moved the help");
+    let Mode::Help(scroll) = app.mode else {
+        panic!("the help closed");
+    };
+    assert!(scroll < 500, "held to the end of the list, not {scroll}");
+
+    // So the first notch back up moves it, rather than paying back the
+    // notches spent past the end.
+    app.on_scroll(false, 10);
+    assert_ne!(screen(&mut app, 90, 14).join("\n"), end);
+}
