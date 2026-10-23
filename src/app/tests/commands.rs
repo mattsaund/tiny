@@ -401,19 +401,6 @@ fn refresh_keeps_buffers_that_have_unsaved_work() {
 }
 
 #[test]
-fn split_args_keeps_quoted_runs_together() {
-    assert_eq!(split_args("set tab_width 2"), ["set", "tab_width", "2"]);
-    assert_eq!(
-        split_args(r#"replace "old thing" "new thing""#),
-        ["replace", "old thing", "new thing"]
-    );
-    assert_eq!(split_args("  spaced   out  "), ["spaced", "out"]);
-    assert!(split_args("").is_empty());
-    // An empty quoted string is a real argument, not nothing.
-    assert_eq!(split_args(r#"replace "x" """#), ["replace", "x", ""]);
-}
-
-#[test]
 fn safe_join_rejects_paths_outside_the_root() {
     let root = Path::new("/project");
     assert!(safe_join(root, "notes/ok.md", root).is_ok());

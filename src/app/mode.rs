@@ -2,8 +2,8 @@
 //!
 //! [`Mode`] is one of the two axes of state (see the folder's docs) and
 //! every variant of it that carries something is defined here: the bar's
-//! typed text and its results, a prompt waiting for a name, a confirmation
-//! waiting for a yes, the settings area's cursor, the keybinds window's.
+//! typed text and its results, a confirmation waiting for a yes, the
+//! settings area's cursor, the keybinds window's.
 //!
 //! These are data, not behavior. Every one of them is *handled* somewhere
 //! else ([`super::bar`], [`super::prompt`], [`super::settings`]) and what
@@ -66,7 +66,8 @@ pub struct Bar {
     pub plan: Option<Result<String, String>>,
     /// Highlighted result. Moving it previews that hit without leaving the bar.
     pub selected: usize,
-    /// Set when a search found nothing, so the bar can say so.
+    /// Whether a search has been run for what is typed, so an empty list
+    /// can tell "no matches" from "nothing asked yet".
     pub searched: bool,
     /// The file that had the keyboard when the bar was opened, if any. Hits
     /// in it are listed first, see `App::run_search`.

@@ -49,7 +49,6 @@ pub struct Split {
 }
 
 /// A pane without the keyboard: what it showed, and where.
-#[derive(Default)]
 pub struct Pane {
     pub preview: Preview,
     /// How far down a rendered note was scrolled.
@@ -132,26 +131,16 @@ impl App {
         let Some(mut split) = self.split.take() else {
             return;
         };
+        // The view comes from the buffer the live pane was showing, so it is
+        // the first field: fields are worked out in the order written, and
+        // the next one takes the preview that says which buffer that is.
         let leaving = Pane {
+            view: self.active_buffer().map(|ed| ed.view()),
             preview: std::mem::take(&mut self.preview),
             preview_scroll: self.preview_scroll,
-            view: None,
             highlight: std::mem::take(&mut self.highlight_cache),
         };
-        // The view comes from the buffer the live pane was showing, read
-        // before anything moves the browser's cursor.
-        let leaving_view = leaving
-            .preview
-            .path()
-            .and_then(|p| self.buffers.get(p))
-            .map(|ed| ed.view());
-        let arriving = std::mem::replace(
-            &mut split.pinned,
-            Pane {
-                view: leaving_view,
-                ..leaving
-            },
-        );
+        let arriving = std::mem::replace(&mut split.pinned, leaving);
         split.live_right = !split.live_right;
         self.split = Some(split);
         self.take_up(arriving);
@@ -185,12 +174,11 @@ impl App {
 
     /// Keep the pane without the keyboard showing something real.
     ///
-    /// Its file can change under it while it is set aside: `*reload` and a
-    /// replace across the project drop a clean buffer to read it again, and a
-    /// delete or a file that stops being text drops it for good. The pane
-    /// then reads the file again the way the live pane would, or says it is
-    /// gone, rather than drawing an empty box under a name. Called from
-    /// `sync_preview`, which everything that changes the tree goes through.
+    /// Its file can change under it while it is set aside: a delete, or a
+    /// file that stops being text, drops its buffer. The pane then reads the
+    /// file again the way the live pane would, or says it is gone, rather
+    /// than drawing an empty box under a name. Called from `sync_preview`,
+    /// which everything that changes the tree goes through.
     pub(super) fn sync_pinned(&mut self) {
         let Some(split) = &self.split else {
             return;

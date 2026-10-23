@@ -17,7 +17,7 @@ use crate::config::{Config, Palette};
 
 use super::App;
 use super::mode::{BUTTONS, Confirm, ConfirmKind, KEYBIND_BUTTONS, Keybinds, Mode, Settings};
-use super::parts::{char_byte, list_move, plural};
+use super::parts::{edit_field, list_move, plural};
 
 /// How many rows an overlay's page keys move. The overlays do not know how
 /// tall they are drawn (`ui` decides that) and a fixed step reads the same
@@ -148,38 +148,10 @@ impl App {
                         Err(e) => self.status = format!("{e:#}"),
                     }
                 }
-                KeyCode::Backspace => {
-                    if s.cursor > 0 {
-                        let a = char_byte(&buf, s.cursor - 1);
-                        let b = char_byte(&buf, s.cursor);
-                        buf.replace_range(a..b, "");
-                        s.cursor -= 1;
-                    }
+                _ => {
+                    edit_field(&mut buf, &mut s.cursor, 0, key);
                     s.editing = Some(buf);
                 }
-                KeyCode::Left => {
-                    s.cursor = s.cursor.saturating_sub(1);
-                    s.editing = Some(buf);
-                }
-                KeyCode::Right => {
-                    s.cursor = (s.cursor + 1).min(buf.chars().count());
-                    s.editing = Some(buf);
-                }
-                KeyCode::Home => {
-                    s.cursor = 0;
-                    s.editing = Some(buf);
-                }
-                KeyCode::End => {
-                    s.cursor = buf.chars().count();
-                    s.editing = Some(buf);
-                }
-                KeyCode::Char(c) => {
-                    let byte = char_byte(&buf, s.cursor);
-                    buf.insert(byte, c);
-                    s.cursor += 1;
-                    s.editing = Some(buf);
-                }
-                _ => s.editing = Some(buf),
             }
             self.mode = Mode::Settings(s);
             return;

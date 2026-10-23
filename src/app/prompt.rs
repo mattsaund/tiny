@@ -73,9 +73,8 @@ impl App {
             keys,
             ..Config::default()
         };
+        // Which also shows or hides dotfiles again, if that changed.
         self.apply_config();
-        self.tree.set_show_hidden(self.config.show_hidden);
-        self.rebuild_rows();
         self.mode = Mode::Settings(Settings::default());
         self.status = "settings reset, Ctrl+S to write it".into();
     }

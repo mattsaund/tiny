@@ -124,7 +124,8 @@ impl App {
     }
 
     /// The single entry point for input. Dispatches in strict priority order:
-    /// map, then mode, then focus.
+    /// the window switching keys, then any overlay, then the window on
+    /// screen, then the pane with the keyboard.
     ///
     /// See the module docs for the take-and-replace pattern: the mode is moved
     /// out and `Normal` left in its place, so a handler that does nothing
@@ -417,10 +418,11 @@ impl App {
             _ => {}
         }
 
-        // A picture, a directory listing, a binary: nothing to type into, so
-        // the arrows move the view instead of a cursor.
+        // A picture, a directory listing, a binary: a few lines of facts
+        // with nothing to type into and nothing to scroll, the same as the
+        // wheel finds over them.
         if !matches!(self.preview, Preview::Buffer { .. }) {
-            return self.on_view_key(key, page);
+            return;
         }
 
         // Read what the key meant before borrowing the buffer, so nothing has
@@ -432,27 +434,6 @@ impl App {
         };
         if let Some(complaint) = edit_with_key(ed, action, key, page, tab_width) {
             self.status = complaint.into();
-        }
-    }
-
-    /// Looking at something with no text behind it: a picture, a directory,
-    /// a binary. Arrows scroll the view, because there is no cursor to move.
-    ///
-    /// The one place `preview_scroll` is driven by the keyboard. A text file
-    /// never lands here: it has a buffer, and the buffer has a cursor.
-    fn on_view_key(&mut self, key: KeyEvent, page: usize) {
-        let max = self.preview_len.saturating_sub(1);
-        let Some(action) = self.keymap.find(KeyContext::View, &key) else {
-            return;
-        };
-        match action {
-            Action::Up => self.preview_scroll = self.preview_scroll.saturating_sub(1),
-            Action::Down => self.preview_scroll = (self.preview_scroll + 1).min(max),
-            Action::First => self.preview_scroll = 0,
-            Action::Last => self.preview_scroll = max,
-            Action::PageUp => self.preview_scroll = self.preview_scroll.saturating_sub(page),
-            Action::PageDown => self.preview_scroll = (self.preview_scroll + page).min(max),
-            _ => {}
         }
     }
 
@@ -529,8 +510,9 @@ impl App {
 
     /// Whether `column` fell inside the tree pane as it was last drawn.
     ///
-    /// False whenever the tree is not on screen, which covers both `Ctrl+Space`
-    /// and the very first frame, before `ui` has said where anything is.
+    /// False whenever the tree is not on screen, which covers both a tree
+    /// folded away with `Ctrl+T` and the very first frame, before `ui` has
+    /// said where anything is.
     fn over_tree(&self, column: u16) -> bool {
         matches!(self.last_tree_cols, Some((x0, x1)) if column >= x0 && column < x1)
     }

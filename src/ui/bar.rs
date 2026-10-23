@@ -115,8 +115,8 @@ pub(super) fn bar_height(app: &App) -> u16 {
 
 // ---- status line ----------------------------------------------------------
 
-/// The status line: prompts, confirmations, or the ordinary message plus
-/// context-sensitive hints.
+/// The status line: a question waiting for an answer, or the ordinary
+/// message plus the keys that work where the keyboard is.
 ///
 /// Hints are dropped before the readout at the end when the window is too
 /// narrow for both, so the line degrades gracefully instead of wrapping or

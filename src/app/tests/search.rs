@@ -317,6 +317,26 @@ fn tab_stops_where_the_candidates_stop_agreeing() {
 }
 
 #[test]
+fn tab_reads_the_same_verbs_the_command_does() {
+    let (_td, mut app) = fixture();
+    // Spellings the reading knows, which Tab once did not.
+    assert_eq!(
+        completed(&mut app, "dup README.md to sr"),
+        format!("dup README.md to src{}", std::path::MAIN_SEPARATOR)
+    );
+    assert_eq!(completed(&mut app, "destroy READ"), "destroy README.md");
+    // `go to` is `goto`, so the kind of place completes after it.
+    assert_eq!(completed(&mut app, "go to func"), "go to function");
+    assert_eq!(completed(&mut app, "take me to head"), "take me to heading");
+    // `move to` is going somewhere rather than moving a file, so it is not
+    // offered the `to` a move wants next.
+    assert_eq!(completed(&mut app, "move to "), "move to ");
+    // `mkdir` has already said what it makes.
+    assert_eq!(completed(&mut app, "mkdir fol"), "mkdir fol");
+    assert_eq!(completed(&mut app, "new fol"), "new folder");
+}
+
+#[test]
 fn completion_leaves_dotfiles_alone_unless_asked_for() {
     let (td, mut app) = fixture();
     fs::write(td.path().join(".secret.md"), "").unwrap();

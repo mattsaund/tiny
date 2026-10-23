@@ -16,16 +16,19 @@
 //!
 //! | file | what it handles |
 //! |------|-----------------|
-//! | [`mode`] | the overlay types: the bar, prompts, confirmations, settings |
+//! | [`mode`] | the overlay types: the bar, confirmations, settings, help |
 //! | [`preview`] | what the cursor is on, and what the right pane becomes |
 //! | [`input`] | every keypress, dispatched; and the mouse wheel |
 //! | [`bar`] | the one field that is both a search and a command line |
+//! | [`sentence`] | reading a typed command into its parts |
+//! | [`plan`] | what a command would do, and doing it |
 //! | [`command`] | what each `*command` does |
 //! | [`fileops`] | new, rename, delete, copy, paste, save |
 //! | [`actions`] | the plain navigation keys and the view toggles |
 //! | [`settings`] | the settings area and the keybinds window |
-//! | [`prompt`] | answering a prompt or a confirmation |
+//! | [`prompt`] | answering a confirmation |
 //! | [`parts`] | small helpers more than one of the above needs |
+//! | [`split`] | two editors side by side |
 //! | [`source`] | the git window: what has changed, and what to do about it |
 //! | [`watch`] | noticing files another program changed |
 //! | [`update`] | asking whether to install a newer tiny |
@@ -42,13 +45,14 @@
 //! independent pieces of state:
 //!
 //! - [`Focus`]: which pane the keyboard belongs to, `Tree` or `Editor`.
-//! - [`Mode`]: what, if anything, is layered on top: a prompt, a confirmation,
-//!   the search or command bar, the settings area, the help overlay, or
-//!   `Normal` for none of them.
+//! - [`Mode`]: what, if anything, is layered on top: a confirmation, the
+//!   search or command bar, the settings area, the keybinds window, the help
+//!   overlay, or `Normal` for none of them.
 //!
-//! [`App::handle_key`] dispatches on `Mode` first and only falls through to
-//! `Focus` when the mode is `Normal`. The map is checked before either,
-//! because it takes the whole screen and every key with it.
+//! [`App::handle_key`] asks three things in order. Is it a key that switches
+//! windows? Those work from everywhere. Is an overlay up? Then the overlay
+//! has it. Otherwise the window on screen does, and in the main window that
+//! means whichever pane `Focus` names.
 //!
 //! # `i j k l` are the arrow keys
 //!
@@ -60,8 +64,8 @@
 //! cannot mean both left-down and down-up at once, and a layout that matches
 //! the arrows is the one that needs no explaining.
 //!
-//! The bar, the prompts and the editor are exempt, because there a letter is a
-//! letter being typed.
+//! The bar, the editor, the commit message and a settings field being
+//! edited are exempt, because there a letter is a letter being typed.
 //!
 //! # There is no reading mode
 //!
@@ -90,20 +94,22 @@
 //!
 //! `buffers` is keyed by path and is never cleared wholesale. Arrowing past a
 //! file opens it; arrowing away leaves it open, with any unsaved edits intact.
-//! Only four things remove entries: a delete (drops the file and anything
-//! under it), a rename (moves the entry to the new key so edits follow the
-//! file), a refresh or replace (drops *clean* buffers so they re-read from
-//! disk, keeps dirty ones), and [`watch`] finding that a file has stopped
-//! being readable text. Every one of them keeps dirty buffers; there is
-//! nowhere else for unsaved work to live.
+//! Only three things remove entries: a delete (drops the file and anything
+//! under it, once the question has said how many unsaved files go too), a
+//! rename (moves the entry to the new key so edits follow the file), and
+//! finding that a file with no unsaved edits has stopped being readable
+//! text, which [`watch`] does on its own and a refresh or a replace does on
+//! purpose. A delete you said yes to is the only way unsaved work is ever
+//! dropped; there is nowhere else for it to live.
 //!
 //! # Where drawing state lives
 //!
-//! `preview_len`, `last_edit_height` and `last_tree_height` are written by
-//! `ui` during a draw and read here by the key handlers. They are how paging
-//! and scroll clamping know the size of a window this module cannot see. On
-//! the very first frame they hold their defaults, which is harmless: every
-//! use is clamped.
+//! `preview_len` and the `last_*` fields (pane heights, widths and columns)
+//! are written by `ui` during a draw and read here by the key handlers and
+//! the mouse wheel. They are how paging and scroll clamping know the size of
+//! a window this module cannot see. On the very first frame they hold their
+//! defaults, which is harmless: every use is clamped. The saved highlighting
+//! and formatting are written while drawing too, but only `ui` reads them.
 
 #[cfg(test)]
 mod tests;
@@ -205,8 +211,8 @@ pub struct App {
     pub highlighter: Highlighter,
     /// Saved syntax-parser state for the buffer being edited, so a window deep
     /// in a long file does not have to be reached by parsing everything above
-    /// it on every keystroke. Written by `ui` while drawing, like the media
-    /// cache and for the same reason, see the module docs.
+    /// it on every keystroke. Written by `ui` while drawing, see the module
+    /// docs.
     pub highlight_cache: Resume,
     /// Which of the three windows is on screen. `Ctrl+G` and `Ctrl+L` switch
     /// to the other two, and back.
