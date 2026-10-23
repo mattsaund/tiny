@@ -32,7 +32,7 @@ fn a_text_file_opens_wrapped_and_readable_not_in_the_editor() {
     select(&mut app, "notes.txt");
 
     let out = joined(&mut app);
-    assert!(out.contains("READ"), "prose reads first:\n{out}");
+    assert!(out.contains("VIEW"), "prose reads first:\n{out}");
     assert!(!out.contains(" 1 "), "no line numbers on prose:\n{out}");
     for line in screen(&mut app, 90, 24) {
         assert!(line.chars().count() == 90);
@@ -215,12 +215,20 @@ fn prose_extensions_are_configurable() {
     fs::write(td.path().join("a.csv"), "x,y\n").unwrap();
     command(&mut app, "reload");
     select(&mut app, "a.csv");
-    assert!(joined(&mut app).contains("VIEW"), "csv is code by default");
+    // Told apart by line numbers: code has them, prose does not.
+    let row = |app: &mut App| {
+        joined(app)
+            .lines()
+            .find(|l| l.contains("x,y"))
+            .map(str::to_string)
+            .unwrap_or_default()
+    };
+    assert!(row(&mut app).contains("1 x,y"), "csv is code by default");
 
     command(&mut app, "set prose_extensions md txt csv");
     command(&mut app, "reload");
     select(&mut app, "a.csv");
-    assert!(joined(&mut app).contains("READ"), "now it reads as prose");
+    assert!(!row(&mut app).contains("1 x,y"), "now it reads as prose");
 }
 #[test]
 fn hovering_a_markdown_file_shows_it_rendered_not_raw() {
@@ -233,7 +241,7 @@ fn hovering_a_markdown_file_shows_it_rendered_not_raw() {
         "the '#' is consumed:\n{out}"
     );
     assert!(out.contains("• one"), "list is rendered as bullets:\n{out}");
-    assert!(out.contains("READ"));
+    assert!(out.contains("VIEW"));
 }
 
 #[test]

@@ -20,7 +20,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::editor::draw_editor;
-use super::parts::{FORMAT_LIMIT, label, mark_query, pane, readable_size};
+use super::parts::{FORMAT_LIMIT, label, mark_query, pane};
 
 use crate::app::{App, Focus, Mode, Preview, TextKind};
 use crate::text::markdown;
@@ -30,11 +30,11 @@ use crate::text::tabs;
 /// The right-hand pane. Dispatches on `app.preview` to one of the specific
 /// drawing functions, and builds the title that names the file and its state.
 ///
-/// The `READ` / `EDIT` / `VIEW` tag encodes the same rule the key handling
-/// uses: prose and markdown open rendered and only take the keyboard once you
-/// have deliberately pressed Enter, while code goes straight into the editor.
-/// `EDIT` on markdown is still formatted (see `ui::editor::live_rows`) so the tag says
-/// which keyboard you have, not whether there is any formatting on screen.
+/// The `VIEW` / `EDIT` tag says which keyboard you have: `VIEW` while the
+/// browser has it and the file is a picture of itself, `EDIT` once Enter has
+/// put it in the file. `EDIT` on markdown is still formatted (see
+/// `ui::editor::live_rows`), so the tag is about the keyboard, not about
+/// whether there is formatting on screen.
 pub(super) fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Editor && matches!(app.mode, Mode::Normal | Mode::Help(_));
     draw_pane(f, app, area, focused);
@@ -164,9 +164,8 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, area: Rect, focused: bool)
                     pal.text,
                 )),
                 Line::from(""),
-                // The chord, not the browser's bare `n`: this hint is read
-                // from the file pane, and the chord is the one that works
-                // wherever you happen to be when you read it.
+                // The command rather than a key: it works wherever you happen
+                // to be when you read it.
                 Line::from(Span::styled("right to open   *new for a file", pal.dim)),
             ];
             app.preview_len = lines.len();
@@ -177,7 +176,7 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, area: Rect, focused: bool)
                 Line::from(Span::styled(label(&path), pal.heading)),
                 Line::from(""),
                 Line::from(Span::styled(
-                    format!("{kind}, {}", readable_size(size)),
+                    format!("{kind}, {}", exact_size(size)),
                     pal.text,
                 )),
                 Line::from(""),
@@ -241,7 +240,7 @@ fn draw_media(
     {
         lines.push(Line::from(Span::styled(fact, pal.text)));
     }
-    lines.push(Line::from(Span::styled(readable_size(size), pal.text)));
+    lines.push(Line::from(Span::styled(exact_size(size), pal.text)));
     if let Some(note) = &info.note {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(note.clone(), pal.marker)));
@@ -408,4 +407,13 @@ fn clip_to(line: &str, width: usize) -> String {
         out.push(c);
     }
     out
+}
+
+/// A file's size the way the status line says it, so the two never round the
+/// same file two ways.
+fn exact_size(bytes: u64) -> String {
+    crate::files::size::human(crate::files::size::Size {
+        bytes,
+        complete: true,
+    })
 }

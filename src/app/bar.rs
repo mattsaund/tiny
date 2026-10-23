@@ -365,7 +365,7 @@ impl App {
                         self.tree.root_path(),
                         self.config.show_hidden,
                         &self.plugins.commands(),
-                        &self.known_names(),
+                        self.known_names(),
                     );
                     b.stale = true;
                 }
@@ -412,7 +412,7 @@ impl App {
                         self.tree.root_path(),
                         self.config.show_hidden,
                         &self.plugins.commands(),
-                        &self.known_names(),
+                        self.known_names(),
                     );
                     b.stale = true;
                 } else {
@@ -452,11 +452,8 @@ impl App {
 
     /// Every file and folder name in the project, for Tab to offer, once
     /// the bar has listed them, and nothing until then. Each name once.
-    pub fn known_names(&self) -> Vec<String> {
-        self.names
-            .as_ref()
-            .map(|n| n.all_names())
-            .unwrap_or_default()
+    pub fn known_names(&self) -> &[String] {
+        self.names.as_ref().map_or(&[], |n| n.all_names())
     }
 
     /// Search for what the bar says now, if it has changed since the last

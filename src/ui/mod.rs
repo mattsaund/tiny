@@ -1,21 +1,23 @@
 //! All drawing, one file per pane.
 //!
 //! The split from `app` is deliberate: `app` never touches ratatui types
-//! beyond styles, and nothing in here mutates state except the three things
-//! listed below, which cannot be resolved until the pane size is known.
+//! beyond styles, and nothing in here changes state except what is listed
+//! below, all of which cannot be worked out until the pane size is known.
 //!
 //! # Where each pane lives
 //!
-//! [`draw`] is the entry point, and the only thing in this file. It decides
-//! the layout and hands each rectangle to the module that fills it:
+//! [`draw`] is the entry point. It decides the layout and hands each
+//! rectangle to the module that fills it:
 //!
 //! ```text
 //! draw                                        (here)
 //!  ├─ draw_bar / draw_status                   bar.rs
 //!  ├─ draw_map            the whole screen     map.rs   → ink.rs
+//!  ├─ draw_source         the whole screen     source.rs
 //!  ├─ draw_results       dropped down from the top     tree.rs
-//!  └─ two panes, side decided by config
+//!  └─ the browser, and one pane or two beside it
 //!      ├─ draw_tree                             tree.rs
+//!      ├─ draw_pinned     the pane without the keyboard   preview.rs
 //!      └─ draw_preview                         preview.rs
 //!           ├─ draw_reading   rendered, no cursor in it
 //!           ├─ draw_editor    the file with the real cursor   editor.rs
@@ -33,16 +35,19 @@
 //! # `&mut App`, and why
 //!
 //! Most of these take `&mut App` even though drawing should be a pure read.
-//! Three things genuinely cannot be computed until the pane size is known, and
-//! the pane size is only known here:
+//! Some things genuinely cannot be worked out until the pane size is known,
+//! and the pane size is only known here:
 //!
 //! - **Scroll offsets.** The key handler that moved a cursor has no idea how
-//!   tall the pane is, and the answer changes on every terminal resize.
+//!   tall the pane is, and the answer changes on every terminal resize: the
+//!   browser's, the editor's, the git list's, the help's.
+//! - **What was drawn where.** Pane heights for paging, and the columns each
+//!   pane covered, so the mouse wheel can tell which one it is over.
 //! - **`preview_len`.** How far the preview can scroll depends on how many
 //!   lines the content produced at *this* width, which means rendering it.
-//! - **The highlight cache.** Which lines the parser has to reach is decided
-//!   by which lines are on screen, see [`crate::text::highlight::Resume`]. It
-//!   is filled in by the parse that had to happen anyway.
+//! - **What drawing worked out, kept for the next frame.** The highlight
+//!   cache (see [`crate::text::highlight::Resume`]) and a note's formatted
+//!   blocks, each filled in by work that had to happen anyway.
 //!
 //! Everything else must stay read-only. If you find yourself wanting to set
 //! application state from a draw function, it almost certainly belongs in
@@ -50,11 +55,12 @@
 //!
 //! # Styling rules
 //!
-//! Nothing here writes a literal color. Every style comes from `app.palette`,
-//! and the shipped palette names no color at all; meaning is carried by bold,
-//! dim, underline and reverse, so tiny inherits the user's terminal theme. The
-//! one exception is syntax highlighting, whose colors come from the syntect
-//! theme by design.
+//! Every style comes from `app.palette`, and the shipped palette names no
+//! color at all; meaning is carried by bold, dim, underline and reverse, so
+//! tiny inherits the user's terminal theme. The exceptions are syntax
+//! highlighting, whose colors come from the syntect theme by design, and the
+//! git window's status letters and diff gutter, where the color is the code
+//! (see `source`).
 //!
 //! Widths are measured with `unicode-width`, never `chars().count()`. A CJK
 //! character is one character and two cells, and confusing the two is how
@@ -90,49 +96,30 @@ use crate::config::Side;
 
 /// Paint one frame. Called once per keypress by the event loop in `main`.
 ///
-/// The vertical layout is assembled rather than hardcoded, because the bar and
-/// the status line can each be configured to either end of the window: `order`
-/// collects the slots in their final top-to-bottom sequence, then constraints
-/// are derived from it. The main area is whatever is left.
-///
 /// Overlays (help, settings) are drawn against the *full* screen area rather
 /// than the main region, so they float above the panes, and over whichever
 /// window is up, since every one of them can be opened from all three.
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
 
-    // Rows: the bar at the top when it is open, the panes, the status line at
-    // the bottom. Both used to be settable at either end, which was two
+    // Rows: the bar at the top while it is open, the panes, the status line
+    // at the bottom. Both used to be settable at either end, which was two
     // settings to describe a window everyone left alone, and a bar that could
     // be anywhere is a bar you have to look for.
-    let bar_open = matches!(app.mode, Mode::Bar(_));
-    let mut order: Vec<(Slot, u16)> = Vec::new();
-    if bar_open {
-        order.push((Slot::Bar, bar::bar_height(app)));
+    let bar_h = match app.mode {
+        Mode::Bar(_) => bar::bar_height(app),
+        _ => 0,
+    };
+    let [bar_row, main, status_row] = Layout::vertical([
+        Constraint::Length(bar_h),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    if bar_h > 0 {
+        draw_bar(f, app, bar_row);
     }
-    order.push((Slot::Main, 0));
-    order.push((Slot::Status, 1));
-
-    let constraints: Vec<Constraint> = order
-        .iter()
-        .map(|(slot, h)| match slot {
-            Slot::Main => Constraint::Min(3),
-            _ => Constraint::Length(*h),
-        })
-        .collect();
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(area);
-
-    let mut main = area;
-    for (i, (slot, _)) in order.iter().enumerate() {
-        match slot {
-            Slot::Main => main = rows[i],
-            Slot::Bar => draw_bar(f, app, rows[i]),
-            Slot::Status => draw_status(f, app, rows[i]),
-        }
-    }
+    draw_status(f, app, status_row);
 
     // Two of the three windows take the whole pane and answer for themselves.
     match app.window {
@@ -153,14 +140,8 @@ fn draw_overlay(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
             let shown = draw_help(f, app, area, &pal, scroll);
             app.mode = Mode::Help(shown);
         }
-        Mode::Settings(s) => {
-            let s = s.clone();
-            draw_settings(f, app, area, &s);
-        }
-        Mode::Keybinds(kb) => {
-            let kb = kb.clone();
-            draw_keybinds(f, app, area, &kb);
-        }
+        Mode::Settings(s) => draw_settings(f, app, area, s),
+        Mode::Keybinds(kb) => draw_keybinds(f, app, area, kb),
         Mode::Confirm(c) => {
             if let ConfirmKind::Update(version) = &c.kind {
                 draw_update(f, app, area, version);
@@ -180,14 +161,11 @@ fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
     // standing in for it.
     let main = match &app.mode {
         Mode::Bar(b) if !b.is_command() => {
-            let b = b.clone();
             let h = results_height(main, b.results.len());
-            let rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(h), Constraint::Min(3)])
-                .split(main);
-            draw_results(f, app, rows[0], &b);
-            rows[1]
+            let [results, rest] =
+                Layout::vertical([Constraint::Length(h), Constraint::Min(3)]).areas(main);
+            draw_results(f, app, results, b);
+            rest
         }
         _ => main,
     };
@@ -249,12 +227,4 @@ fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
             draw_preview(f, app, preview_area);
         }
     }
-}
-
-/// A horizontal band of the window, used to build the vertical layout in the
-/// order the config asks for.
-enum Slot {
-    Bar,
-    Main,
-    Status,
 }

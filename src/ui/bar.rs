@@ -1,7 +1,8 @@
-//! The two single-row strips: the bar, and the status line.
+//! The two strips: the bar, and the status line.
 //!
-//! Neither knows where it is. [`super::draw`] hands each one a row (the bar
-//! at the top, the status line at the bottom) and they fill it.
+//! Neither knows where it is. [`super::draw`] hands each one its rows (the
+//! bar at the top, one row, or two under a command; the status line at the
+//! bottom) and they fill them.
 //!
 //! The bar is one field that is three things: a search when it starts with
 //! anything, a command when it starts with the sigil, and the map's filter
@@ -22,7 +23,7 @@ use crate::app::{App, ConfirmKind, Focus, GitFocus, Mode, Window};
 use crate::config::keys::Action;
 use crate::files::size;
 
-/// The search (`/`) or command (`:`) line.
+/// The search line, or with a `*` in front, the command line.
 ///
 /// Draws its own block cursor as a reversed span, because the terminal has
 /// only one real cursor and the editor pane has a stronger claim on it.
@@ -52,7 +53,7 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
             app.tree.root_path(),
             app.config.show_hidden,
             &app.plugins.commands(),
-            &app.known_names(),
+            app.known_names(),
         )
         .unwrap_or_default()
     } else {
@@ -134,51 +135,7 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(format!(" {}", c.message), pal.marker),
         ]),
         _ => {
-            if app.window == Window::Map {
-                let line = Line::from(vec![
-                    Span::styled(format!(" {}", app.status), pal.text),
-                    Span::styled(
-                        "   arrows move | Enter open | 1-3 kinds | / filter | Esc back",
-                        pal.dim,
-                    ),
-                ]);
-                f.render_widget(Paragraph::new(line).style(pal.text), area);
-                return;
-            }
-            if app.window == Window::Source {
-                // What the arrows do here depends on which half has them, and
-                // a hint naming the other half's keys is worse than none.
-                let hints = match app.git.focus {
-                    GitFocus::Message => "Ctrl+S commit | Esc put it down",
-                    GitFocus::Diff => "up/down scroll | left back to the changes",
-                    GitFocus::List => "Enter stage | Tab open | r refresh | Esc back",
-                };
-                let line = Line::from(vec![
-                    Span::styled(format!(" {}", app.status), pal.text),
-                    Span::styled(format!("   {hints}"), pal.dim),
-                ]);
-                f.render_widget(Paragraph::new(line).style(pal.text), area);
-                return;
-            }
-            let hints: String = match (&app.mode, app.focus) {
-                // Those two windows carry their own keys along their bottom
-                // edge, and saying them twice is just more to read.
-                (Mode::Settings(_) | Mode::Keybinds(_), _) => String::new(),
-                (Mode::Bar(_), _) => "Esc close".into(),
-                // Written out in full rather than as `^S`; this line is the
-                // first place most people meet these keys, and a caret is a
-                // thing you have to already know.
-                //
-                // The window keys are read from the live keymap rather than
-                // written down here, so a rebinding shows here too. A hint
-                // has to name the key that will actually work.
-                (_, Focus::Tree) => format!(
-                    "/ search | {} git | {} map",
-                    app.key_name(Action::WindowSource),
-                    app.key_name(Action::WindowMap)
-                ),
-                (_, Focus::Editor) => "Ctrl+S save | Ctrl+Z undo | Ctrl+K cut | Esc back".into(),
-            };
+            let hints = hints(app);
             let pos = position_readout(app);
             let room = area.width as usize;
             let mut spans = vec![
@@ -198,6 +155,64 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         }
     };
     f.render_widget(Paragraph::new(line).style(app.palette.text), area);
+}
+
+/// The keys worth naming for what is on screen.
+///
+/// Read from the live keymap rather than written down here, so a rebinding
+/// shows here too, and Windows' own paste key: a hint has to name the key
+/// that will actually work. Written out in full rather than as `^S`; this
+/// line is the first place most people meet these keys, and a caret is a
+/// thing you have to already know.
+fn hints(app: &App) -> String {
+    let key = |action| app.key_name(action);
+    match (&app.mode, app.window) {
+        // These carry their own keys along their bottom edge, and saying them
+        // twice is just more to read.
+        (Mode::Settings(_) | Mode::Keybinds(_) | Mode::Help(_), _) => String::new(),
+        (Mode::Bar(_), _) => format!("{} close", key(Action::Back)),
+        (_, Window::Map) => format!(
+            "arrows move | {} open | 1-3 kinds | {} filter | {} back",
+            key(Action::Open),
+            key(Action::Bar),
+            key(Action::Back)
+        ),
+        // What the arrows do in git depends on which half has them, and a
+        // hint naming the other half's keys is worse than none.
+        (_, Window::Source) => match app.git.focus {
+            GitFocus::Message => format!(
+                "{} commit | {} put it down",
+                key(Action::Save),
+                key(Action::Back)
+            ),
+            GitFocus::Diff => "up/down scroll | left back to the changes".into(),
+            GitFocus::List => format!(
+                "{} stage | {} open | {} refresh | {} back",
+                key(Action::Open),
+                key(Action::SourceOpen),
+                key(Action::Refresh),
+                key(Action::Back)
+            ),
+        },
+        (_, Window::Main) => match app.focus {
+            Focus::Tree => format!(
+                "{} search | {} git | {} map",
+                key(Action::Bar),
+                key(Action::WindowSource),
+                key(Action::WindowMap)
+            ),
+            // Only with a file to type into: the keyboard can be in a pane
+            // showing a picture or a folder, where none of these do anything.
+            Focus::Editor if app.active_buffer().is_some() => format!(
+                "{} save | {} undo | {} delete line | {} back",
+                key(Action::Save),
+                key(Action::EditorUndo),
+                key(Action::EditorDeleteLine),
+                key(Action::Back)
+            ),
+            Focus::Editor => format!("{} back", key(Action::Back)),
+        },
+    }
 }
 
 /// The right-hand end of the status line: how much disk the thing under the
@@ -232,5 +247,3 @@ fn position_readout(app: &App) -> String {
         }
     }
 }
-
-// ---- overlays -------------------------------------------------------------

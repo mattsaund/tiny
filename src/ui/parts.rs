@@ -34,9 +34,11 @@ use crate::text::search::Matcher;
 /// box is dropped entirely: a quieter screen for people who want one.
 ///
 /// Returns the *inner* rectangle to draw content into, so callers do not have
-/// to know which of the two modes is in effect. Every pane goes through here,
-/// which is what keeps `borders = false` from needing a second code path in
-/// each drawing function.
+/// to know which of the two modes is in effect. Every pane of the main window
+/// goes through here, which is what keeps `borders = false` from needing a
+/// second code path in each drawing function. The git and map windows keep
+/// their boxes either way: their parts sit side by side, and the box is what
+/// tells one from the next.
 pub(super) fn pane<'a>(
     f: &mut Frame,
     area: Rect,
@@ -72,7 +74,7 @@ pub(super) fn pane<'a>(
     inner
 }
 
-// ---- tree pane ------------------------------------------------------------
+// ---- the selected row -----------------------------------------------------
 
 /// Extend a row's styling across the pane so the cursor reads as a row, not
 /// just as colored text.
@@ -105,7 +107,7 @@ pub(super) fn highlight_row(spans: &mut Vec<Span>, width: usize, pal: Palette, f
     }
 }
 
-// ---- search results -------------------------------------------------------
+// ---- a search hit, marked -------------------------------------------------
 
 /// Re-cut drawn spans so every occurrence of the search query stands out.
 ///
@@ -167,7 +169,7 @@ pub(super) fn mark_query(spans: Vec<Span<'static>>, query: &Matcher) -> Vec<Span
     out
 }
 
-// ---- preview pane ---------------------------------------------------------
+// ---- scrolling, placing and naming ----------------------------------------
 
 /// The first row to draw so that `selected` is on screen, scrolling no further
 /// than it has to.
@@ -223,23 +225,6 @@ pub(super) fn split_at_char(s: &str, ci: usize) -> (String, String) {
     (s[..b].to_string(), s[b..].to_string())
 }
 
-/// Byte count as `B` / `KB` / `MB` / …, with one decimal place above a
-/// kilobyte. Exact bytes below that, since "0.4 KB" tells you less than "412 B".
-pub(super) fn readable_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut v = bytes as f64;
-    let mut i = 0;
-    while v >= 1024.0 && i < UNITS.len() - 1 {
-        v /= 1024.0;
-        i += 1;
-    }
-    if i == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{v:.1} {}", UNITS[i])
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,14 +235,6 @@ mod tests {
         assert_eq!(digits(9), 1);
         assert_eq!(digits(10), 2);
         assert_eq!(digits(1234), 4);
-    }
-
-    #[test]
-    fn readable_size_scales() {
-        assert_eq!(readable_size(0), "0 B");
-        assert_eq!(readable_size(512), "512 B");
-        assert_eq!(readable_size(2048), "2.0 KB");
-        assert_eq!(readable_size(5 * 1024 * 1024), "5.0 MB");
     }
 
     #[test]
