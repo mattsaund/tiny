@@ -235,6 +235,27 @@ impl Tiny {
         false
     }
 
+    /// Where `text` first is on the screen: its column and row, from 0.
+    fn find(&self, text: &str) -> Option<(u16, u16)> {
+        let rows = self.screen.lock().unwrap().screen().size().0.get();
+        (0..rows).find_map(|y| {
+            let row = self.row(y);
+            row.find(text).map(|i| (row[..i].chars().count() as u16, y))
+        })
+    }
+
+    /// The mouse, as a terminal reports it once asked to: SGR, counted from
+    /// 1. `button` 0 is the left; 32 more is a drag.
+    fn mouse(&mut self, button: u8, (x, y): (u16, u16), down: bool) {
+        let end = if down { 'M' } else { 'm' };
+        self.send(&format!("\x1b[<{button};{};{}{end}", x + 1, y + 1));
+    }
+
+    fn click(&mut self, at: (u16, u16)) {
+        self.mouse(0, at, true);
+        self.mouse(0, at, false);
+    }
+
     /// What the pane beside the browser is titled: whatever the browser's
     /// cursor is on, since the pane follows it.
     fn on(&self) -> String {
@@ -452,6 +473,35 @@ fn typing_editing_and_saving_reach_the_file() {
     // Esc on its own, back to the browser: the pane says VIEW again.
     tiny.send("\x1b");
     tiny.wait_for("VIEW");
+    tiny.quit();
+}
+
+#[test]
+fn a_click_puts_the_cursor_where_it_lands_and_a_drag_selects() {
+    let mut tiny = Tiny::start("xterm-256color", 100, 30);
+    tiny.wait_for("README.md");
+    // A row of the browser, and a second click opens it.
+    tiny.wait_until("the readme in the browser", |t| {
+        t.find("README.md").is_some()
+    });
+    let readme = tiny.find("README.md").unwrap();
+    tiny.click(readme);
+    tiny.wait_until("the cursor on the readme", |t| t.on() == "README.md");
+    tiny.click(readme);
+    tiny.wait_for("EDIT");
+    // Into the text: the cursor lands on the `r` of `readme`, line 3.
+    let the = tiny.find("The readme").expect("the line on screen");
+    tiny.click((the.0 + 4, the.1));
+    tiny.wait_for("3:5");
+    // And a drag from the `T` over `The readme` selects ten characters. The
+    // line may have moved: with the cursor in it the paragraph is raw, and
+    // the heading above it formatted, which is a row taller.
+    let the = tiny.find("The readme").expect("the line on screen");
+    tiny.mouse(0, the, true);
+    tiny.mouse(32, (the.0 + 5, the.1), true);
+    tiny.mouse(32, (the.0 + 10, the.1), true);
+    tiny.mouse(0, (the.0 + 10, the.1), false);
+    tiny.wait_for("10 selected");
     tiny.quit();
 }
 

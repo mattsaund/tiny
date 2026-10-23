@@ -49,6 +49,9 @@ impl Editor {
     ///
     /// Any edit clears the redo stack, whether or not it coalesced.
     pub(super) fn push_undo(&mut self, kind: EditKind) {
+        // Any edit at all ends a word Tab was finishing; finishing one puts
+        // its own back after.
+        self.completing = None;
         // Every mutation acts at the cursor and every mutation calls this, so
         // this one line records what changed for the whole editor. One line of
         // slack because a backspace at column 0 joins the cursor's line into
@@ -83,6 +86,7 @@ impl Editor {
     /// away, and typing "bar" would revert both runs in one press.
     pub fn break_undo_group(&mut self) {
         self.last_edit = None;
+        self.completing = None;
     }
 
     /// Step back one group. Returns false when there is nothing left, which
@@ -106,6 +110,7 @@ impl Editor {
         self.cursor_line = prev.cursor_line;
         self.cursor_col = prev.cursor_col;
         self.anchor = prev.anchor;
+        self.completing = None;
         self.dirty = true;
         self.last_edit = None;
         // A snapshot replaces every line at once, so nothing above is safe.
@@ -130,6 +135,7 @@ impl Editor {
         self.cursor_line = next.cursor_line;
         self.cursor_col = next.cursor_col;
         self.anchor = next.anchor;
+        self.completing = None;
         self.dirty = true;
         self.last_edit = None;
         self.touched = 0;

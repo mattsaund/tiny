@@ -22,7 +22,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use super::editor::draw_editor;
 use super::parts::{FORMAT_LIMIT, label, mark_query, pane};
 
-use crate::app::{App, Focus, Mode, Preview, TextKind};
+use crate::app::{App, Focus, Mode, PaneHit, Preview, TextHits, TextKind};
 use crate::text::markdown;
 use crate::text::search::Matcher;
 use crate::text::tabs;
@@ -37,7 +37,12 @@ use crate::text::tabs;
 /// whether there is formatting on screen.
 pub(super) fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Editor && matches!(app.mode, Mode::Normal | Mode::Help(_));
-    draw_pane(f, app, area, focused);
+    let text = draw_pane(f, app, area, focused);
+    app.last_panes.push(PaneHit {
+        pinned: None,
+        area,
+        text,
+    });
 }
 
 /// A pane without the keyboard, while the main window is split.
@@ -76,7 +81,12 @@ pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, id: usize, area: Rect, a
         }
     }
 
-    draw_pane(f, app, area, false);
+    let text = draw_pane(f, app, area, false);
+    app.last_panes.push(PaneHit {
+        pinned: Some(id),
+        area,
+        text,
+    });
 
     if let Some(ed) = path.as_ref().and_then(|p| app.buffers.get_mut(p)) {
         if let Some(own) = lent {
@@ -96,8 +106,14 @@ pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, id: usize, area: Rect, a
     app.split = Some(split);
 }
 
-/// One pane, with or without the keyboard.
-pub(super) fn draw_pane(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
+/// One pane, with or without the keyboard. Returns where its lines were
+/// drawn, when it showed a file's lines, for the mouse.
+pub(super) fn draw_pane(
+    f: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    focused: bool,
+) -> Option<TextHits> {
     let pal = app.palette;
 
     let (name, dirty) = match &app.preview {
@@ -135,7 +151,7 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, area: Rect, focused: bool)
 
     let inner = pane(f, area, title, focused, app);
     if inner.width == 0 || inner.height == 0 {
-        return;
+        return None;
     }
 
     // Prepared once per frame, before the pane borrows `app` mutably. This is
@@ -151,7 +167,7 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, area: Rect, focused: bool)
             if kind.reads_first() && !focused {
                 draw_reading(f, app, area, inner, &path, kind, query.as_ref());
             } else {
-                draw_editor(f, app, inner, &path, kind, focused, query.as_ref());
+                return draw_editor(f, app, inner, &path, kind, focused, query.as_ref());
             }
         }
         Preview::Media {
@@ -208,6 +224,7 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, area: Rect, focused: bool)
             );
         }
     }
+    None
 }
 
 /// What a picture, a video, a PDF or a sound *is*, in words.

@@ -25,7 +25,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::parts::highlight_row;
 
-use crate::app::{App, GIT_BUTTONS, GitFocus, GitRow};
+use crate::app::{App, GIT_BUTTONS, GitFocus, GitHit, GitRow};
 use crate::config::Palette;
 use crate::config::keys::Action;
 use crate::git::{Code, DiffLine, LineKind};
@@ -87,6 +87,7 @@ pub(super) fn draw_source(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         draw_diff(f, app, columns[1], &pal);
     }
+    app.git.diff_area = Some(columns[1]);
     if graph_h > 0 {
         draw_graph(f, app, rows[1], &pal);
     }
@@ -145,6 +146,8 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     }
 
     let mut lines: Vec<Line> = Vec::new();
+    // Which row each line is of, and where its buttons are, for the mouse.
+    let mut line_rows: Vec<(usize, Spots)> = Vec::new();
     // The lines the cursor's row was drawn on.
     let mut cursor = 0..0;
     for (i, row) in git.rows.iter().enumerate() {
@@ -152,7 +155,10 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
         let first = lines.len();
         match row {
             GitRow::Buttons => {
-                lines.extend(button_lines(git.button, on && focused, inner.width, pal))
+                for (line, buttons) in button_lines(git.button, on && focused, inner.width, pal) {
+                    lines.push(line);
+                    line_rows.push((i, buttons));
+                }
             }
             GitRow::Header { staged } => {
                 let (word, n) = if *staged {
@@ -165,6 +171,7 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
                     highlight_row(&mut spans, inner.width as usize, *pal, focused);
                 }
                 lines.push(Line::from(spans));
+                line_rows.push((i, Vec::new()));
             }
             GitRow::File { staged, index } => {
                 let list = if *staged {
@@ -188,6 +195,7 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
                     highlight_row(&mut spans, inner.width as usize, *pal, focused);
                 }
                 lines.push(Line::from(spans));
+                line_rows.push((i, Vec::new()));
             }
         }
         if on {
@@ -209,6 +217,20 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let scroll = scroll.min(lines.len().saturating_sub(height));
     app.git.list_scroll = scroll;
     app.git.list_cols = Some((area.x, area.x + area.width));
+    app.git.list_hits = line_rows
+        .into_iter()
+        .enumerate()
+        .skip(scroll)
+        .take(height)
+        .map(|(k, (row, buttons))| GitHit {
+            y: inner.y + (k - scroll) as u16,
+            row,
+            buttons: buttons
+                .into_iter()
+                .map(|(x0, x1, b)| (inner.x + x0, inner.x + x1, b))
+                .collect(),
+        })
+        .collect();
 
     // What is out of sight below, said on the border, since a list cut off
     // at a row boundary looks exactly like a list that ends there.
@@ -225,22 +247,37 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     f.render_widget(Paragraph::new(shown), inner);
 }
 
-/// The button row, wrapped to the pane's width.
+/// The columns each button on a line covers, from where to where, and which
+/// button it is.
+type Spots = Vec<(u16, u16, usize)>;
+
+/// The button row, wrapped to the pane's width, each line with the columns
+/// its buttons cover, from the pane's left edge.
 ///
 /// Wrapping is a drawing decision and nothing more: the buttons are one row as
 /// far as the cursor is concerned, and left and right walk them however many
 /// lines they take to show.
-fn button_lines(selected: usize, on_row: bool, width: u16, pal: &Palette) -> Vec<Line<'static>> {
+fn button_lines(
+    selected: usize,
+    on_row: bool,
+    width: u16,
+    pal: &Palette,
+) -> Vec<(Line<'static>, Spots)> {
     let mut lines = Vec::new();
     let mut spans: Vec<Span> = Vec::new();
+    let mut at: Spots = Vec::new();
     let mut used = 0usize;
     for (i, button) in GIT_BUTTONS.iter().enumerate() {
         let label = format!(" {} ", button.label());
         let w = label.chars().count() + 1;
         if used + w > width as usize && !spans.is_empty() {
-            lines.push(Line::from(std::mem::take(&mut spans)));
+            lines.push((
+                Line::from(std::mem::take(&mut spans)),
+                std::mem::take(&mut at),
+            ));
             used = 0;
         }
+        at.push((used as u16, (used + w - 1) as u16, i));
         let style = match (on_row, i == selected) {
             (true, true) => pal.text.add_modifier(Modifier::REVERSED),
             (true, false) => pal.text,
@@ -251,7 +288,7 @@ fn button_lines(selected: usize, on_row: bool, width: u16, pal: &Palette) -> Vec
         used += w;
     }
     if !spans.is_empty() {
-        lines.push(Line::from(spans));
+        lines.push((Line::from(spans), at));
     }
     lines
 }

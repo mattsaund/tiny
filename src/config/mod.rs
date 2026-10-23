@@ -324,6 +324,20 @@ impl Config {
         ]
     }
 
+    /// The values a setting can take, when there are few enough to list:
+    /// what Tab offers after `*set` and its name.
+    pub fn values_of(key: &str) -> &'static [&'static str] {
+        match key {
+            "show_hidden" | "auto_reload" | "update_check" | "line_numbers" | "borders"
+            | "cursor_blink" => &["true", "false"],
+            "tree_side" => &["left", "right"],
+            "glyphs" => &["auto", "unicode", "console", "ascii"],
+            "colors" => &["auto", "truecolor", "256", "16", "none"],
+            "cursor_shape" => &["default", "block", "bar", "underline"],
+            _ => &[],
+        }
+    }
+
     /// Current value of a key, as it would be written to the file.
     ///
     /// Round-trips with [`Config::set`]: whatever comes out of `get` is

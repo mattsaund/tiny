@@ -151,6 +151,10 @@ pub struct GitPane {
     /// The columns the list covered in the last frame, as `[x0, x1)`, so the
     /// wheel can tell the list from the diff. Written by `ui`.
     pub list_cols: Option<(u16, u16)>,
+    /// The list's rows as they were drawn in the last frame, and where the
+    /// diff or the message was, for the mouse. Written by `ui`.
+    pub list_hits: Vec<super::GitHit>,
+    pub diff_area: Option<ratatui::layout::Rect>,
 }
 
 impl GitPane {
@@ -353,7 +357,7 @@ impl App {
     }
 
     /// Move the list's cursor, and read the diff of whatever it lands on.
-    fn move_git_selection(&mut self, delta: isize) {
+    pub(super) fn move_git_selection(&mut self, delta: isize) {
         let last = self.git.rows.len().saturating_sub(1);
         let next = (self.git.selected as isize + delta).clamp(0, last as isize) as usize;
         if next == self.git.selected {
@@ -543,7 +547,7 @@ impl App {
         if let Some(complaint) =
             super::input::edit_with_key(editor, action, select, key, page, tab_width)
         {
-            self.status = complaint.into();
+            self.status = complaint;
         }
     }
 

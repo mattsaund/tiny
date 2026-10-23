@@ -52,9 +52,9 @@ a command.
 
 ![six cursors, each with a word selected](docs/cursors.png)
 
-Shift selects. `Ctrl+C` `Ctrl+X` `Ctrl+V` use your system's clipboard.
-`Alt+N` and `Alt+Shift+Up`/`Down` add cursors. `Ctrl+R` records keys, `Ctrl+P`
-plays them.
+Click anywhere, drag or Shift to select. `Ctrl+C` `Ctrl+X` `Ctrl+V` use your
+system's clipboard. `Tab` finishes words. `Alt+N` and `Alt+Shift+Up`/`Down` add
+cursors. `Ctrl+R` records keys, `Ctrl+P` plays them.
 
 ## Panes
 
@@ -99,7 +99,9 @@ audio and PDFs open in your own viewer.
 | `Enter`, `Esc` | open, back |
 | `Ctrl+S` | save (on a folder, all of it) |
 | `/`, `Ctrl+F` | search |
+| click, drag | place the cursor, select |
 | `Shift` and a move, `Ctrl+A` | select, select all |
+| `Tab` | finish a word, or a command |
 | `Ctrl+C`, `Ctrl+X`, `Ctrl+V` | copy, cut, paste |
 | `Alt+N`, `Alt+Shift+Up`/`Down` | more cursors |
 | `Ctrl+R`, `Ctrl+P` | record keys, play them |
@@ -111,7 +113,8 @@ audio and PDFs open in your own viewer.
 
 ## Commands
 
-Say it in words. The line under the bar says what Enter will do.
+Say it in words; `Tab` finishes them. The line under the bar says what Enter
+will do.
 
 ```
 *goto line 42                 *copy temp.txt to notes

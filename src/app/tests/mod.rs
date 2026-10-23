@@ -31,6 +31,7 @@ mod fileops;
 mod glyphs;
 mod layout;
 mod map;
+mod mouse;
 mod navigation;
 mod plugins;
 mod preview;

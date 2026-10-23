@@ -39,6 +39,7 @@ pub(super) fn draw_terminal(f: &mut Frame, app: &mut App, area: Rect) {
         Span::raw(" "),
     ];
     let inner = pane(f, area, title, focused, app);
+    app.last_term_inner = Some(inner);
     let Some(shell) = app.term.as_mut() else {
         return;
     };

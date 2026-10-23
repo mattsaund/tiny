@@ -120,9 +120,50 @@ pub fn column(line: &str, chars: usize, tab_width: usize) -> usize {
     col
 }
 
+/// The character index of what is drawn at column `col` of `line`: the
+/// reverse of [`column()`], for a click. A column anywhere inside a tab or a
+/// wide character is that character, and one past the end of the line is
+/// the end of it.
+pub fn index_at(line: &str, col: usize, tab_width: usize) -> usize {
+    let mut at = 0;
+    let mut chars = 0;
+    for g in line.graphemes(true) {
+        let w = if g == "\t" {
+            stop(at, tab_width)
+        } else {
+            cluster_width(g)
+        };
+        if w > 0 && col < at + w {
+            return chars;
+        }
+        at += w;
+        chars += g.chars().count();
+    }
+    chars
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_click_finds_the_character_drawn_there() {
+        assert_eq!(index_at("hello", 0, 4), 0);
+        assert_eq!(index_at("hello", 3, 4), 3);
+        assert_eq!(index_at("hello", 9, 4), 5, "past the end is the end");
+        // A tab from column 0 to 4: anywhere on it is the tab.
+        assert_eq!(index_at("\tx", 2, 4), 0);
+        assert_eq!(index_at("\tx", 4, 4), 1);
+        // A wide character is two columns, either of them the character.
+        assert_eq!(index_at("a文b", 1, 4), 1);
+        assert_eq!(index_at("a文b", 2, 4), 1);
+        assert_eq!(index_at("a文b", 3, 4), 2);
+        // An accent written apart is part of the letter it is on.
+        assert_eq!(index_at("e\u{301}x", 1, 4), 2);
+        for (line, n) in [("hello", 3), ("\tx", 1), ("a文b", 2)] {
+            assert_eq!(index_at(line, column(line, n, 4), 4), n, "{line:?}");
+        }
+    }
 
     #[test]
     fn a_control_character_takes_no_cell_because_none_is_drawn() {

@@ -32,6 +32,7 @@
 //! | [`parts`] | small helpers more than one of the above needs |
 //! | [`split`] | the panes, side by side and stacked |
 //! | [`term`] | the terminal under the panes |
+//! | [`mouse`] | the wheel, a click and a drag |
 //! | [`source`] | the git window: what has changed, and what to do about it |
 //! | [`watch`] | noticing files another program changed |
 //! | [`update`] | asking whether to install a newer tiny |
@@ -127,6 +128,7 @@ mod fileops;
 mod input;
 mod macros;
 mod mode;
+mod mouse;
 mod parts;
 mod plan;
 mod plugins;
@@ -144,6 +146,7 @@ pub use self::bar::completion_for;
 pub use self::mode::{
     BUTTONS, Bar, ConfirmKind, Focus, KEYBIND_BUTTONS, Keybinds, Mode, Settings, Window,
 };
+pub use self::mouse::{GitHit, PaneHit, TextHits};
 pub use self::preview::{Preview, TextKind};
 pub use self::source::{BUTTONS as GIT_BUTTONS, GitFocus, GitPane, Row as GitRow};
 pub use self::split::Split;
@@ -329,8 +332,22 @@ pub struct App {
     /// Where the keyboard was before the terminal took it, so the key that
     /// leaves can give it back.
     focus_before_term: Focus,
-    /// Where the terminal was in the last frame, so the wheel can scroll it.
+    /// Where the terminal was in the last frame, so the wheel can scroll it,
+    /// and where its screen was inside the border, for a program in it that
+    /// wants the mouse.
     pub last_term_area: Option<ratatui::layout::Rect>,
+    pub last_term_inner: Option<ratatui::layout::Rect>,
+    /// What every part of the last frame held, for the mouse, see [`mouse`]:
+    /// each pane and its lines, the browser's rows, the bar and its results
+    /// (with how far they were scrolled), and the map's boxes.
+    pub last_panes: Vec<PaneHit>,
+    pub last_tree_inner: Option<ratatui::layout::Rect>,
+    pub last_bar_area: Option<ratatui::layout::Rect>,
+    pub last_results: Option<(ratatui::layout::Rect, usize)>,
+    pub last_map_boxes: Vec<(ratatui::layout::Rect, usize)>,
+    /// A drag going on in a file, and the last press, for double clicks.
+    drag: Option<mouse::Drag>,
+    press: Option<mouse::Press>,
     /// What the files and folders on screen looked like at the last scan,
     /// see [`watch`]. Nothing outside that module reads it.
     watch: Watch,
@@ -431,6 +448,14 @@ impl App {
             term: None,
             focus_before_term: Focus::Tree,
             last_term_area: None,
+            last_term_inner: None,
+            last_panes: Vec::new(),
+            last_tree_inner: None,
+            last_bar_area: None,
+            last_results: None,
+            last_map_boxes: Vec::new(),
+            drag: None,
+            press: None,
             watch: Watch::default(),
         };
         app.note_dirs();

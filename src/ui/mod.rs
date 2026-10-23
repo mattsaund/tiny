@@ -113,6 +113,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Bar(_) => bar::bar_height(app),
         _ => 0,
     };
+    // What this frame puts where, for the mouse, written as it is drawn:
+    // nothing from the last one may be left over to be clicked on.
+    app.last_panes.clear();
+    app.last_tree_inner = None;
+    app.last_bar_area = None;
+    app.last_results = None;
+    app.last_map_boxes.clear();
+    app.last_term_inner = None;
+    app.git.list_hits.clear();
+    app.git.diff_area = None;
     let [bar_row, main, status_row] = Layout::vertical([
         Constraint::Length(bar_h),
         Constraint::Min(3),
@@ -121,6 +131,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     .areas(area);
     if bar_h > 0 {
         draw_bar(f, app, bar_row);
+        app.last_bar_area = Some(bar_row);
     }
     draw_status(f, app, status_row);
 
@@ -164,16 +175,16 @@ fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
     // browser beside you, the file behind the list with the match marked in
     // it) so a search is laid over your place in the project rather than
     // standing in for it.
-    let main = match &app.mode {
+    let (main, results) = match &app.mode {
         Mode::Bar(b) if !b.is_command() => {
             let h = results_height(main, b.results.len());
             let [results, rest] =
                 Layout::vertical([Constraint::Length(h), Constraint::Min(3)]).areas(main);
-            draw_results(f, app, results, b);
-            rest
+            (rest, draw_results(f, app, results, b))
         }
-        _ => main,
+        _ => (main, None),
     };
+    app.last_results = results;
 
     // The browser keeps whatever share of the width it was last given:
     // `<` and `>` move it, and `Ctrl+T` takes it away entirely.

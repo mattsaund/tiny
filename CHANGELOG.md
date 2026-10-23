@@ -3,6 +3,20 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.6.1 - 2026-10-23
+
+- **The mouse.** A click puts the cursor anywhere and a drag selects. A
+  double click takes a word, a triple click or the line numbers a line, and
+  Alt with a click adds a cursor. In the browser, the map and the git window
+  the first click picks and the second opens; a search result opens with
+  one. A click on a pane or the terminal gives it the keyboard, and a
+  program in the terminal that asks for the mouse gets it.
+- **Tab finishes words.** At the end of a word, Tab finishes it from the
+  words in the file, the nearest first, and again gives the next. Anywhere
+  else it indents, as it did.
+- **Tab in the bar** knows `split`, `close` and the values of a setting, and
+  on a word with several endings goes round them.
+
 ## 0.6.0 - 2026-10-23
 
 - **Select, copy and paste.** Shift with any key that moves selects, and

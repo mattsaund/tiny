@@ -23,6 +23,7 @@ use super::ink::{Ink, InkStyle, route};
 
 use crate::app::App;
 use crate::map::graph::EdgeKind;
+use crate::map::layout::Placed;
 use crate::map::view::ProjectMap;
 
 /// The project map: every file as a box, every connection as a line, and a
@@ -158,6 +159,16 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
         );
     }
 
+    // Where each box went, for the mouse.
+    let boxes: Vec<(Rect, usize)> = placement
+        .boxes
+        .iter()
+        .map(|p| {
+            let at = Rect::new(inner.x + p.col, inner.y + p.row, p.width, Placed::HEIGHT);
+            (at.intersection(inner), p.node)
+        })
+        .collect();
+
     for p in &placement.boxes {
         // Two files that reach each other can only be drawn one color, and it
         // is the outgoing one: the map's question is what this file reaches,
@@ -190,6 +201,7 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     if detail_h > 0 {
         draw_map_detail(f, app, view, rows[1]);
     }
+    app.last_map_boxes = boxes;
 }
 
 /// Human-readable name for a node kind, for the detail strip.

@@ -5,7 +5,7 @@
 .\"
 .\" A test in src/main.rs reads this against the keymap and the options, so a
 .\" key or an option that changes without changing here fails the build.
-.TH TINY 1 2026-10-23 "tiny 0.6.0" "User Commands"
+.TH TINY 1 2026-10-23 "tiny 0.6.1" "User Commands"
 .SH NAME
 tiny \- an IDE, text editor, knowledge manager and file browser in the \%terminal
 .SH SYNOPSIS
@@ -83,7 +83,9 @@ the search is a regular expression.
 Type
 .B *
 first for a command, like
-.BR "*goto main" .
+.BR "*goto main" ,
+where Tab finishes the word being typed: a verb, a name, a setting or its
+value, and Tab again gives the next.
 .TP
 .B "F1, ?"
 Every key and command.
@@ -188,7 +190,10 @@ A screen down.
 The first and the last line.
 .TP
 .B "Tab, Shift+Tab"
-Spaces up to the next tab stop, or with lines selected, indent them.
+At the end of a word, Tab finishes it with a longer word from the file,
+the nearest first, and Tab again puts in the next.
+Anywhere else it puts spaces up to the next tab stop, or with lines
+selected, indents them.
 Shift+Tab takes the indent off.
 .TP
 .B Ctrl+A
@@ -233,6 +238,21 @@ plays it twenty times.
 .B Esc
 Let go of the selection and the other cursors, or with none, back to the
 browser.
+.SS The mouse
+A click puts the cursor where it lands, and a drag selects.
+A double click selects a word, a triple click a line, and a click on the
+line numbers a line too.
+Alt and a click, or Ctrl and a click, adds a cursor.
+Shift and a click selects to there, where the terminal lets Shift through:
+most keep Shift and a drag for selecting their own text, which still copies
+anything on the screen.
+.PP
+In a list, the first click picks and the second opens: a row of the browser,
+a box on the map, a change or a button in the git window.
+A search result opens with one.
+A click on another pane, or on the terminal, gives it the keyboard.
+The wheel scrolls whatever it is over.
+A program in the terminal that asks for the mouse gets it there.
 .SS The project map
 .TP
 .B "Up, Down, Left, Right, i, k, j, l"

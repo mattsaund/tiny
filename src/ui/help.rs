@@ -81,6 +81,8 @@ const KEYS: &[KeyRow] = &[
     Blank,
     Heading("EDIT"),
     Fixed("shift+move", "select"),
+    Fixed("click, drag", "place, select"),
+    Fixed("tab", "finish a word"),
     Bound(&[Action::EditorSelectAll], "select all"),
     Bound(
         &[Action::EditorCopy, Action::EditorCut, Action::EditorPaste],
