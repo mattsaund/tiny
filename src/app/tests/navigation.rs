@@ -1,8 +1,8 @@
 //! Getting around: the tree cursor, the folds, and the keys that stand in for
 //! the arrows.
 //!
-//! Two of these keys do two jobs each — right expands or steps in or opens,
-//! left closes or goes to the parent — so most of what is here is about the
+//! Two of these keys do two jobs each (right expands or steps in or opens,
+//! left closes or goes to the parent) so most of what is here is about the
 //! seams between those jobs.
 
 use super::*;
@@ -56,7 +56,7 @@ fn right_still_steps_into_a_folder_that_is_already_open() {
 fn the_selected_row_is_highlighted_in_one_piece() {
     let (_td, mut app) = fixture();
     // A nested file, so the row has indent and a marker to the left of the
-    // name — the part that used to keep its own dim color and show up as
+    // name: the part that used to keep its own dim color and show up as
     // a gray block once the row was reversed.
     select(&mut app, "design.md");
     app.focus = Focus::Tree;
@@ -65,7 +65,7 @@ fn the_selected_row_is_highlighted_in_one_piece() {
     t.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
     let buf = t.backend().buffer().clone();
 
-    // Inside the tree pane only — the preview's title carries the same
+    // Inside the tree pane only: the preview's title carries the same
     // file name, and it is on the same row as the tree's own title.
     let (x0, x1) = app.last_tree_cols.expect("the tree is on screen");
     let row = |y: u16| -> String {
@@ -91,7 +91,7 @@ fn the_selected_row_is_highlighted_in_one_piece() {
 #[test]
 fn no_arrow_in_the_tree_is_drawn_in_the_dim_color() {
     // Open and closed alike. An arrow says what a row is, which is part of
-    // reading the row — a second, quieter weight for some of them would read
+    // reading the row: a second, quieter weight for some of them would read
     // as a distinction that is not there. The fixture has an open root and
     // two closed folders, so both kinds are on screen at once.
     let (_td, mut app) = fixture();
@@ -426,7 +426,7 @@ fn ctrl_n_opens_another_tiny_on_this_project_from_anywhere() {
     app.on_key(ctrl('n'));
     let spawned = crate::terminal::spawned::take();
     if spawned.is_empty() {
-        // A Linux machine with no desktop and no tmux — a CI runner — has
+        // A Linux machine with no desktop and no tmux (a CI runner) has
         // nowhere to put a window, and says so instead.
         assert!(app.status.contains("no desktop"), "{}", app.status);
         return;
@@ -477,7 +477,7 @@ fn dotfiles_are_a_browser_key_and_a_setting() {
     app.on_key(ctrl('.'));
     assert!(
         !app.config.show_hidden,
-        "ctrl+. is gone — no terminal can send it without the keyboard protocol"
+        "ctrl+. is gone: no terminal can send it without the keyboard protocol"
     );
 
     // From a file, the setting is the way; from the browser, one key.
@@ -522,7 +522,7 @@ fn ctrl_f_opens_the_search_and_a_star_turns_it_into_a_command() {
 
 #[test]
 fn no_arrow_resizes_the_browser() {
-    // Every arrow belongs to movement, whatever is held with it — see the
+    // Every arrow belongs to movement, whatever is held with it, see the
     // module docs in `config::keys`. `Ctrl` with one used to be the
     // exception, and on a Mac it switches Spaces instead of reaching tiny.
     let (_td, mut app) = fixture();
@@ -616,7 +616,7 @@ fn narrowing_past_the_end_folds_the_browser_and_widening_brings_it_back() {
     );
 
     // The width keys belong to the browser, and the browser is not on screen
-    // to press them in — so the fold key is what brings it back.
+    // to press them in, so the fold key is what brings it back.
     app.on_key(ctrl('t'));
     assert!(!app.tree_hidden, "and the fold key brings it back");
 }
@@ -741,8 +741,8 @@ fn home_and_end_reach_the_ends_of_the_browser_list() {
 fn the_only_alt_keys_are_option_and_an_arrow() {
     // On macOS Terminal, Option with a letter types a symbol rather than
     // arriving as Alt, so an `alt+` binding on a letter never arrives at all.
-    // Option with an arrow does arrive — as one spelling or the other, see
-    // `keyspec::from_terminal` — and those two are a word in the editor.
+    // Option with an arrow does arrive (as one spelling or the other, see
+    // `keyspec::from_terminal`) and those two are a word in the editor.
     use crate::config::keys::{Action, Keymap};
     let keymap = Keymap::default();
     for action in Action::all() {
@@ -781,7 +781,7 @@ fn a_file_named_through_a_symlink_still_opens() {
     let got = app.selected_path().expect("something is selected");
     assert!(
         got.ends_with("README.md"),
-        "opened through the link: {} — {}",
+        "opened through the link: {} ({})",
         got.display(),
         app.status
     );
@@ -792,8 +792,8 @@ fn a_file_named_through_a_symlink_still_opens() {
 #[cfg(unix)]
 fn a_resolved_path_opens_in_a_project_rooted_at_a_symlink() {
     // The macOS case exactly, the mirror of the test above: the project root is
-    // a path through a symlink — a Mac's temp directory is under `/var`, which
-    // is `/private/var` — and the path being opened is the resolved one, which
+    // a path through a symlink (a Mac's temp directory is under `/var`, which
+    // is `/private/var`) and the path being opened is the resolved one, which
     // is what git reports. Neither side matches the other until *both* are
     // resolved. Windows does the same with 8.3 names like `RUNNER~1`.
     let (td, _) = fixture();

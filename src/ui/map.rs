@@ -6,8 +6,8 @@
 //! name. The detail strip underneath describes whatever the cursor is on.
 //!
 //! Only the selected file's connections are drawn. A project of any size is a
-//! dense graph — nineteen files with seventy-five connections between them is
-//! not a picture, it is a smear — and the question the map answers is "what
+//! dense graph (nineteen files with seventy-five connections between them is
+//! not a picture, it is a smear) and the question the map answers is "what
 //! does *this* file touch", which is exactly one file's worth of lines.
 
 use std::collections::{HashMap, HashSet};
@@ -57,7 +57,7 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
         .split(area);
 
     // The border is fixed, so the pane inside it can be measured before the
-    // block that will carry the titles exists — and the titles need the
+    // block that will carry the titles exists, and the titles need the
     // layout, which needs the size.
     let bordered = || {
         Block::default()
@@ -81,8 +81,8 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     let view = app.project_map.as_ref().expect("checked above");
     let selected = view.selected;
     // Which side of the cursor every connected file is on. The picture cannot
-    // say which way a line runs — the lines share a trunk, so a colored line
-    // would be lying at every junction — but the boxes at the ends of them
+    // say which way a line runs (the lines share a trunk, so a colored line
+    // would be lying at every junction) but the boxes at the ends of them
     // can, and this is what colors them.
     let (reaches, reached_by) = view.connections(selected);
     let out_nodes: HashSet<usize> = reaches.iter().map(|e| e.to).collect();
@@ -131,15 +131,15 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     // Lines first, so a box always sits on top of whatever runs past it.
     //
     // Only the file under the cursor's, and that is the single biggest thing
-    // that makes this readable. A real project is a dense graph — this one is
+    // that makes this readable. A real project is a dense graph; this one is
     // nineteen files with seventy-five connections between them, which is not
     // a picture, it is a hatch pattern. Drawing every line at once meant no
     // individual line could be followed, which is what "the arrows look
     // detached" is: not that they were broken, but that no eye could trace one
     // to its end.
     //
-    // So the map answers one question at a time — *what does this file
-    // touch?* — and the arrow keys are how you ask it about another. Every
+    // So the map answers one question at a time (*what does this file
+    // touch?*) and the arrow keys are how you ask it about another. Every
     // file is still drawn, the strip below still names every connection, and
     // the summary still counts them all.
     for them in view.neighbors(selected) {
@@ -221,8 +221,8 @@ const MORE_WIDTH: usize = 10;
 /// which edge kinds are switched on.
 ///
 /// This is where direction lives. The picture draws a plain line between two
-/// files and says nothing about which way it runs — see [`super::ink::route`]
-/// — so `out:` and `in:` are the answer, in words, with the files named.
+/// files and says nothing about which way it runs (see [`super::ink::route`]),
+/// so `out:` and `in:` are the answer, in words, with the files named.
 fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
     let pal = app.palette;
     let Some(node) = view.selected_node() else {

@@ -1,7 +1,7 @@
 //! The event stream, turned into lines.
 //!
-//! pulldown-cmark hands over a flat sequence of events — start-of-heading,
-//! text, end-of-heading — and [`Renderer`] is the state machine that turns it
+//! pulldown-cmark hands over a flat sequence of events (start-of-heading,
+//! text, end-of-heading) and [`Renderer`] is the state machine that turns it
 //! into styled rows. Almost everything it holds is there because markdown is
 //! nested and the event stream is not: a stack of styles, a stack of list
 //! numbers, the table being accumulated, the quote depth.
@@ -22,7 +22,7 @@ use crate::text::highlight::Highlighter;
 use crate::text::tabs;
 
 /// A table being accumulated. Cells cannot be drawn as they arrive, because
-/// column widths depend on the widest cell in the whole table — so everything
+/// column widths depend on the widest cell in the whole table, so everything
 /// is buffered until `TagEnd::Table` and laid out at once by
 /// [`Renderer::emit_table`].
 struct TableState {
@@ -110,7 +110,7 @@ impl<'a> Renderer<'a> {
 }
 
 impl Renderer<'_> {
-    /// The style currently in effect — the top of the stack.
+    /// The style currently in effect: the top of the stack.
     fn style(&self) -> Style {
         // The stack always holds the base style, but there is no reason for a
         // rendering bug to become a crash.
@@ -192,7 +192,7 @@ impl Renderer<'_> {
     /// and everything inline is handled here.
     ///
     /// Text is routed to `code_buf` while a fence is open and to
-    /// [`Renderer::push_text`] otherwise — that branch is the only thing
+    /// [`Renderer::push_text`] otherwise; that branch is the only thing
     /// stopping code blocks from being scanned for wikilinks.
     pub(super) fn event(&mut self, ev: Event<'_>) {
         match ev {
@@ -435,7 +435,7 @@ impl Renderer<'_> {
     /// instead, so the pane never scrolls sideways on its own.
     fn emit_code_block(&mut self, info: &str, body: &str) {
         // Borrowed, never cloned: a cloned grammar has to deserialize itself
-        // again before it can parse, which cost more than the highlighting —
+        // again before it can parse, which cost more than the highlighting;
         // a note with a few hundred code blocks took 28ms a frame.
         let hl = self.hl;
         let syntax = hl.syntax_for_token(info);
@@ -445,7 +445,7 @@ impl Renderer<'_> {
             let mut spans = vec![Span::styled(self.pal.glyphs.gutter, gutter)];
             let mut w = 0usize;
             for (style, text) in pieces {
-                // Code is not re-wrapped — indentation is meaning. Long lines
+                // Code is not re-wrapped: indentation is meaning. Long lines
                 // are clipped so the pane never scrolls sideways on its own.
                 let tw = text.width();
                 if w + tw <= avail {
@@ -465,7 +465,7 @@ impl Renderer<'_> {
 
     /// Lay out and draw the buffered table.
     ///
-    /// Columns start at their natural width — the widest cell in each — then
+    /// Columns start at their natural width (the widest cell in each), then
     /// the widest column is shaved one cell at a time until the whole table
     /// fits the pane. Shrinking stops at three cells per column so a table
     /// squeezed into a narrow pane degrades into something still readable

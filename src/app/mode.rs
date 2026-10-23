@@ -1,6 +1,6 @@
 //! What is layered on top of the two panes.
 //!
-//! [`Mode`] is one of the two axes of state — see the folder's docs — and
+//! [`Mode`] is one of the two axes of state (see the folder's docs) and
 //! every variant of it that carries something is defined here: the bar's
 //! typed text and its results, a prompt waiting for a name, a confirmation
 //! waiting for a yes, the settings area's cursor, the keybinds window's.
@@ -25,7 +25,7 @@ pub enum Focus {
 /// Which window is on screen.
 ///
 /// `Ctrl+G` and `Ctrl+L` switch to the other two, and each key takes you back
-/// again — they are windows rather than overlays, so there is no stack to pop
+/// again; they are windows rather than overlays, so there is no stack to pop
 /// and no "back" that could land you somewhere you did not choose. Esc from
 /// either returns to [`Window::Main`] as well, which is where the files are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,11 +57,11 @@ pub struct Bar {
     /// `search` for why that is affordable.
     pub results: Vec<Hit>,
     /// The query has been typed into since `results` were found. They are
-    /// found again before the next frame, or before a key that reads them —
+    /// found again before the next frame, or before a key that reads them,
     /// not per keystroke, so a burst of typing costs one search, not one a
     /// letter. See `App::settle`.
     pub(super) stale: bool,
-    /// What Enter would do with the command typed so far, in words — or why
+    /// What Enter would do with the command typed so far, in words, or why
     /// it cannot. Worked out with the search, once typing pauses.
     pub plan: Option<Result<String, String>>,
     /// Highlighted result. Moving it previews that hit without leaving the bar.
@@ -69,7 +69,7 @@ pub struct Bar {
     /// Set when a search found nothing, so the bar can say so.
     pub searched: bool,
     /// The file that had the keyboard when the bar was opened, if any. Hits
-    /// in it are listed first — see `App::run_search`.
+    /// in it are listed first, see `App::run_search`.
     ///
     /// Remembered here rather than read back off the app, because stepping
     /// through results changes which file is open: read live, "the file you
@@ -109,7 +109,7 @@ impl Bar {
 /// you set.
 ///
 /// They live at the top because they are what someone opening this area is
-/// most often looking for — and because a button below thirty rows of settings
+/// most often looking for, and because a button below thirty rows of settings
 /// is a button nobody finds. `Plugins` opens the folder plugins go in, in the
 /// desktop's own file manager, so one can be dragged in.
 pub const BUTTONS: &[&str] = &["Keybinds", "Plugins", "Reset"];
@@ -127,7 +127,7 @@ pub struct Settings {
 }
 
 /// What a `y` will actually do. Every irreversible action in tiny goes through
-/// one of these — there is no undo for a delete or a project-wide replace, so
+/// one of these; there is no undo for a delete or a project-wide replace, so
 /// the confirmation is the only guard.
 #[derive(Debug, Clone)]
 pub enum ConfirmKind {
@@ -145,13 +145,13 @@ pub enum ConfirmKind {
     /// Throw away every rebinding and go back to the shipped keyboard.
     ResetKeybinds,
     /// A newer tiny is out: `y` quits and installs it. Drawn as a window of
-    /// its own rather than on the status line — see `App::offer_update`.
+    /// its own rather than on the status line, see `App::offer_update`.
     Update(String),
 }
 
 /// A pending yes/no question. The `message` is built at the point the action
-/// is requested, so it can quote real counts — how many files, how many
-/// occurrences — rather than a generic warning.
+/// is requested, so it can quote real counts (how many files, how many
+/// occurrences) rather than a generic warning.
 #[derive(Debug, Clone)]
 pub struct Confirm {
     pub kind: ConfirmKind,

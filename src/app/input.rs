@@ -1,7 +1,7 @@
 //! Every keypress, and where it goes.
 //!
 //! [`App::handle_key`] is the whole of tiny's input handling, and it
-//! dispatches on [`Mode`] first and [`Focus`] second — see the folder's docs
+//! dispatches on [`Mode`] first and [`Focus`] second, see the folder's docs
 //! for why those two answer almost every "why did that key do that".
 //!
 //! # The mode take-and-replace pattern
@@ -34,7 +34,7 @@ use super::source::GitFocus;
 /// Apply one key to a buffer, and say what to complain about if anything.
 ///
 /// The one text-editing keyboard in tiny, in one place. The editor pane uses
-/// it, and so does the commit message box in the source window — two panes that
+/// it, and so does the commit message box in the source window: two panes that
 /// type, which must not disagree about what Backspace does.
 ///
 /// `action` is what the keymap made of the key, already resolved by the caller
@@ -110,7 +110,7 @@ pub(super) fn edit_with_key(
 impl App {
     // ---- key dispatch -----------------------------------------------------
 
-    /// One key, and everything it leads to, done before this returns — how
+    /// One key, and everything it leads to, done before this returns: how
     /// the tests type.
     ///
     /// The event loop does not use this: with several keys already waiting it
@@ -130,8 +130,8 @@ impl App {
     /// out and `Normal` left in its place, so a handler that does nothing
     /// closes its overlay, and one that wants to stay open has to say so.
     ///
-    /// Work that only matters to what is drawn next — a search of the
-    /// project — is left for [`App::settle`].
+    /// Work that only matters to what is drawn next (a search of the
+    /// project) is left for [`App::settle`].
     pub fn handle_key(&mut self, key: KeyEvent) {
         // One spelling per key, before anything reads it: macOS Terminal's
         // `⌥←` arrives as `Alt+B`, and becomes the arrow it was.
@@ -143,7 +143,7 @@ impl App {
         if let Some(window) = self.window_key(&key) {
             return self.toggle_window(window);
         }
-        // An overlay owns the keyboard wherever it was opened from — the bar
+        // An overlay owns the keyboard wherever it was opened from: the bar
         // is drawn over every window, so it has to be typed into from every
         // window. Taken out and left as `Normal`, so a handler that does
         // nothing closes it; see the module docs.
@@ -172,11 +172,11 @@ impl App {
     /// Keys for the source-control window.
     ///
     /// The same shape as the map's: the window owns the whole screen, so there
-    /// is no focus to consider and no mode to fall through to — one lookup, one
+    /// is no focus to consider and no mode to fall through to; one lookup, one
     /// action, and Esc is the way out.
     fn on_source_key(&mut self, key: KeyEvent) {
-        // The message box is a pane that types, so it takes the keyboard whole
-        // — a `k` in a commit message is the letter k.
+        // The message box is a pane that types, so it takes the keyboard whole:
+        // a `k` in a commit message is the letter k.
         if self.git.focus == GitFocus::Message {
             return self.on_message_key(key);
         }
@@ -215,7 +215,7 @@ impl App {
     /// so that, if someone binds a window to a bare letter, that letter is
     /// still a letter in a file or a commit message.
     fn window_key(&self, key: &KeyEvent) -> Option<Window> {
-        // While the keybinds window is waiting for a key, every key is data —
+        // While the keybinds window is waiting for a key, every key is data,
         // these included, or nothing could ever be bound to them.
         if matches!(&self.mode, Mode::Keybinds(kb) if kb.capturing) {
             return None;
@@ -239,7 +239,7 @@ impl App {
 
     /// The window keys are toggles: the key for the window you are in takes
     /// you back to the browser, so one key opens git and the same key puts it
-    /// away — the way the browser's own key folds it and brings it back.
+    /// away, the way the browser's own key folds it and brings it back.
     fn toggle_window(&mut self, window: Window) {
         if self.window == window {
             self.show_window(Window::Main);
@@ -336,12 +336,12 @@ impl App {
 
     /// Keys for the tree pane.
     ///
-    /// Single letters are free here — unlike the editor, nothing is being
-    /// typed — which is why the browser's own keys are bare: `.` for dotfiles,
+    /// Single letters are free here (unlike the editor, nothing is being
+    /// typed) which is why the browser's own keys are bare: `.` for dotfiles,
     /// `<` and `>` for its width, `i` `j` `k` `l` for the arrows.
     ///
     /// Esc is `back` here as it is everywhere, and back from the browser is
-    /// out of tiny — asking first if anything is unsaved.
+    /// out of tiny, asking first if anything is unsaved.
     fn on_tree_key(&mut self, key: KeyEvent) {
         let page = self.last_tree_height.saturating_sub(1).max(1) as isize;
         let Some(action) = self.keymap.resolve(KeyContext::Tree, &key) else {
@@ -428,7 +428,7 @@ impl App {
         }
     }
 
-    /// Looking at something with no text behind it — a picture, a directory,
+    /// Looking at something with no text behind it: a picture, a directory,
     /// a binary. Arrows scroll the view, because there is no cursor to move.
     ///
     /// The one place `preview_scroll` is driven by the keyboard. A text file
@@ -457,7 +457,7 @@ impl App {
     ///
     /// What "one line" means depends on the pane. A rendered note or a picture
     /// has no cursor, so the view itself moves. The editor does have one, and
-    /// its view is tied to it, so the cursor moves instead — which scrolls the
+    /// its view is tied to it, so the cursor moves instead, which scrolls the
     /// view once it reaches an edge, and never leaves you looking at somewhere
     /// you cannot type.
     pub fn on_scroll(&mut self, down: bool, column: u16) {

@@ -6,7 +6,7 @@
 //! # Why not a decoder
 //!
 //! This used to go through the `image` crate, which is an excellent decoder
-//! and brings twenty-odd crates with it — PNG, JPEG, GIF, WebP and TIFF
+//! and brings twenty-odd crates with it: PNG, JPEG, GIF, WebP and TIFF
 //! decoders, two inflate implementations, a color-management library. That is
 //! the right dependency for a program that draws pictures. tiny stopped
 //! drawing pictures (see the [`super`] module docs), and what is left is
@@ -65,7 +65,7 @@ pub(super) fn read(path: &Path) -> Result<(u32, u32)> {
         .ok_or_else(|| anyhow!("the header of {} is damaged", name(path)))
 }
 
-/// `len` bytes from `off`. A short read is not an error — it comes back short,
+/// `len` bytes from `off`. A short read is not an error; it comes back short,
 /// and the parser that asked for it fails its own bounds check.
 fn at(file: &mut File, off: u64, len: usize) -> Result<Vec<u8>> {
     file.seek(SeekFrom::Start(off))?;
@@ -102,7 +102,7 @@ fn bmp(b: &[u8]) -> Option<(u32, u32)> {
     Some((w.unsigned_abs(), h.unsigned_abs()))
 }
 
-/// The first entry of the directory. A dimension of 0 means 256 — the field is
+/// The first entry of the directory. A dimension of 0 means 256: the field is
 /// one byte and 256 does not fit in it.
 fn ico(b: &[u8]) -> Option<(u32, u32)> {
     let byte = |i: usize| {
@@ -146,7 +146,7 @@ fn jpeg(file: &mut File) -> Result<Option<(u32, u32)>> {
             // Start of frame, in every one of its flavors.
             0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
                 let seg = at(file, pos, 9)?;
-                // Two bytes of length, a byte of precision, then height —
+                // Two bytes of length, a byte of precision, then height:
                 // JPEG is the one format here that writes it that way round.
                 return Ok(match (be16(&seg, 5), be16(&seg, 3)) {
                     (Some(w), Some(h)) => Some((w as u32, h as u32)),
@@ -292,7 +292,7 @@ mod tests {
     use std::path::PathBuf;
 
     /// Write bytes to a file and measure them. Only the header has to be
-    /// real — nothing here decodes anything, so there are no pixels to
+    /// real; nothing here decodes anything, so there are no pixels to
     /// provide and the fixtures can be written by hand.
     fn measure(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> Result<(u32, u32)> {
         let p: PathBuf = dir.path().join(name);

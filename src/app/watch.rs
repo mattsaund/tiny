@@ -1,7 +1,7 @@
 //! Noticing that the disk has changed underneath us.
 //!
-//! Another program writes to a file tiny has open — a formatter, a build step,
-//! a `git checkout`, the same project open in another window — and what is on
+//! Another program writes to a file tiny has open (a formatter, a build step,
+//! a `git checkout`, the same project open in another window) and what is on
 //! screen is now a picture of a file that no longer exists. This is the part
 //! that fixes that: [`App::rescan_disk`] is called by the event loop whenever
 //! it has been idle for a moment, and takes on whatever it finds.
@@ -12,7 +12,7 @@
 //! keyboard with a timeout instead of without one, and every time the timeout
 //! expires it stats what is on screen: the directories the tree has read, and
 //! the files there are buffers for. That is a handful of `stat` calls twice a
-//! second — microseconds — against a dependency, a thread, a channel, and a
+//! second (microseconds) against a dependency, a thread, a channel, and a
 //! way to wake a blocking read, which is what a real watcher would cost.
 //!
 //! The trade is honest and worth naming: tiny is no longer a program that uses
@@ -27,7 +27,7 @@
 //! Doing it at the first *scan* instead would leave a hole exactly the width
 //! of the poll interval. Expand a folder, have a file land in it 200ms later,
 //! and the first scan would record a modification time that already includes
-//! the new file without ever having drawn it — so it would stay invisible
+//! the new file without ever having drawn it, so it would stay invisible
 //! until something else changed in that folder.
 //!
 //! A path with no stamp at all is still recorded rather than acted on, which
@@ -49,13 +49,13 @@
 //! milliseconds, HFS+ in one second, FAT in two. Two changes inside one step
 //! leave the same stamp, so a scan that fell between them would see nothing
 //! for the second. A stamp younger than [`RACY`] is therefore a reason to look
-//! rather than proof that nothing moved — a folder is re-read, a clean file
-//! re-read and compared — and neither draws a frame unless something did.
+//! rather than proof that nothing moved (a folder is re-read, a clean file
+//! re-read and compared) and neither draws a frame unless something did.
 //!
 //! # Unsaved work is never overwritten
 //!
 //! A dirty buffer is never reloaded, whatever the disk says. It gets a line on
-//! the status bar — once, because the stamp is updated either way — and keeps
+//! the status bar (once, because the stamp is updated either way) and keeps
 //! the text the user typed. There is nowhere else for that text to live.
 
 use std::collections::HashMap;
@@ -71,7 +71,7 @@ use super::preview::Preview;
 /// What a path looked like when we last stat'd it: modification time and size.
 ///
 /// `None` records that it could not be stat'd at all, which is a state like
-/// any other — going from `Some` to `None` is a file being deleted, and going
+/// any other: going from `Some` to `None` is a file being deleted, and going
 /// the other way is one appearing.
 type Stamp = Option<(SystemTime, u64)>;
 
@@ -89,7 +89,7 @@ pub struct Watch {
 /// Modification time and size, or `None` for anything that cannot be stat'd.
 ///
 /// A filesystem with no usable modification time still gets its size watched,
-/// which catches most edits — better than a stamp that can never differ.
+/// which catches most edits, better than a stamp that can never differ.
 fn stamp(path: &Path) -> Stamp {
     let m = fs::metadata(path).ok()?;
     Some((m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len()))
@@ -97,8 +97,8 @@ fn stamp(path: &Path) -> Stamp {
 
 /// How long after a change a stamp cannot be trusted to have caught the next.
 ///
-/// This is git's "racily clean" problem — a timestamp is only as fine as the
-/// clock that wrote it — and the answer is git's: a stamp too young to vouch
+/// This is git's "racily clean" problem (a timestamp is only as fine as the
+/// clock that wrote it) and the answer is git's: a stamp too young to vouch
 /// for itself is a reason to look. Two seconds covers the coarsest filesystem
 /// anyone is likely to open a project on.
 const RACY: Duration = Duration::from_secs(2);
@@ -108,7 +108,7 @@ fn racy(stamp: &Stamp) -> bool {
     match stamp {
         Some((when, _)) => match SystemTime::now().duration_since(*when) {
             Ok(age) => age < RACY,
-            // A time in the future — clock skew, a network share — cannot
+            // A time in the future (clock skew, a network share) cannot
             // vouch for anything either.
             Err(_) => true,
         },
@@ -180,7 +180,7 @@ impl App {
         }
         // `rebuild_rows` re-derives the preview, which resets its scroll. That
         // is right when the cursor has moved to another file and wrong when it
-        // has not — a file being written elsewhere in the project should not
+        // has not: a file being written elsewhere in the project should not
         // send you back to the top of the one you are reading.
         let before: Vec<PathBuf> = self.rows.iter().map(|r| r.path.clone()).collect();
         let was_on = self.selected_path().map(Path::to_path_buf);
@@ -209,7 +209,7 @@ impl App {
             let now = stamp(&path);
             let dirty = self.is_dirty(&path);
             match self.watch.files.get(&path) {
-                // Unchanged — unless the stamp is too young to prove it. Then a
+                // Unchanged, unless the stamp is too young to prove it. Then a
                 // clean buffer is read and compared, which costs one read and
                 // says nothing when nothing changed. A dirty one is not: its
                 // warning is given once per real change, not once per tick.
@@ -225,8 +225,8 @@ impl App {
                 }
             }
         }
-        // A buffer can go away — a delete, or a rename moving it to another
-        // key — and its stamp should not outlive it.
+        // A buffer can go away (a delete, or a rename moving it to another
+        // key) and its stamp should not outlive it.
         let buffers = &self.buffers;
         self.watch.files.retain(|p, _| buffers.contains_key(p));
         changed

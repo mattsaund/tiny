@@ -2,11 +2,11 @@
 //!
 //! Two layers, deliberately apart:
 //!
-//! - [`graph`] — the facts. Which files exist, and which of them reach which
+//! - [`graph`]: the facts. Which files exist, and which of them reach which
 //!   others, by wikilink, by markdown link, or by calling a function defined
 //!   somewhere else. Built by scanning the project; knows nothing about
 //!   drawing.
-//! - [`view`] — the thing you look at. Takes a [`graph::Graph`], decides
+//! - [`view`]: the thing you look at. Takes a [`graph::Graph`], decides
 //!   what is on screen, where each box sits, and what the cursor is on.
 //!
 //! The split is what keeps the layout testable: [`view`] can be asked where

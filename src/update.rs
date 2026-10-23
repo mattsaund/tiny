@@ -3,9 +3,9 @@
 //! # Asking
 //!
 //! A release is a tag on GitHub, and `…/releases/latest` redirects to the
-//! newest one. [`Check::start`] asks for that redirect on a thread of its own —
-//! with `curl`, the program the installers already depend on, so tiny carries
-//! no HTTP or TLS code of its own — and the event loop collects the answer on
+//! newest one. [`Check::start`] asks for that redirect on a thread of its own
+//! (with `curl`, the program the installers already depend on, so tiny carries
+//! no HTTP or TLS code of its own) and the event loop collects the answer on
 //! its idle tick, the way it collects a git push. Nothing ever waits on it:
 //! offline, behind a firewall, or with no `curl`, the answer is simply that
 //! there is nothing newer.
@@ -16,8 +16,8 @@
 //!
 //! # Installing
 //!
-//! [`install`] runs the platform's installer — the same one-liner the README
-//! gives — once tiny has handed the terminal back, so its progress bar and any
+//! [`install`] runs the platform's installer (the same one-liner the README
+//! gives) once tiny has handed the terminal back, so its progress bar and any
 //! question it asks reach the person who said yes. It is pointed at the folder
 //! the running binary is in, so the update replaces *this* tiny rather than
 //! putting a second one somewhere else on the PATH. Then the new binary is
@@ -36,7 +36,7 @@ pub fn running() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// The GitHub repository releases come from, from `Cargo.toml` — so a fork
+/// The GitHub repository releases come from, from `Cargo.toml`, so a fork
 /// that changes `repository` checks its own releases, not these.
 fn repo() -> &'static str {
     env!("CARGO_PKG_REPOSITORY").trim_end_matches('/')
@@ -119,7 +119,7 @@ fn tag_from_headers(headers: &str) -> Option<String> {
 }
 
 /// `0.4.5` as three numbers. A leading `v` is allowed, and anything after a
-/// `-` — a pre-release label — is ignored rather than refused.
+/// `-` (a pre-release label) is ignored rather than refused.
 fn parse(version: &str) -> Option<(u64, u64, u64)> {
     let core = version.trim().trim_start_matches('v');
     let core = core.split('-').next()?;
@@ -147,7 +147,7 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 /// Where tiny lives is read once, before the installer runs, and handed back
 /// for [`relaunch`] rather than asked again afterwards: on Linux the answer
 /// comes from `/proc/self/exe`, which by then names the file the update just
-/// replaced — `…/tiny (deleted)`.
+/// replaced (`…/tiny (deleted)`).
 pub fn install(version: &str) -> Result<PathBuf> {
     let exe = std::env::current_exe().context("cannot tell where tiny is installed")?;
     let folder = exe

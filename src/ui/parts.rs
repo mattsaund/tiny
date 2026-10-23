@@ -1,8 +1,8 @@
 //! The small pieces every pane is built from.
 //!
-//! Nothing here draws a pane. These are the shared decisions — what a border
+//! Nothing here draws a pane. These are the shared decisions (what a border
 //! looks like, what "selected" looks like, how a match is marked, how a number
-//! is written down — pulled out so that the answer is the same in the tree, in
+//! is written down) pulled out so that the answer is the same in the tree, in
 //! the results list, in the settings window and in the editor. When a pane
 //! disagrees with another about one of these, it is because it stopped calling
 //! through here.
@@ -17,7 +17,7 @@ use unicode_width::UnicodeWidthStr;
 /// Markdown longer than this is shown as its own source, in both panes.
 ///
 /// Formatting is linear in the length of the file and is redone on every
-/// frame — the preview renders the whole document, the editor re-renders every
+/// frame: the preview renders the whole document, the editor re-renders every
 /// block outside the cursor's. At four thousand lines that is a few
 /// milliseconds, which is where a keystroke starts to feel slow.
 ///
@@ -31,7 +31,7 @@ use crate::config::Palette;
 use crate::text::search::Matcher;
 
 /// A pane frame. With borders off, the title is drawn on its own line and the
-/// box is dropped entirely — a quieter screen for people who want one.
+/// box is dropped entirely: a quieter screen for people who want one.
 ///
 /// Returns the *inner* rectangle to draw content into, so callers do not have
 /// to know which of the two modes is in effect. Every pane goes through here,
@@ -77,13 +77,13 @@ pub(super) fn pane<'a>(
 /// Extend a row's styling across the pane so the cursor reads as a row, not
 /// just as colored text.
 ///
-/// Pads to the full width first, then restyles every span — otherwise a
+/// Pads to the full width first, then restyles every span; otherwise a
 /// reversed selection would stop at the end of the text and look like a
 /// highlighted word rather than a selected line.
 ///
 /// The row's own colors are *replaced*, not patched over. Patching kept each
 /// span's foreground, and the default palette dims the indent and the fold
-/// marker — so under reverse video that foreground became a background and the
+/// marker, so under reverse video that foreground became a background and the
 /// left of every selected row was a gray block with the name in white beside
 /// it. One style across the whole row is what makes it read as one row.
 ///
@@ -116,7 +116,7 @@ pub(super) fn highlight_row(spans: &mut Vec<Span>, width: usize, pal: Palette, f
 /// theme without the palette having to name a highlight color.
 ///
 /// Works on already-drawn spans rather than on source text, which is what lets
-/// it serve both — rendered markdown has no source line to match against, and
+/// it serve both: rendered markdown has no source line to match against, and
 /// the editor's spans have already been clipped to the horizontal scroll.
 /// Splitting is by character index, matching how [`Matcher::all`] reports, and
 /// a match that runs across a span boundary is marked in both halves.
@@ -172,7 +172,7 @@ pub(super) fn mark_query(spans: Vec<Span<'static>>, query: &Matcher) -> Vec<Span
 /// The first row to draw so that `selected` is on screen, scrolling no further
 /// than it has to.
 ///
-/// Used by the lists that are rebuilt from scratch each frame — search results,
+/// Used by the lists that are rebuilt from scratch each frame: search results,
 /// the settings, the keybinds. The tree keeps an offset of its own instead,
 /// because there the cursor is the thing being moved around a list that stays
 /// put, and remembering where you were reading matters.
@@ -216,7 +216,7 @@ pub(super) fn digits(n: usize) -> usize {
 }
 
 /// Split a string at a character index, for drawing a text cursor. Character
-/// index, not byte offset — slicing on a raw cursor position would panic on
+/// index, not byte offset: slicing on a raw cursor position would panic on
 /// any non-ASCII input.
 pub(super) fn split_at_char(s: &str, ci: usize) -> (String, String) {
     let b = s.char_indices().nth(ci).map_or(s.len(), |(b, _)| b);

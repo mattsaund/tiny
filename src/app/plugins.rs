@@ -1,7 +1,7 @@
 //! Plugins, from tiny's side: what they are shown, and doing what they ask.
 //!
-//! The plugins themselves — loading them, calling into Lua, keeping a broken
-//! one from hanging the window — are [`crate::plugins`]. This is the seam: a
+//! The plugins themselves (loading them, calling into Lua, keeping a broken
+//! one from hanging the window) are [`crate::plugins`]. This is the seam: a
 //! [`Snapshot`] goes out before each call, and the [`Effect`]s that come back
 //! are carried out here, once the plugin has returned. See that module's docs
 //! for why a plugin never reaches into `App` directly.
@@ -45,7 +45,7 @@ impl App {
     }
 
     /// What a plugin can read: the project, what the cursor is on, and the
-    /// file open in the right pane — whether or not it has the keyboard, so a
+    /// file open in the right pane, whether or not it has the keyboard, so a
     /// command run from the browser can work on the note under the cursor.
     fn plugin_snapshot(&self) -> Snapshot {
         let editing = self.active_buffer();
@@ -140,7 +140,7 @@ impl App {
     }
 
     /// The settings area's `Plugins` button: the folder, in the desktop's own
-    /// file manager, made first if this is the first time — so there is
+    /// file manager, made first if this is the first time, so there is
     /// somewhere to drop a plugin.
     pub(super) fn open_plugins_folder(&mut self) {
         let Some(dir) = self.plugins_dir.clone() else {

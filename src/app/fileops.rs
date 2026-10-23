@@ -2,14 +2,14 @@
 //!
 //! Everything that changes the filesystem on the user's say-so. What they have
 //! in common is that each one is a small transaction with three parts: work
-//! out the target, do it, and say what happened — and that the saying is not
+//! out the target, do it, and say what happened, and that the saying is not
 //! optional, because a file manager that silently does nothing is
 //! indistinguishable from one that is broken.
 //!
 //! # Nothing destructive happens on one key
 //!
 //! Delete is armed and then confirmed; quitting with unsaved work asks and
-//! names the files. Paste never overwrites — [`free_name`] finds an unused
+//! names the files. Paste never overwrites: [`free_name`] finds an unused
 //! name beside the existing one instead, so the worst a mistaken paste costs
 //! you is a copy to delete.
 //!
@@ -58,8 +58,8 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// A free path in `dir` for something named after `src`: `notes.md`, then
 /// `notes copy.md`, then `notes copy 2.md`.
 ///
-/// Only paste uses this. The words are spelled out rather than punctuated —
-/// `notes copy.md`, not `notes(1).md` — because everything else the command
+/// Only paste uses this. The words are spelled out rather than punctuated
+/// (`notes copy.md`, not `notes(1).md`) because everything else the command
 /// bar shows reads as English too.
 fn free_name(dir: &Path, src: &Path) -> Result<PathBuf> {
     let name = src
@@ -113,8 +113,8 @@ impl App {
 
     /// `Ctrl+V`: drop the clipboard into the folder the cursor is in.
     ///
-    /// Where `*copy` refuses to write over something — you named that
-    /// destination, so a collision means you were wrong about it — a paste
+    /// Where `*copy` refuses to write over something (you named that
+    /// destination, so a collision means you were wrong about it) a paste
     /// picks the next free name instead. The destination here is implied
     /// rather than stated, and pasting into the folder you copied from is the
     /// ordinary way to duplicate a file; erroring there would make the gesture
@@ -221,7 +221,7 @@ impl App {
     /// `Ctrl+S` from the tree: save what the cursor is on.
     ///
     /// On a file that is the file. On a folder it is everything unsaved
-    /// underneath it, however deep — so the root row saves the whole project
+    /// underneath it, however deep, so the root row saves the whole project
     /// and a subfolder saves just its own. That makes the one key mean "save
     /// this", whatever "this" happens to be, which is the same thing the tree
     /// cursor means everywhere else in the program.
@@ -259,7 +259,7 @@ impl App {
     ///
     /// Every save in tiny that touches more than one file goes through here:
     /// saving a folder from the tree, and answering yes to the question on the
-    /// way out. Both need the same thing — keep going after a failure, and be
+    /// way out. Both need the same thing: keep going after a failure, and be
     /// able to say afterwards which ones did not make it. A loop that stopped
     /// at the first error would leave the rest unsaved without saying so.
     ///
@@ -367,7 +367,7 @@ impl App {
     /// The single gate on every delete, and there is now only one way in:
     /// `*delete`, with a path or with none for whatever the cursor is on.
     /// Deleting used to have a key as well, which is exactly the overlap that
-    /// went — it is a deliberate act, and a deliberate act can afford to be
+    /// went; it is a deliberate act, and a deliberate act can afford to be
     /// typed. Nothing touches the disk until [`App::do_delete`].
     ///
     /// The message counts a directory's entries first, because `remove_dir_all`
@@ -378,12 +378,12 @@ impl App {
             return Err(anyhow!("cannot delete the project root"));
         }
         // `symlink_metadata` rather than `exists`, which follows links and so
-        // reports a broken symlink as missing — that is a thing you very much
+        // reports a broken symlink as missing; that is a thing you very much
         // want to be able to delete.
         let meta = fs::symlink_metadata(path)
             .with_context(|| format!("cannot delete {}", display_name(path)))?;
         let name = display_name(path);
-        // Say how much is at stake before asking — deleting a folder takes
+        // Say how much is at stake before asking: deleting a folder takes
         // everything under it.
         let message = if meta.is_dir() {
             let n = fs::read_dir(path).map(|d| d.count()).unwrap_or(0);
@@ -405,7 +405,7 @@ impl App {
 
     /// Carry out a confirmed delete, then put the cursor somewhere sensible.
     ///
-    /// Buffers under the deleted path are dropped — including unsaved ones,
+    /// Buffers under the deleted path are dropped, including unsaved ones,
     /// since there is no longer a file to save them to. The cursor moves to the
     /// parent directory where it can, rather than staying on an index that now
     /// points at a different file.

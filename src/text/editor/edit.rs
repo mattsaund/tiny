@@ -3,7 +3,7 @@
 //! Every one of these calls [`Editor::push_undo`] first, which is what makes
 //! the history complete without any of them having to remember to record
 //! anything. They all act at the cursor, and they all leave it somewhere
-//! sensible afterwards — an edit that moves the cursor to a surprising place
+//! sensible afterwards: an edit that moves the cursor to a surprising place
 //! is worse than one that does nothing.
 //!
 //! Columns are character indices, never byte offsets. A buffer holds whatever
@@ -33,7 +33,7 @@ impl Editor {
     }
 
     /// Split the line at the cursor, carrying the current indentation onto the
-    /// new line — the auto-indent every editor has. Structural, so it always
+    /// new line: the auto-indent every editor has. Structural, so it always
     /// begins a fresh undo group.
     pub fn insert_newline(&mut self) {
         self.push_undo(EditKind::Structural);
@@ -117,7 +117,7 @@ impl Editor {
         self.clamp_cursor();
     }
 
-    /// Put `text` in at the cursor, newlines and all, as one step of undo —
+    /// Put `text` in at the cursor, newlines and all, as one step of undo:
     /// what a plugin's `tiny.insert` does. The cursor ends up after it.
     ///
     /// Unlike typing it, no indentation is carried onto the new lines: the
@@ -144,7 +144,7 @@ impl Editor {
         self.dirty = true;
     }
 
-    /// Replace everything with `text`, as one step of undo — what a plugin's
+    /// Replace everything with `text`, as one step of undo: what a plugin's
     /// `tiny.set_text` does. The cursor keeps its line and column, as near as
     /// the new text allows.
     ///

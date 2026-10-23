@@ -4,10 +4,10 @@
 //! person. The answer comes back on a thread whenever it comes back, and the
 //! question is put only once they are somewhere it cannot be answered by
 //! accident: in the browser, with nothing else open. Put while they were
-//! typing, the very next letter of a sentence — a `y` — would answer it.
+//! typing, the very next letter of a sentence (a `y`) would answer it.
 //!
 //! `y` does not install anything here. It asks to quit, the way `Ctrl+Q`
-//! does — saving first, or not, if anything is unsaved — and leaves the
+//! does (saving first, or not, if anything is unsaved) and leaves the
 //! version in [`App::update_on_exit`] for `main` to install once the terminal
 //! is an ordinary terminal again.
 

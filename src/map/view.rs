@@ -2,12 +2,12 @@
 //!
 //! Every file in the project is a box with its name in it, and the connections
 //! between them are lines, the way anyone would draw this on paper. This half
-//! owns the *state* — which file is selected, which connection kinds are
+//! owns the *state*: which file is selected, which connection kinds are
 //! switched on, what the filter is hiding. Where each box physically sits is
 //! [`super::layout`]'s job, and painting it is `ui::map`'s.
 //!
 //! Folders are not boxes. They are not selectable, nothing connects to one,
-//! and opening one does nothing — a folder is *where files are*, and the
+//! and opening one does nothing: a folder is *where files are*, and the
 //! heading is how the picture says so.
 //!
 //! Navigation is spatial: the arrow keys move to the nearest file in that
@@ -18,7 +18,7 @@
 //!
 //! [`super::graph`] decides *what connects to what*; this module decides
 //! *what you can see and do*; [`super::layout`] decides *where it sits*. The
-//! `Graph` itself is never mutated after construction — filtering happens by
+//! `Graph` itself is never mutated after construction; filtering happens by
 //! asking [`ProjectMap::node_visible`] and [`ProjectMap::edge_visible`] at
 //! draw time, so toggling an edge kind is instant and reversible.
 //!
@@ -33,8 +33,8 @@
 //!
 //! # Coordinates
 //!
-//! `pos` is written by [`super::layout`] in **grid** units — one per box, not
-//! one per character — with **y running upwards**, which is why `Up` calls
+//! `pos` is written by [`super::layout`] in **grid** units (one per box, not
+//! one per character) with **y running upwards**, which is why `Up` calls
 //! `move_towards(0.0, 1.0)`. Navigation then walks the picture exactly as it
 //! is drawn.
 
@@ -48,7 +48,7 @@ use crate::map::layout::{self, Link};
 /// What a keypress asked the app to do. Named for the request rather than
 /// the key, since `keys::Action` is now what a key resolves to.
 ///
-/// The view handles its own navigation but cannot open files or close itself —
+/// The view handles its own navigation but cannot open files or close itself:
 /// both need `App`. Returning an intent keeps this module free of any
 /// dependency on application state.
 pub enum Intent {
@@ -59,7 +59,7 @@ pub enum Intent {
     /// Open this file in the editor, closing the map.
     Open(PathBuf),
     /// Read the project again and draw a fresh map of it. The layout is
-    /// deterministic, so redrawing the same files is a no-op — what this is
+    /// deterministic, so redrawing the same files is a no-op: what this is
     /// for is picking up files and links that changed on disk.
     Rebuild,
 }
@@ -90,7 +90,7 @@ pub struct ProjectMap {
     /// order. What a file connects to costs that file's edges to find, not
     /// the whole graph's.
     touching: Vec<Vec<usize>>,
-    /// Each file's name as drawn in its box — see [`layout::label_of`].
+    /// Each file's name as drawn in its box, see [`layout::label_of`].
     pub(super) labels: Vec<String>,
     /// The folder each file sits in, as an index into `folders`.
     pub(super) folder: Vec<usize>,
@@ -125,7 +125,7 @@ impl ProjectMap {
     /// Build the graph and put the cursor somewhere sensible. Laying it out
     /// is `place`'s job, and happens per frame against the pane it has.
     ///
-    /// Everything expensive happens here, synchronously — this is what
+    /// Everything expensive happens here, synchronously; this is what
     /// opening the map costs.
     pub fn build(root: &Path, opts: &graph::Options) -> Self {
         let graph = graph::build(root, opts);
@@ -168,7 +168,7 @@ impl ProjectMap {
     /// Whether a file is drawn at all.
     ///
     /// Only the bar's filter can hide one. A file that links to nothing is still
-    /// part of the project — it is filed under its own heading rather than
+    /// part of the project; it is filed under its own heading rather than
     /// left out, because a map that quietly omits things is a map you cannot
     /// trust to tell you what is there. See [`ProjectMap::connected`].
     pub fn node_visible(&self, i: usize) -> bool {
@@ -207,7 +207,7 @@ impl ProjectMap {
     }
 
     /// An edge is drawn only when its kind is on *and* both endpoints are
-    /// visible — otherwise a filter would leave lines dangling into nothing.
+    /// visible; otherwise a filter would leave lines dangling into nothing.
     pub fn edge_visible(&self, e: &Edge) -> bool {
         self.kind_on(e) && self.node_visible(e.from) && self.node_visible(e.to)
     }
@@ -243,7 +243,7 @@ impl ProjectMap {
     }
 
     /// The files drawn joined to this one, each once however many edges run
-    /// between them — the far ends of the lines the map draws for it.
+    /// between them: the far ends of the lines the map draws for it.
     pub fn neighbors(&self, i: usize) -> Vec<usize> {
         let mut seen = HashSet::new();
         self.edges_of(i)
@@ -314,7 +314,7 @@ impl ProjectMap {
     /// non-positive `along` is behind the cursor and skipped. The score
     /// `along + across * 2.0` weights sideways displacement double, so the
     /// cursor prefers something straight ahead over something closer but well
-    /// off-axis — otherwise arrow keys feel like they teleport.
+    /// off-axis; otherwise arrow keys feel like they teleport.
     fn move_towards(&mut self, dx: f64, dy: f64) {
         let visible = self.visible_indices();
         if visible.is_empty() {
@@ -372,8 +372,8 @@ impl ProjectMap {
     /// Handle one keypress and say what, if anything, `App` should do.
     ///
     /// Takes what the key *meant* rather than the key: `App` resolves it, and
-    /// anything the map has no binding for — every global chord, and the `/`
-    /// that opens the bar — arrives as `None` and is left alone.
+    /// anything the map has no binding for (every global chord, and the `/`
+    /// that opens the bar) arrives as `None` and is left alone.
     pub fn on_key(&mut self, action: Option<Action>) -> Intent {
         let Some(action) = action else {
             return Intent::None;
@@ -406,7 +406,7 @@ impl ProjectMap {
     ///
     /// Called by the bar. The map has no filter box of its own: filtering the
     /// map and searching the project are the same act, so they are the same
-    /// field in the same place on screen — see `App::open_bar`.
+    /// field in the same place on screen, see `App::open_bar`.
     pub fn set_filter(&mut self, query: &str) {
         self.filter = query.trim().to_string();
         let wanted = self.filter.to_lowercase();
@@ -461,7 +461,7 @@ mod tests {
         assert!(all.iter().any(|r| r == "notes/design.md"));
 
         // The notes are held on only by wikilinks, so switching those off
-        // leaves nothing reaching them — but they are still files in the
+        // leaves nothing reaching them, but they are still files in the
         // project, and the map still has to show them.
         view.kinds[kind_index(EdgeKind::Wikilink)] = false;
         assert_eq!(
@@ -700,7 +700,7 @@ mod tests {
     fn a_key_the_map_does_not_use_does_nothing_at_all() {
         let (_td, mut view) = fixture();
         // `/` is the bar's, and the bar is opened by `App` before the map is
-        // ever asked — so as far as the map is concerned it means nothing.
+        // ever asked, so as far as the map is concerned it means nothing.
         assert!(matches!(view.on_key(None), Intent::None));
         assert!(matches!(view.on_key(act(ch('q'))), Intent::None));
         assert!(view.filter.is_empty());

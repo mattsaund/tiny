@@ -9,11 +9,11 @@
 //! # The budget
 //!
 //! Building the graph reads every file it can find something in, while the
-//! user waits — see the event loop's docs in `main`. So every read here is
+//! user waits, see the event loop's docs in `main`. So every read here is
 //! capped at [`MAX_PARSE_BYTES`], and a file over the line is skipped rather
 //! than truncated: half a parse produces confidently wrong symbols, where no
-//! parse produces none. A file with nothing to find — a picture, a binary, a
-//! language with no grammar here — is never opened at all; see [`facts_of`].
+//! parse produces none. A file with nothing to find (a picture, a binary, a
+//! language with no grammar here) is never opened at all; see [`facts_of`].
 //!
 //! # Test code is not the project
 //!
@@ -37,7 +37,7 @@ pub(super) const MAX_PARSE_BYTES: u64 = 1024 * 1024;
 // ---- language support -----------------------------------------------------
 
 /// Tags configurations are expensive to compile, so each is built once.
-/// A grammar that fails to compile its query is simply skipped — one bad
+/// A grammar that fails to compile its query is simply skipped: one bad
 /// language should not take the whole graph down with it.
 static PYTHON: LazyLock<Option<TagsConfiguration>> = LazyLock::new(|| {
     TagsConfiguration::new(
@@ -74,7 +74,7 @@ pub(crate) enum Lang {
 }
 
 /// Map a file extension to a parseable language, or `None` for everything
-/// else. TypeScript is absent deliberately — it needs its own grammar, and
+/// else. TypeScript is absent deliberately; it needs its own grammar, and
 /// falling back to the JavaScript one mis-parses type annotations.
 pub(crate) fn lang_of(path: &Path) -> Option<Lang> {
     match path
@@ -163,7 +163,7 @@ pub(super) fn is_sourcelike(ext: &str) -> bool {
 
 /// What one file contributes, read only when there is something to find in
 /// it: links in prose, definitions and calls in a language with a grammar.
-/// Everything else is a node and nothing more, so it is never opened —
+/// Everything else is a node and nothing more, so it is never opened:
 /// reading every picture in a folder to throw it away was most of what a
 /// media-heavy project cost the map.
 pub(super) fn facts_of(ctx: &mut TagsContext, path: &Path, kind: NodeKind) -> Facts {
@@ -268,7 +268,7 @@ pub(super) fn is_test_file(path: &Path) -> bool {
 }
 
 /// Drop a trailing test module. Rust puts its tests in the same file behind
-/// `#[cfg(test)]`, and those helpers — `fixture`, `render`, `plain` — shadow
+/// `#[cfg(test)]`, and those helpers (`fixture`, `render`, `plain`) shadow
 /// real names across the whole project if they are counted.
 pub(super) fn strip_tests(lang: Lang, text: &str) -> &str {
     match lang {
@@ -283,7 +283,7 @@ pub(super) fn strip_tests(lang: Lang, text: &str) -> &str {
 /// Definitions and calls, via the language's tags query.
 ///
 /// tree-sitter's tags queries emit a stream of tagged ranges with a syntax
-/// type name — `function`, `call`, `reference.implementation`, and so on. Two
+/// type name: `function`, `call`, `reference.implementation`, and so on. Two
 /// filters narrow that to something useful:
 ///
 /// - **Definitions** are kept only for callable things. `mod x;` and `X = 1`
@@ -321,7 +321,7 @@ pub(super) fn collect_symbols(ctx: &mut TagsContext, lang: Lang, text: &str, f: 
     }
 }
 
-/// Whether a definition is of something you can call or build — what the
+/// Whether a definition is of something you can call or build: what the
 /// map links calls to, and what `goto function` goes to.
 ///
 /// `mod x;` and `X = 1` are definitions too, but nothing calls them, and
@@ -334,7 +334,7 @@ fn is_callable(syntax: &str) -> bool {
 }
 
 /// Every callable thing defined in `text`, as its name, line and character
-/// column — where `goto function` lands.
+/// column: where `goto function` lands.
 ///
 /// The same definitions [`collect_symbols`] counts for the map, so the two
 /// agree on what a function is. Test code is included here: jumping to a test
@@ -362,7 +362,7 @@ pub(crate) fn definitions(
         .collect()
 }
 
-/// Rust calls written through a path — `helpers::compute()`, `Config::load()`.
+/// Rust calls written through a path: `helpers::compute()`, `Config::load()`.
 ///
 /// A gap in the shipped Rust tags query, and not a small one: it tags a bare
 /// `compute()` as a call and says nothing about `helpers::compute()`, which is
@@ -372,7 +372,7 @@ pub(crate) fn definitions(
 /// Text scanning rather than a second tree-sitter query, for the same reason
 /// the language list is short: this is thirty lines against a whole query to
 /// compile and keep in step with the grammar. The cost is that a call written
-/// inside a comment or a string counts. It is bounded by what happens next —
+/// inside a comment or a string counts. It is bounded by what happens next:
 /// a name only becomes an edge if some file in the project defines it, and
 /// `max_ambiguity` throws out the names too common to mean anything.
 pub(super) fn collect_path_calls(text: &str, f: &mut Facts) {
@@ -407,7 +407,7 @@ pub(super) fn collect_path_calls(text: &str, f: &mut Facts) {
 
 /// Turn a written target into a file. Tries, in order: the path as given
 /// relative to the linking file, the same relative to the root, and finally
-/// the bare stem — which is how `[[design]]` finds `notes/design.md`.
+/// the bare stem, which is how `[[design]]` finds `notes/design.md`.
 ///
 /// The order is the whole design. Relative-to-the-linking-file comes first so
 /// `../utils` means the neighbor you meant, not something with the same name
@@ -420,7 +420,7 @@ pub(super) fn collect_path_calls(text: &str, f: &mut Facts) {
 /// against directory-index filenames (`mod.rs`, `__init__.py`, `index.js`), so
 /// `import utils` finds `utils/__init__.py`.
 ///
-/// Returns `None` for anything it cannot place — a link to a file that does
+/// Returns `None` for anything it cannot place: a link to a file that does
 /// not exist simply produces no edge, silently, which is correct for a graph
 /// but does mean a typo'd wikilink is invisible here.
 pub(super) fn resolve_link(
@@ -481,7 +481,7 @@ pub(super) fn resolve_link(
 /// Purely lexical, unlike `canonicalize`: link targets routinely name files
 /// that do not exist, and a syscall per candidate per link would be slow. Note
 /// that `pop` on an empty buffer is a no-op, so `../..` from the root cannot
-/// escape upwards — it just flattens.
+/// escape upwards; it just flattens.
 pub(super) fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {

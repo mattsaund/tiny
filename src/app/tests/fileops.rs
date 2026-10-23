@@ -140,7 +140,7 @@ fn deleting_the_file_being_edited_hands_the_keyboard_back_to_the_tree() {
     app.on_key(k(KeyCode::Enter));
     assert_eq!(app.focus, Focus::Editor);
 
-    // In the editor `d` is the letter d and `/` is a slash — Ctrl+F is the
+    // In the editor `d` is the letter d and `/` is a slash; Ctrl+F is the
     // way to the bar from here, and a star makes it the command line. This is
     // why delete needs to be a command and not only a key.
     app.on_key(ctrl('f'));

@@ -1,8 +1,8 @@
 //! Syntax highlighting, wrapping syntect and converting its output into
 //! ratatui spans.
 //!
-//! Highlighting is stateful — syntect has to walk a file from the top to know
-//! whether line 400 sits inside a block comment — so the window API below runs
+//! Highlighting is stateful (syntect has to walk a file from the top to know
+//! whether line 400 sits inside a block comment) so the window API below runs
 //! the parser from line 0 but only *collects* the lines actually on screen,
 //! then stops. Cost scales with scroll depth rather than file size, and no
 //! cache has to be invalidated on every keystroke.
@@ -12,7 +12,7 @@
 //! Parsing from line 0 every frame is correct and, for a note, instant. It is
 //! also quadratic in disguise: the cost is proportional to how far down the
 //! file you are, and it is paid again on every keystroke. Measured on a
-//! 6000-line Python file, one frame took **392ms** — a third of a second
+//! 6000-line Python file, one frame took **392ms**: a third of a second
 //! between pressing a key and seeing it.
 //!
 //! So [`Resume`] keeps the parser's state every [`STRIDE`] lines and starts
@@ -24,7 +24,7 @@
 //! Invalidation is the part that has to be right, and it rests on one fact:
 //! every mutation on `Editor` goes through `push_undo`, which records the
 //! lowest line it touched. `Editor::take_touched` reports that, everything
-//! from it down is dropped, and everything above is still true — because a
+//! from it down is dropped, and everything above is still true, because a
 //! change on line 900 cannot alter what the parser believed on line 100.
 //!
 //! # Two different highlighters
@@ -38,7 +38,7 @@
 //! # Where the grammars come from
 //!
 //! `two_face`, not syntect's own defaults. syntect ships 75 syntaxes and the
-//! gaps in them are not exotic — no TypeScript, no TOML, no Kotlin, no Swift,
+//! gaps in them are not exotic: no TypeScript, no TOML, no Kotlin, no Swift,
 //! no Dockerfile. `two_face` is the same curated set `bat` uses, and brings it
 //! to 213. The cost is about 600 KiB of binary; the alternative was a table
 //! mapping `.ts` onto JavaScript and hoping, which is worse than it sounds
@@ -58,7 +58,7 @@ use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 /// A single highlighted run of text within a line.
 ///
 /// A line is a `Vec<Piece>`; the whole window is a `Vec<Vec<Piece>>`. The text
-/// is owned rather than borrowed because it outlives the parse — `ui` clips it
+/// is owned rather than borrowed because it outlives the parse: `ui` clips it
 /// horizontally before turning it into spans.
 pub type Piece = (Style, String);
 
@@ -67,7 +67,7 @@ pub type Piece = (Style, String);
 /// Construction unpacks 213 syntax definitions, which is the single most
 /// expensive thing tiny does at startup, so `App` builds exactly one and keeps
 /// it for the life of the program. Changing `syntax_theme` goes through
-/// [`Highlighter::set_theme`], which swaps only the theme — rebuilding the
+/// [`Highlighter::set_theme`], which swaps only the theme; rebuilding the
 /// whole thing to change a color scheme would cost the same as another
 /// startup.
 pub struct Highlighter {
@@ -75,7 +75,7 @@ pub struct Highlighter {
     theme: Theme,
 }
 
-/// Files past this many lines are shown unhighlighted — the parse cost stops
+/// Files past this many lines are shown unhighlighted: the parse cost stops
 /// being worth it and plain text still edits fine.
 const MAX_HIGHLIGHT_LINES: usize = 20_000;
 
@@ -94,7 +94,7 @@ const NAME_OVERRIDES: &[(&str, &str)] = &[(crate::config::CONF_NAME, "toml")];
 /// This is the whole trade-off in one number: a frame may have to parse up to
 /// `STRIDE` lines to reach the top of the window, and a file keeps one saved
 /// state per `STRIDE` lines. Fifty puts the worst case at a few milliseconds
-/// and a 20,000-line file — the most [`MAX_HIGHLIGHT_LINES`] allows — at 400
+/// and a 20,000-line file (the most [`MAX_HIGHLIGHT_LINES`] allows) at 400
 /// saved states, which is nothing.
 const STRIDE: usize = 50;
 
@@ -107,7 +107,7 @@ const STRIDE: usize = 50;
 /// in exchange for a saving nobody would notice.
 #[derive(Default)]
 pub struct Resume {
-    /// What these states describe. Anything else and they are meaningless —
+    /// What these states describe. Anything else and they are meaningless:
     /// the same lines under a different grammar parse differently.
     key: Option<(PathBuf, String)>,
     /// `states[i]` is the parser entering line `i * STRIDE`. Contiguous from
@@ -187,8 +187,8 @@ impl Highlighter {
     ///
     /// Three passes, narrowest first. The whole file name is tried before the
     /// extension because a great many files that matter have no useful
-    /// extension at all — `Makefile`, `Dockerfile`, `.gitignore`, `go.mod`,
-    /// `Cargo.lock` — and the grammars register those names in the same field
+    /// extension at all (`Makefile`, `Dockerfile`, `.gitignore`, `go.mod`,
+    /// `Cargo.lock`) and the grammars register those names in the same field
     /// syntect matches extensions against. Extension is the ordinary case, and
     /// the first line catches `#!/usr/bin/env python` on a script with neither.
     ///
@@ -232,7 +232,7 @@ impl Highlighter {
             .unwrap_or_else(|| self.plain())
     }
 
-    /// Highlight `count` lines starting at `start`, with no saved state — the
+    /// Highlight `count` lines starting at `start`, with no saved state: the
     /// parse runs from line 0 every time.
     ///
     /// For snippets and short files this is the whole story. The editor uses
@@ -267,7 +267,7 @@ impl Highlighter {
     ///
     /// Lines below the window are never touched; lines above it are parsed for
     /// state only, so that a line 400 deep inside a docstring is styled as a
-    /// string rather than as code — and `resume` is what keeps "above it" from
+    /// string rather than as code, and `resume` is what keeps "above it" from
     /// meaning "all of them".
     ///
     /// Two escape hatches drop to unstyled text rather than failing: files past
@@ -331,7 +331,7 @@ impl Highlighter {
             };
             let ranges = HighlightIterator::new(&mut hl, &ops, &buf, &hi);
             if i < start {
-                // Parsed for state only. The iterator still has to be run —
+                // Parsed for state only. The iterator still has to be run;
                 // it is what advances the highlight state.
                 ranges.for_each(drop);
                 continue;
@@ -413,7 +413,7 @@ pub fn acknowledgments() -> String {
 ///
 /// Only the foreground crosses over. syntect themes also carry a background
 /// per token, but painting it would fight the terminal's own background and
-/// leave the editor looking like a patchwork — the pane keeps one ground and
+/// leave the editor looking like a patchwork: the pane keeps one ground and
 /// varies only the ink.
 fn convert_style(s: syntect::highlighting::Style) -> Style {
     let mut out = Style::default().fg(Color::Rgb(s.foreground.r, s.foreground.g, s.foreground.b));

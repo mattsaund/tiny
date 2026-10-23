@@ -106,7 +106,7 @@ fn enter_stages_the_file_under_the_cursor_and_enter_again_takes_it_back() {
     assert!(joined(&mut app).contains("STAGED 1"));
 
     // Stage a second one, chosen so that "the first file in the list" is a
-    // different answer from "the file that was just staged" — otherwise the
+    // different answer from "the file that was just staged"; otherwise the
     // cursor could be landing in the right place by luck.
     cursor_on(&mut app, "scratch.txt");
     app.on_key(k(KeyCode::Enter));
@@ -320,7 +320,7 @@ fn tab_leaves_the_window_with_the_file_open() {
     app.on_key(k(KeyCode::Tab));
     assert_eq!(app.window, Window::Main, "back to the files");
     // The path came back from git, and the one to compare it with was built
-    // here — two spellings of the same file on a Mac. See `same_file`.
+    // here: two spellings of the same file on a Mac. See `same_file`.
     let want = td.path().join("README.md");
     let got = app.selected_path().expect("a file is selected");
     assert!(
@@ -411,7 +411,7 @@ fn the_diff_is_syntax_highlighted_on_both_sides() {
 
     // `def` is a keyword in Python and syntect gives it a color of its own.
     // Unhighlighted text is drawn in the theme's `text`, which names no color
-    // at all — so a color here is the grammar talking.
+    // at all, so a color here is the grammar talking.
     let keyword = color_of(&mut app, "def main");
     assert_ne!(
         keyword,
@@ -462,7 +462,7 @@ fn right_goes_into_the_diff_and_the_arrows_scroll_both_halves() {
     assert_ne!(app.git.selected, row, "and the arrows move the list again");
 }
 
-/// Whether the change list's row for `name` has any reversed cell — which is
+/// Whether the change list's row for `name` has any reversed cell, which is
 /// what the selection bar is, in the default theme.
 ///
 /// Looks in the left column only: the diff's own title names the same file, and
@@ -501,7 +501,7 @@ fn the_change_list_steps_back_when_the_keyboard_goes_into_the_diff() {
     assert_eq!(app.git.focus, GitFocus::Diff);
     assert!(
         !row_is_highlighted(&mut app, "README.md"),
-        "and quietly marked once it does not — the same as the browser"
+        "and quietly marked once it does not, the same as the browser"
     );
 
     app.on_key(k(KeyCode::Left));
@@ -605,7 +605,7 @@ fn a_page_key_pages_the_message_box_too() {
     assert_eq!(
         app.git.message.as_ref().unwrap().cursor_line,
         10usize.saturating_sub(page),
-        "a screen back — the editor's own key, working here too"
+        "a screen back: the editor's own key, working here too"
     );
     assert!(
         !app.git.message.as_ref().unwrap().to_text().contains('u'),
@@ -667,7 +667,7 @@ fn the_commit_button_opens_a_message_box_over_both_columns() {
     press_commit(&mut app);
 
     assert_eq!(app.git.focus, GitFocus::Message, "{}", app.status);
-    // The first press opens the box and does nothing else — it must not try to
+    // The first press opens the box and does nothing else; it must not try to
     // commit the empty message it has just made.
     assert!(
         app.status.contains("write the message"),
@@ -699,7 +699,7 @@ fn the_message_box_types_and_the_button_sends_it() {
     app.on_key(k(KeyCode::Enter));
     press_commit(&mut app);
 
-    // A summary, a blank line, and a body — the shape git expects.
+    // A summary, a blank line, and a body: the shape git expects.
     type_str(&mut app, "tidy the README");
     app.on_key(k(KeyCode::Enter));
     app.on_key(k(KeyCode::Enter));
@@ -711,7 +711,7 @@ fn the_message_box_types_and_the_button_sends_it() {
     );
 
     // Esc puts the box down without losing a word of it, and the button sends
-    // it — which is the two-press shape the window promises.
+    // it, which is the two-press shape the window promises.
     app.on_key(k(KeyCode::Esc));
     assert_eq!(app.git.focus, GitFocus::List);
     assert!(app.git.message.is_some(), "the message is kept");

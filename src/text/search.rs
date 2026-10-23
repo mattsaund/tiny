@@ -4,9 +4,9 @@
 //! project, no index and no regex. For a folder of notes and source that is
 //! fast enough to run on every keystroke, and it never goes stale. The files
 //! are read on every core at once, in batches taken in order, so a big
-//! project costs its disk rather than one core's patience — see [`search`].
+//! project costs its disk rather than one core's patience, see [`search`].
 //!
-//! Matching is smart-cased — an all-lowercase query ignores case, a query
+//! Matching is smart-cased: an all-lowercase query ignores case, a query
 //! with any capital in it does not. Replace is always case-sensitive, because
 //! rewriting files on a loose match is not a mistake worth being clever about.
 //!
@@ -14,7 +14,7 @@
 //!
 //! An index is the obvious optimization and the wrong one here. It would need
 //! building on startup, invalidating on every save, and persisting somewhere
-//! on disk — which tiny does not do, since it writes nothing into a project.
+//! on disk, which tiny does not do, since it writes nothing into a project.
 //! It can also go stale, which means search can start lying.
 //! A linear scan over a folder of notes and source finishes in single-digit
 //! milliseconds and is correct by construction. The size caps below
@@ -25,7 +25,7 @@
 //!
 //! `widget` matches `Widget`; `Widget` matches only `Widget`. This applies to
 //! [`search`] and to the `goto` commands. [`count`] and [`replace_all`] are
-//! always case-sensitive and always literal — a [`Needle`] — because a
+//! always case-sensitive and always literal (a [`Needle`]) because a
 //! find-replace that guessed at your intent across a whole project would be a
 //! very bad afternoon. The one thing a needle may ask for is whole words, so
 //! that replacing `hi` leaves `this` alone.
@@ -33,7 +33,7 @@
 //! # Shared with the graph
 //!
 //! [`walk`] is `pub` because `graph::build` uses the same traversal, and the
-//! two must agree on what counts as part of the project — otherwise a file
+//! two must agree on what counts as part of the project; otherwise a file
 //! could be searchable but absent from the graph, or the reverse.
 //!
 //! # Shared with the screen
@@ -91,7 +91,7 @@ pub struct Opts {
     /// keystroke, so an unbounded result set on a one-letter query would
     /// stall the UI.
     pub max_results: usize,
-    /// Directory names never walked into, matched exactly — `target`, not
+    /// Directory names never walked into, matched exactly: `target`, not
     /// `*/target/*`.
     pub ignore: Vec<String>,
     /// Whether dotfiles and dot-directories are searched at all.
@@ -119,7 +119,7 @@ pub struct Report {
     pub occurrences: usize,
 }
 
-/// Files above this are skipped — a search box should not stall on a dump.
+/// Files above this are skipped: a search box should not stall on a dump.
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 /// Long lines are truncated for display, not skipped.
 const MAX_LINE_DISPLAY: usize = 400;
@@ -148,7 +148,7 @@ pub fn search(root: &Path, query: &str, opts: &Opts) -> Vec<Hit> {
     let mut contents = Vec::new();
 
     // Read a batch on every core, then go through it in order exactly as a
-    // plain loop would — so the results are the same, and the cap still stops
+    // plain loop would, so the results are the same, and the cap still stops
     // the reading one batch after it is reached rather than at the end of the
     // project. A file only comes back when the query is somewhere in it, so
     // splitting into lines happens only where there is something to find.
@@ -252,7 +252,7 @@ pub fn lines_in(text: &str, at: impl Fn(&str) -> Option<usize>) -> Vec<(usize, u
 /// What a replace looks for: exact text, case and all, and whether it has to
 /// stand as a word of its own.
 ///
-/// Whole words is what a sentence means — `replace hi with hello` is about the
+/// Whole words is what a sentence means: `replace hi with hello` is about the
 /// word, and leaves `this` and `high` alone. A needle that starts or ends with
 /// something that is not a letter, digit or underscore only checks the ends
 /// that are, so `replace -> with →` still finds every arrow.
@@ -342,7 +342,7 @@ pub fn count(root: &Path, needle: &Needle, opts: &Opts) -> Report {
 /// Rewrite every occurrence across the project. Case-sensitive, literal.
 /// Files that fail to write are reported rather than silently skipped.
 ///
-/// There is no undo for this — it edits files on disk, not buffers. The
+/// There is no undo for this; it edits files on disk, not buffers. The
 /// question a replace puts up first (see `app::plan`) is the only guard,
 /// which is why it quotes the exact counts from [`count`].
 ///
@@ -387,7 +387,7 @@ pub fn replace_all(root: &Path, needle: &Needle, replacement: &str, opts: &Opts)
 /// file in the project on every keystroke, so anything allocated per call is
 /// allocated tens of thousands of times per keypress.
 ///
-/// Smart case is decided once, at construction, from the query — see
+/// Smart case is decided once, at construction, from the query, see
 /// [`folds_case`].
 pub struct Matcher {
     /// The query as characters, for the case-folding scan.
@@ -395,7 +395,7 @@ pub struct Matcher {
     /// The query as it was written, for the case-sensitive path, where
     /// `str::find` beats anything character-by-character and allocates nothing.
     needle: String,
-    /// The query as bytes, when it is ASCII — nearly always. Folding case is
+    /// The query as bytes, when it is ASCII (nearly always). Folding case is
     /// then a byte comparison rather than a Unicode lowercasing per
     /// character, which was most of what a lowercase search cost.
     ascii: Option<Vec<u8>>,
@@ -421,7 +421,7 @@ impl Matcher {
     /// Character index of the first match, if there is one.
     ///
     /// A *character* index, not a byte offset, because it ends up as an
-    /// `Editor` cursor column — see the note on character indexing in
+    /// `Editor` cursor column, see the note on character indexing in
     /// `editor`.
     pub fn first(&self, haystack: &str) -> Option<usize> {
         let byte = match self.folded_ascii(haystack) {
@@ -437,7 +437,7 @@ impl Matcher {
     }
 
     /// Character column of the first place the query stands as a word of its
-    /// own — the same match as [`Matcher::first`], with the ones inside a
+    /// own: the same match as [`Matcher::first`], with the ones inside a
     /// longer word passed over. What `goto word` looks for.
     pub fn first_word(&self, haystack: &str) -> Option<usize> {
         let chars: Vec<char> = haystack.chars().collect();
@@ -533,7 +533,7 @@ fn folds_case(query: &str) -> bool {
     !query.chars().any(char::is_uppercase)
 }
 
-/// Cut a line down for display. Long lines are shortened, never skipped — the
+/// Cut a line down for display. Long lines are shortened, never skipped: the
 /// hit is still real, there is just no room to show all of it.
 fn truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
@@ -546,7 +546,7 @@ fn truncate(s: &str, max_chars: usize) -> String {
 /// Read a file if it is text. Binary files and oversized files are skipped.
 ///
 /// "Binary" means "contains a zero byte", the same cheap heuristic `grep`
-/// uses. It is what stops a `.png` or a compiled object from being scanned —
+/// uses. It is what stops a `.png` or a compiled object from being scanned,
 /// and, in [`replace_all`], from being rewritten.
 fn read_text(path: &Path) -> Result<String> {
     let meta = fs::metadata(path)?;

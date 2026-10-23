@@ -3,9 +3,9 @@
 //!
 //! # What a plugin is, and where it goes
 //!
-//! A plugin is a `.lua` file in the plugins folder — `~/.config/tiny/plugins`,
+//! A plugin is a `.lua` file in the plugins folder (`~/.config/tiny/plugins`,
 //! or `%APPDATA%\tiny\plugins` on Windows, which the settings area's `Plugins`
-//! button opens — or a folder there with an `init.lua` in it, for a plugin
+//! button opens) or a folder there with an `init.lua` in it, for a plugin
 //! that wants more than one file. Every one is loaded when tiny starts, and
 //! again on `*reload`.
 //!
@@ -47,7 +47,7 @@
 //! # A plugin cannot hang tiny
 //!
 //! Lua runs on tiny's own thread, so a plugin stuck in a loop would freeze the
-//! window. Every call has a deadline — [`PATIENCE`] — checked every few
+//! window. Every call has a deadline ([`PATIENCE`]) checked every few
 //! thousand instructions, and a call that runs past it is stopped with an
 //! error naming the plugin. An error is all a broken plugin can cause: it is
 //! reported on the status line, and tiny carries on.
@@ -90,7 +90,7 @@ pub enum Effect {
     Insert(String),
     /// Move the cursor to a line and column, counted from 1.
     Go(usize, usize),
-    /// Open a file — a path from the project folder, or an absolute one.
+    /// Open a file: a path from the project folder, or an absolute one.
     Open(String),
     /// Change a setting, the way `*set` does: for this run, and written to
     /// `tiny.conf` only if the settings area is saved.
@@ -104,7 +104,7 @@ struct Shared {
     loading: String,
     /// `*name` → the plugin that added it, and its function.
     commands: BTreeMap<String, (String, Function)>,
-    /// Event, plugin, function — in the order they were registered.
+    /// Event, plugin, function, in the order they were registered.
     hooks: Vec<(String, String, Function)>,
     snapshot: Snapshot,
     effects: Vec<Effect>,
@@ -418,7 +418,7 @@ impl Plugins {
 
     /// One call into a plugin: hand it `snapshot`, run it against the
     /// deadline, and take back what it asked for. A call that fails asks for
-    /// nothing — half of what a broken plugin meant to do is not worth doing.
+    /// nothing: half of what a broken plugin meant to do is not worth doing.
     fn call(
         &self,
         owner: &str,

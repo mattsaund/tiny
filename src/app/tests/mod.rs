@@ -1,8 +1,8 @@
 //! The fixtures every test here shares, and the tests themselves.
 //!
 //! One project on a temp directory with one of each thing the panes have to
-//! handle — a folder, a markdown note, a source file, a picture that will not
-//! decode — plus the helpers that drive an `App` without a terminal: [`screen`]
+//! handle (a folder, a markdown note, a source file, a picture that will not
+//! decode) plus the helpers that drive an `App` without a terminal: [`screen`]
 //! renders a frame into strings, [`select`] puts the cursor on a named row,
 //! and [`k`] / [`ch`] / [`ctrl`] build key events.
 //!
@@ -213,7 +213,7 @@ pub(super) fn type_str(app: &mut App, s: &str) {
 /// Run a command from wherever the keyboard happens to be, exactly as a user
 /// would: `Ctrl+F` for the bar, then a star and the command.
 ///
-/// The chord rather than `/`, because in the editor a slash is a slash — the
+/// The chord rather than `/`, because in the editor a slash is a slash: the
 /// same reason the chord exists at all.
 pub(super) fn command(app: &mut App, line: &str) {
     command_bar(app);
@@ -262,7 +262,7 @@ pub(super) fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Open the settings area. A command now, not a key — see `config::keys`.
+/// Open the settings area. A command now, not a key, see `config::keys`.
 pub(super) fn settings(app: &mut App) {
     command(app, "config");
 }

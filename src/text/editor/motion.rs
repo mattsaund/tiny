@@ -1,7 +1,7 @@
 //! Moving the cursor, and following it with the view.
 //!
 //! Nothing here changes the text, which is why none of it touches the undo
-//! history — though moving *does* close the current undo group, so a run of
+//! history, though moving *does* close the current undo group, so a run of
 //! typing that you walked away from and came back to undoes in two steps
 //! rather than one.
 //!
@@ -10,7 +10,7 @@
 //! Moving down through a short line and out the other side puts the cursor
 //! back where it was horizontally, not where the short line ended. That
 //! remembered column is `goal`, and it survives vertical movement and is
-//! cleared by anything horizontal — which is the behavior every editor has
+//! cleared by anything horizontal, which is the behavior every editor has
 //! and nobody notices until it is missing.
 
 use super::Editor;
@@ -54,7 +54,7 @@ impl Editor {
         }
     }
 
-    /// Home: first non-blank, then column 0 — press twice to reach the margin.
+    /// Home: first non-blank, then column 0; press twice to reach the margin.
     ///
     /// "Smart home", as in most editors. Because it is smart, it is the wrong
     /// tool for jumping to an exact column; [`Editor::goto`] exists for that.

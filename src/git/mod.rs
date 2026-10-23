@@ -3,8 +3,8 @@
 //! Everything here goes through the `git` binary rather than through a library.
 //! That is a deliberate choice and worth defending: linking libgit2 or `gix`
 //! would add several megabytes and a minute of build time to a program that
-//! measures both, and it would still be reimplementing decisions — what counts
-//! as a rename, how a diff is bounded — that the user's own git already makes
+//! measures both, and it would still be reimplementing decisions (what counts
+//! as a rename, how a diff is bounded) that the user's own git already makes
 //! the way the user expects. Shelling out means tiny agrees with the `git` on
 //! the same machine by construction.
 //!
@@ -17,14 +17,14 @@
 //! | this file | the types, and the calls that put the two together |
 //!
 //! The split matters for testing: [`parse`] is pure text in, values out, so the
-//! awkward cases — a rename with a quoted path, a conflicted file, a diff with
-//! no trailing newline — are tested as strings rather than by trying to talk a
+//! awkward cases (a rename with a quoted path, a conflicted file, a diff with
+//! no trailing newline) are tested as strings rather than by trying to talk a
 //! real repository into that state.
 //!
 //! # Nothing here writes without being asked
 //!
 //! Reading git's opinion is safe and happens whenever the window is open.
-//! Everything that changes the repository — staging, committing, pushing — is a
+//! Everything that changes the repository (staging, committing, pushing) is a
 //! separate call made only from a keypress, and each one is named in the window
 //! before it runs. There is no autosave, no auto-stage, and no command that
 //! rewrites history without the word `rebase` on screen.
@@ -45,17 +45,17 @@ pub use self::run::Job;
 /// rather than a translation layer nobody asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Code {
-    /// `A` — new to the index.
+    /// `A`: new to the index.
     Added,
-    /// `M` — changed.
+    /// `M`: changed.
     Modified,
-    /// `D` — gone.
+    /// `D`: gone.
     Deleted,
-    /// `R` — moved, with git having matched the two halves up.
+    /// `R`: moved, with git having matched the two halves up.
     Renamed,
-    /// `C` — copied from another file.
+    /// `C`: copied from another file.
     Copied,
-    /// `U` — untracked: git has never been told about it.
+    /// `U`: untracked; git has never been told about it.
     ///
     /// Git itself writes this as `??` and reserves `U` for unmerged, but `U`
     /// for untracked is what people say out loud, and an unmerged file is
@@ -79,7 +79,7 @@ impl Code {
         }
     }
 
-    /// The word, for the status line — a letter is a reminder, not an
+    /// The word, for the status line: a letter is a reminder, not an
     /// explanation.
     pub fn word(self) -> &'static str {
         match self {
@@ -175,7 +175,7 @@ pub enum LineKind {
     Same,
     /// On this side only.
     Changed,
-    /// Nothing here — the other side has a line this one does not, and the two
+    /// Nothing here: the other side has a line this one does not, and the two
     /// stay level so the eye can read across.
     Filler,
 }
@@ -205,7 +205,7 @@ impl Diff {
 /// The repository a project sits in.
 #[derive(Debug, Clone)]
 pub struct Repo {
-    /// The top level, which is not always the project root — tiny can be
+    /// The top level, which is not always the project root: tiny can be
     /// opened on a subdirectory of a repository.
     pub root: PathBuf,
 }

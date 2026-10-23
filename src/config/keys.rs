@@ -9,14 +9,14 @@
 //! # What is not bindable
 //!
 //! Keys that put a character into a file or a field are not here, and cannot
-//! be. In the editor, the bar, and every prompt, `n` is the letter n — there is
+//! be. In the editor, the bar, and every prompt, `n` is the letter n; there is
 //! no binding to change, because the key is not a command. The same goes for
 //! the text-editing primitives beside them: the arrows, `Backspace`, `Delete`,
 //! `Enter` and `Tab` move and edit text while you are typing into it, and
 //! rebinding those would leave a keyboard that cannot type.
 //!
-//! Everything else — the browser, a note being read, the project map, the git
-//! window, and every chord that reaches out of the pane you are in — is
+//! Everything else (the browser, a note being read, the project map, the git
+//! window, and every chord that reaches out of the pane you are in) is
 //! bindable.
 //!
 //! # Contexts
@@ -31,7 +31,7 @@
 //! Moving up is one action, `up`, bound to one key; the browser, a note being
 //! read, the map and the git window each answer it in their own way. `open` is
 //! the same idea for Enter: it opens a file in the browser and on the map, and
-//! stages one in the git window — one row to find, and one key to rebind.
+//! stages one in the git window; one row to find, and one key to rebind.
 //!
 //! Everything in `Global` that has to work while you type is a chord. In the
 //! editor a letter is a letter being typed, so a control that must work there
@@ -45,35 +45,35 @@
 //! Not everything tiny does is here, and that is the point. Keys are for
 //! moving around and for changing a file: things done constantly, in the middle
 //! of something else, where a key is the only shape fast enough. Deleting a
-//! path, re-reading the disk, opening the settings — those are deliberate acts,
+//! path, re-reading the disk, opening the settings: those are deliberate acts,
 //! usually with something to type after them, and they are commands (`*delete`,
 //! `*reload`, `*config`).
 //!
 //! # Every key arrives on every terminal
 //!
 //! A binding that some terminals never deliver is worse than none: the help
-//! window promises it, and on the wrong machine nothing happens — or something
+//! window promises it, and on the wrong machine nothing happens, or something
 //! else does. So the shipped keyboard is made only of keys that arrive as
 //! themselves on macOS Terminal, iTerm2, Windows Terminal and the usual Linux
 //! emulators, with their stock settings:
 //!
 //! - **Ctrl and a letter.** Every terminal sends these, in raw mode, as
-//!   themselves — except `Ctrl+H`, `Ctrl+I`, `Ctrl+J` and `Ctrl+M`, which *are*
+//!   themselves, except `Ctrl+H`, `Ctrl+I`, `Ctrl+J` and `Ctrl+M`, which *are*
 //!   Backspace, Tab and Enter in the encoding, and `Ctrl+B`, which tmux keeps
 //!   for its prefix. None of those five is bound.
-//! - **Plain keys** — letters, `/`, `?`, `.`, the arrows, Enter, Esc, Tab — in
-//!   the panes where nothing is being typed.
+//! - **Plain keys**, in the panes where nothing is being typed: letters, `/`,
+//!   `?`, `.`, the arrows, Enter, Esc, Tab.
 //!
 //! What is *not* shipped, and why:
 //!
 //! - **Ctrl with a digit or a punctuation mark.** Not in a terminal's legacy
 //!   encoding at all: `Ctrl+1` sends nothing, `Ctrl+2` arrives as `Ctrl+Space`
-//!   and `Ctrl+3` as `Esc` — which, in the browser, used to quit.
+//!   and `Ctrl+3` as `Esc`, which, in the browser, used to quit.
 //! - **Function keys.** On a Mac they are brightness and Mission Control unless
 //!   Fn is held, and GNOME Terminal keeps `F1` for its own help. `F1` is still
 //!   bound beside `?`, because on a PC keyboard it is where people look first.
 //! - **Ctrl with an arrow.** macOS switches Spaces on `Ctrl+←` and `Ctrl+→`,
-//!   and opens Mission Control on `Ctrl+↑` — the terminal never sees them.
+//!   and opens Mission Control on `Ctrl+↑`: the terminal never sees them.
 //!   They stay bound in the editor beside a twin that a Mac does send, for the
 //!   PC keyboards that expect them.
 //! - **Ctrl+Space.** macOS switches input source on it.
@@ -86,13 +86,13 @@
 //!
 //! The one key a terminal takes for itself is `Ctrl+V`: Windows Terminal and
 //! the Windows console paste on it before the program sees anything. That is
-//! the whole of [`Keyboard`] — on Windows, file paste ships on `Ctrl+P`.
+//! the whole of [`Keyboard`]: on Windows, file paste ships on `Ctrl+P`.
 //!
 //! # Option and the arrows
 //!
 //! On a Mac, `⌥←` and `⌥→` are how a word is skipped, and the terminals do not
 //! agree on how to say so: iTerm2 sends them as `Alt` with an arrow, and macOS
-//! Terminal sends the `Esc b` and `Esc f` that a shell's readline expects —
+//! Terminal sends the `Esc b` and `Esc f` that a shell's readline expects:
 //! `Alt+B` and `Alt+F`. [`super::keyspec::from_terminal`] turns the second
 //! spelling into the first before anything else looks at the key, so one
 //! binding, `alt+left`, answers both.
@@ -128,7 +128,7 @@ pub enum Context {
     /// Chords that work from any pane. Checked before the pane's own set.
     Global,
     Tree,
-    /// A preview with no text buffer behind it — a picture, a directory, a
+    /// A preview with no text buffer behind it: a picture, a directory, a
     /// binary. There is nothing to type into, so the arrows scroll the view.
     View,
     /// The editor, and the one key that leaves it.
@@ -155,7 +155,7 @@ impl Context {
 ///
 /// One key differs, and only on Windows: Windows Terminal, and the Windows
 /// console with its Ctrl shortcuts on, paste the clipboard on `Ctrl+V` before
-/// tiny sees the key — so a file paste there ships on `Ctrl+P`, which reaches
+/// tiny sees the key, so a file paste there ships on `Ctrl+P`, which reaches
 /// the program. Everything else is the same keyboard everywhere.
 ///
 /// Decided once, by [`Keyboard::detect`] in `main`, and passed in rather than
@@ -165,7 +165,7 @@ impl Context {
 pub enum Keyboard {
     #[default]
     Standard,
-    /// Windows Terminal — native, or under WSL — or the Windows console.
+    /// Windows Terminal (native, or under WSL) or the Windows console.
     Windows,
 }
 
@@ -202,7 +202,7 @@ impl Keyboard {
 /// Every key tiny acts on, by name.
 ///
 /// The order here is the order the keybinds window lists them in, and the
-/// index into [`Keymap`]'s table — so adding one in the middle is fine, but it
+/// index into [`Keymap`]'s table, so adding one in the middle is fine, but it
 /// must also gain a row in [`TABLE`]. The `every_action_is_in_the_table` test
 /// checks that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,7 +223,7 @@ pub enum Action {
     Copy,
     Paste,
     // In every pane that has them. One name for one movement, however many
-    // panes can make that movement — see the module docs.
+    // panes can make that movement, see the module docs.
     Up,
     Down,
     Left,
@@ -586,7 +586,7 @@ const RENAMED: &[(&str, &str)] = &[
 ];
 
 /// Names an older tiny wrote for actions that are gone. Each was a second way
-/// to do something another key already does — see the module docs — so an
+/// to do something another key already does (see the module docs) so an
 /// override of one is dropped rather than guessed onto a neighbor, where it
 /// could take a key like Esc away from the action that needs it.
 const RETIRED: &[&str] = &[
@@ -600,7 +600,7 @@ const RETIRED: &[&str] = &[
 
 /// Bring a `[keys]` section written by an older tiny up to date, in place.
 ///
-/// A renamed action keeps its override under the new name — unless the new
+/// A renamed action keeps its override under the new name, unless the new
 /// name has one of its own, which is the more recent choice and wins. A retired
 /// one is dropped. Anything else is left alone, including names nobody
 /// answers to: those are typos, and [`Keymap::new`] says so.
@@ -662,7 +662,7 @@ impl Action {
     /// The keys this action ships with on a [`Keyboard::Standard`] terminal,
     /// as they would be written in the config.
     ///
-    /// The keyboard someone actually has may differ — see [`Keyboard`] — so
+    /// The keyboard someone actually has may differ (see [`Keyboard`]) so
     /// anything comparing against "the shipped key" wants
     /// [`Keymap::shipped`], not this.
     pub fn defaults(self) -> &'static str {
@@ -677,8 +677,8 @@ impl Action {
 /// What every key does, right now.
 ///
 /// Built from [`Action::defaults`] with the config's overrides laid on top, so
-/// a binding that is not mentioned in the config is whatever tiny shipped with
-/// — including one added in a later version.
+/// a binding that is not mentioned in the config is whatever tiny shipped with,
+/// including one added in a later version.
 #[derive(Debug, Clone)]
 pub struct Keymap {
     /// One entry per row of [`TABLE`], in the same order, so an action's keys
@@ -728,7 +728,7 @@ impl Keymap {
     /// The keys `action` ships with on the keyboard this map was built for.
     ///
     /// What "back to the shipped key" means, and what an override is compared
-    /// against — both of which differ by terminal, so neither can read the
+    /// against. Both differ by terminal, so neither can read the
     /// table directly.
     pub fn shipped(&self, action: Action) -> &'static str {
         self.keyboard.defaults(action)
@@ -745,7 +745,7 @@ impl Keymap {
     ///
     /// A global bound to a bare character does not fire here: in a file, or a
     /// commit message, that character is the character. Chords still do, which
-    /// is what they are for — `Ctrl+S` saves from inside a file and `s` is an
+    /// is what they are for: `Ctrl+S` saves from inside a file and `s` is an
     /// s.
     ///
     /// This is what lets one `search` action carry both `ctrl+f` and `/`,
@@ -893,7 +893,7 @@ mod tests {
     }
 
     /// The keys a stock macOS Terminal never delivers, or delivers as
-    /// something else — see the module docs.
+    /// something else, see the module docs.
     fn reaches_a_mac(key: &str) -> bool {
         let key = key.to_ascii_lowercase();
         let dead = key.starts_with('f') && key.len() > 1 && key[1..].parse::<u8>().is_ok()

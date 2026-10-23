@@ -1,8 +1,8 @@
-//! What a command would do, here, now — and then doing it.
+//! What a command would do, here, now, and then doing it.
 //!
 //! [`super::sentence`] reads a line into words with parts; this is the half
 //! that knows the project. It finds the files a sentence names, counts what a
-//! replace would touch, and settles every question into a [`Plan`] — which
+//! replace would touch, and settles every question into a [`Plan`], which
 //! the bar describes while you type, and which Enter carries out. The two are
 //! one thing on purpose: the line under the bar says what Enter will do
 //! because it is reading the very plan Enter will follow.
@@ -13,7 +13,7 @@
 //! name up the way a person would mean it: as a path from the folder you are
 //! in, then from the top of the project, then as the name of any one file or
 //! folder anywhere in it. When several answer to a name the plan stops and
-//! lists them, rather than picking one — copying into the wrong `notes` is
+//! lists them rather than picking one: copying into the wrong `notes` is
 //! worse than being asked which.
 //!
 //! The project's files are listed once while the bar is open, so looking a
@@ -42,8 +42,8 @@ const MAX_SPOTS: usize = 1000;
 /// functions answer to a name: it says it will look, and Enter looks.
 const MAX_PREVIEW_CODE_FILES: usize = 2000;
 
-/// Every file and folder in the project, listed once for looking names up in
-/// — and, once a `goto` has asked, every definition and heading in it, so
+/// Every file and folder in the project, listed once for looking names up in,
+/// and, once a `goto` has asked, every definition and heading in it, so
 /// typing the rest of a name filters a list rather than reading the project
 /// again.
 #[derive(Debug, Default)]
@@ -57,7 +57,7 @@ pub struct Names {
 }
 
 impl Names {
-    /// Every file and folder name, each once, sorted — what Tab offers. A
+    /// Every file and folder name, each once, sorted: what Tab offers. A
     /// folder's ends with a separator, the way a typed path to one would, so
     /// Tab can carry straight on into it.
     pub fn all_names(&self) -> Vec<String> {
@@ -90,7 +90,7 @@ enum Want {
 /// A command with every name in it found and every count counted.
 #[derive(Debug)]
 pub(super) enum Plan {
-    /// Go to one of several places — `which` is the one this run goes to.
+    /// Go to one of several places: `which` is the one this run goes to.
     Jump {
         spots: Vec<Hit>,
         which: usize,
@@ -224,7 +224,7 @@ impl App {
             Want::Either => names.files.iter().chain(&names.folders).collect(),
         };
         // The whole name first; then, for a file, the name without its
-        // extension — `goto file readme` is plainly README.md.
+        // extension: `goto file readme` is plainly README.md.
         let by_name: Vec<&PathBuf> = pool
             .iter()
             .copied()
@@ -381,8 +381,8 @@ impl App {
                     .join(" ");
                 // While it is being typed, a word tiny does not know is most
                 // likely a verb half-written. Only a file or folder that
-                // answers to it is looked for — reading the whole project for
-                // `cop` on the way to `copy` would be a waste — and Enter
+                // answers to it is looked for (reading the whole project for
+                // `cop` on the way to `copy` would be a waste) and Enter
                 // looks for the rest.
                 if self.planning_for_preview {
                     return match self.find(&Place::Named(whole.clone()), Want::Either) {
@@ -407,7 +407,7 @@ impl App {
     /// Where something copied or moved to `to` ends up.
     ///
     /// A folder that answers to the name is gone *into*, when `into` allows
-    /// it; otherwise `to` is the new name — beside the original if it is a
+    /// it; otherwise `to` is the new name: beside the original if it is a
     /// bare name, from the top of the project if it has a slash in it.
     fn destination(&mut self, from: &Path, to: &str, into: bool) -> Result<PathBuf, String> {
         let name = from
@@ -556,8 +556,8 @@ impl App {
             .collect())
     }
 
-    /// Every definition in `files`, by tree-sitter — the same reading the map
-    /// does — from the open buffer where there is one, unsaved edits and all.
+    /// Every definition in `files`, by tree-sitter (the same reading the map
+    /// does) from the open buffer where there is one, unsaved edits and all.
     fn read_definitions(&self, files: &[PathBuf]) -> Vec<(String, Hit)> {
         let code: Vec<&PathBuf> = files
             .iter()
@@ -590,7 +590,7 @@ impl App {
     }
 
     /// Markdown headings with `name` in them, ignoring case, in one file or
-    /// the whole project — the ones that say exactly that first.
+    /// the whole project: the ones that say exactly that first.
     fn headings(&mut self, name: &str, file: Option<PathBuf>) -> Vec<Hit> {
         let all = match file {
             Some(f) => self.read_headings(&[f]),
@@ -650,7 +650,7 @@ impl App {
         .collect()
     }
 
-    /// Every line `what` is on, as a whole word or anywhere — in one file, or
+    /// Every line `what` is on, as a whole word or anywhere, in one file, or
     /// across the project.
     fn occurrences(&mut self, what: &str, file: Option<PathBuf>, whole: bool) -> Vec<Hit> {
         let Some(m) = Matcher::new(what) else {
@@ -729,7 +729,7 @@ impl App {
 
     // ---- saying what it will do --------------------------------------------
 
-    /// What Enter would do, in a few words — the line under the bar.
+    /// What Enter would do, in a few words: the line under the bar.
     pub(super) fn describe(&self, plan: &Plan) -> String {
         match plan {
             Plan::Jump { spots, which, what } => {
@@ -813,7 +813,7 @@ impl App {
 
     // ---- doing it -----------------------------------------------------------
 
-    /// Carry a plan out, returning the status line to show — empty when the
+    /// Carry a plan out, returning the status line to show, empty when the
     /// work set its own.
     pub(super) fn carry_out(&mut self, plan: Plan, line: &str) -> anyhow::Result<String> {
         match plan {
@@ -916,7 +916,7 @@ impl App {
         }
     }
 
-    /// Replace in one file, in its buffer, as one step `Ctrl+Z` takes back —
+    /// Replace in one file, in its buffer, as one step `Ctrl+Z` takes back,
     /// then open it, so that `Ctrl+Z` is right there.
     ///
     /// A file with no unsaved edits is saved straight after, so the disk says
@@ -1004,7 +1004,7 @@ fn is_markdown(path: &Path) -> bool {
     })
 }
 
-/// The title of a markdown heading line — `## Install` is `Install` — or
+/// The title of a markdown heading line (`## Install` is `Install`) or
 /// `None` for any other line.
 fn heading_text(line: &str) -> Option<&str> {
     let hashes = line.chars().take_while(|c| *c == '#').count();

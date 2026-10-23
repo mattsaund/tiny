@@ -1,7 +1,7 @@
 # The three platforms tiny claims to run on, on every push.
 #
 # The claim is the point. tiny is developed on Linux, so "it works on Windows
-# and macOS" is otherwise a thing nobody has watched happen — and the ways it
+# and macOS" is otherwise a thing nobody has watched happen, and the ways it
 # breaks are exactly the ones a Linux machine cannot show you: a `\` where a `/`
 # was expected, a temp directory that is a symlink, a short name like
 # `RUNNER~1`, a shell that turns stderr into an error.
@@ -64,7 +64,7 @@ jobs:
 
       # The docs are half this codebase and they can break: an intra-doc link
       # to something that has been renamed is a warning, and warnings are easy
-      # to walk past locally. Not on the matrix by accident — some items are
+      # to walk past locally. Not on the matrix by accident: some items are
       # behind `cfg(windows)`, and their links only resolve where they compile.
       - name: Check the documentation
         env:
@@ -72,7 +72,7 @@ jobs:
         run: cargo doc --locked --no-deps --document-private-items
 
   # `rust-version` in Cargo.toml is a promise, and `install.sh` will build with
-  # whatever `cargo` it finds — including the older one a distribution ships.
+  # whatever `cargo` it finds, including the older one a distribution ships.
   # This is the job that keeps the promise true.
   msrv:
     name: build on the oldest Rust we claim
@@ -114,7 +114,7 @@ jobs:
         run: sh -n install.sh
 
       # Both PowerShells. 5.1 is the one every copy of Windows has, and it
-      # reads a script file differently from 7 — which is how a script that
+      # reads a script file differently from 7, which is how a script that
       # parsed perfectly in 7 could still fail on a real machine.
       - name: Parse install.ps1 in PowerShell 7
         if: runner.os == 'Windows'
@@ -145,7 +145,7 @@ jobs:
             echo "install.ps1 must be plain ASCII (lines above)"; exit 1
           fi
 
-  # The installers end to end, the way someone would run them — from a
+  # The installers end to end, the way someone would run them: from a
   # directory that is not the checkout, so they take the real path: download
   # the release if there is one, otherwise clone the branch and build it.
   # Pushes only, because a pull request's merge ref is not a branch the
@@ -163,7 +163,7 @@ jobs:
           TINY_PREFIX: ${{ runner.temp }}\tinybin
           # Build, do not download. Once a release exists the installer would
           # rightly prefer it, and this job would quietly stop testing the
-          # commit that was just pushed — which is the whole point of it.
+          # commit that was just pushed, which is the whole point of it.
           TINY_FROM_SOURCE: 1
         run: |
           Set-Location $env:RUNNER_TEMP
@@ -241,7 +241,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
   # The README leads with screenshots, and a moved file turns them into broken
-  # images on the front page of the project — which is the one page everybody
+  # images on the front page of the project, which is the one page everybody
   # sees and nobody tests.
   pictures:
     name: the README's pictures are there

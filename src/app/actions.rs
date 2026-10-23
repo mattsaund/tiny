@@ -26,7 +26,7 @@ use super::preview::Preview;
 const TREE_WIDTH_STEP: f32 = 0.05;
 
 /// The narrowest and widest the browser goes, matching what `Config::sanitized`
-/// will accept — a pane the keys could reach but the config would clamp back
+/// will accept; a pane the keys could reach but the config would clamp back
 /// would be a width that changed by itself on the next restart.
 const TREE_WIDTH_MIN: f32 = 0.10;
 const TREE_WIDTH_MAX: f32 = 0.60;
@@ -39,7 +39,7 @@ impl App {
     ///
     /// This is the "inwards" key, and the mirror of
     /// [`App::collapse_or_parent`]: holding it down walks you down a branch.
-    /// Enter is deliberately different — see [`App::toggle_or_open`].
+    /// Enter is deliberately different, see [`App::toggle_or_open`].
     pub(super) fn activate(&mut self) {
         let Some(row) = self.selected_row().cloned() else {
             return;
@@ -61,7 +61,7 @@ impl App {
     ///
     /// Unlike [`App::activate`], the cursor never moves. Pressing Enter twice
     /// on a folder leaves the tree exactly as it was found, which is what most
-    /// file browsers do and what the key reads as — one thing, toggled.
+    /// file browsers do and what the key reads as: one thing, toggled.
     pub(super) fn toggle_or_open(&mut self) {
         let Some(row) = self.selected_row().cloned() else {
             return;
@@ -77,7 +77,7 @@ impl App {
     /// Open whatever the cursor is on.
     ///
     /// Every text file opens the same way: into the editor, with the cursor in
-    /// it. There is no reading mode to pass through — markdown keeps its
+    /// it. There is no reading mode to pass through: markdown keeps its
     /// formatting while you edit it (see `ui::live_rows`), so the rendered
     /// view was a step that no longer bought anything.
     ///
@@ -159,7 +159,7 @@ impl App {
     ///
     /// The two ends of the range meet the fold key rather than stopping dead.
     /// Narrowing past the minimum folds the browser away, and widening from
-    /// there brings it back — so one pair of keys covers everything from "gone"
+    /// there brings it back, so one pair of keys covers everything from "gone"
     /// to "most of the window", and you never have to remember a second chord
     /// to get out of the corner you just walked into.
     ///
@@ -169,7 +169,7 @@ impl App {
     /// still there for a width you want to keep.
     pub(super) fn resize_tree_pane(&mut self, step: i32) {
         // The source window's left column is the same width, and resized by
-        // the same keys — but it cannot be folded away. Folding the browser
+        // the same keys, but it cannot be folded away. Folding the browser
         // gives the file the whole screen, which is a thing you want; folding
         // the change list leaves that window with nothing in it.
         if self.window == Window::Source {
@@ -204,7 +204,7 @@ impl App {
     }
 
     /// `Ctrl+N`: another tiny on this project, in a new window of the
-    /// terminal this one is running in — see [`crate::terminal`].
+    /// terminal this one is running in, see [`crate::terminal`].
     pub(super) fn open_new_window(&mut self) {
         let root = self.root().to_path_buf();
         self.status = match crate::terminal::open_window(&root) {
@@ -214,7 +214,7 @@ impl App {
     }
 
     /// Put the tree on screen and give it the keyboard. What Esc means from
-    /// the preview, whether or not the tree was folded away — "back to the
+    /// the preview, whether or not the tree was folded away: "back to the
     /// tree" has to end up at the tree either way.
     pub(super) fn focus_tree(&mut self) {
         self.tree_hidden = false;
@@ -222,7 +222,7 @@ impl App {
     }
 
     /// `.`: show or hide dotfiles. Writes through to the config so the setting
-    /// is consistent with `*set show_hidden`, but does not persist it — that
+    /// is consistent with `*set show_hidden`, but does not persist it; that
     /// still needs an explicit save.
     pub(super) fn toggle_hidden(&mut self) {
         let next = !self.tree.show_hidden();
@@ -258,7 +258,7 @@ impl App {
         self.request_quit_to("quitting");
     }
 
-    /// [`request_quit`](Self::request_quit), naming why tiny is leaving —
+    /// [`request_quit`](Self::request_quit), naming why tiny is leaving:
     /// "before updating" is a different question from "before quitting" to
     /// someone deciding whether to save.
     pub(super) fn request_quit_to(&mut self, why: &str) {
@@ -287,7 +287,7 @@ impl App {
     ///
     /// A failed write cancels the quit. Someone who asked to save on the way
     /// out and is told the save failed has not been given the chance to do
-    /// anything about it if the program exits anyway — so tiny stays open with
+    /// anything about it if the program exits anyway, so tiny stays open with
     /// the failure on the status line, and Ctrl+Q asks again.
     pub(super) fn save_all_and_quit(&mut self) {
         let mut dirty: Vec<PathBuf> = self

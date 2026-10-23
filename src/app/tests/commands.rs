@@ -2,7 +2,7 @@
 //!
 //! One test per command, plus the argument splitting they all share, plus what
 //! happens when you try to leave with unsaved work. The screenshot harness
-//! lives at the end — it is `#[ignore]`d and exists to render a real frame
+//! lives at the end; it is `#[ignore]`d and exists to render a real frame
 //! into the terminal for a human to look at.
 
 use super::*;
@@ -224,7 +224,10 @@ fn help_is_short_words_and_each_key_once() {
     let rows: Vec<&str> = out.lines().filter(|l| l.contains('│')).collect();
     for row in &rows {
         let text = row.trim_matches(|c: char| c == '│' || c.is_whitespace());
-        assert!(!text.contains(" — "), "a sentence crept back in: {text}");
+        assert!(
+            !text.contains(" \u{2014} "),
+            "a sentence crept back in: {text}"
+        );
     }
     let enters = rows.iter().filter(|r| r.contains("enter ")).count();
     assert_eq!(enters, 1, "Enter is listed once:\n{out}");
@@ -291,7 +294,7 @@ fn the_help_window_shows_a_rebinding_not_the_shipped_key() {
 fn an_unbound_action_leaves_the_help_row_empty_rather_than_lying() {
     let (_td, mut app) = fixture();
     // Ctrl+S is taken off `save` by giving it to another action in the same
-    // context — `save` is what the help row for saving reads.
+    // context: `save` is what the help row for saving reads.
     keybinds_on(&mut app, Action::Copy);
     app.on_key(k(KeyCode::Enter));
     app.on_key(ctrl('s'));
@@ -315,7 +318,7 @@ fn a_wide_window_puts_keys_and_commands_side_by_side() {
     let (_td, mut app) = fixture();
     app.on_key(ch('?'));
     let rows = screen(&mut app, 130, 46);
-    // Whichever command happens to line up with it — the point is that a
+    // Whichever command happens to line up with it: the point is that a
     // key and a command share a row.
     assert!(
         rows.iter().any(|r| r.contains("ends") && r.contains('*')),
@@ -434,7 +437,7 @@ fn arrow(c: char) -> Option<KeyCode> {
     }
 }
 
-/// Not an assertion — a way to look at the panes.
+/// Not an assertion: a way to look at the panes.
 /// `TINY_SHOT=/path cargo test screenshot -- --ignored --nocapture`
 ///
 /// `TINY_SHOT_KEYS` sentinels: `^x` Ctrl+X, `^→` Ctrl+Right, `^⇧→`
@@ -445,7 +448,7 @@ fn arrow(c: char) -> Option<KeyCode> {
 /// a shot can be taken of the update question.
 ///
 /// `TINY_SHOT_CELLS=file` also writes every cell, with its colors and
-/// modifiers, one per line — what a picture for the README is drawn from.
+/// modifiers, one per line: what a picture for the README is drawn from.
 #[test]
 #[ignore]
 fn screenshot() {
@@ -469,8 +472,8 @@ fn screenshot() {
             match c {
                 // `^b` sends Ctrl+B, so a shot can be taken of anything a
                 // key can reach.
-                // `^x` is Ctrl+X, and `^` before an arrow — or before a
-                // `⇧` and an arrow — is that chord with the modifiers on it.
+                // `^x` is Ctrl+X, and `^` before an arrow (or before a
+                // `⇧` and an arrow) is that chord with the modifiers on it.
                 '^' => match chars.next() {
                     Some('⇧') => {
                         if let Some(code) = chars.next().and_then(arrow) {

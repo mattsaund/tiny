@@ -368,7 +368,7 @@ fn a_search_from_inside_a_file_lists_that_files_hits_first() {
     let from_tree = b.results.len();
     app.on_key(k(KeyCode::Esc));
 
-    // From inside zzz.md, its own hits come out on top — and every other hit
+    // From inside zzz.md, its own hits come out on top, and every other hit
     // is still in the list, further down.
     select(&mut app, "zzz.md");
     app.on_key(k(KeyCode::Enter));

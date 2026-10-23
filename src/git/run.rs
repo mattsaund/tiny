@@ -1,4 +1,4 @@
-//! Starting `git`, and waiting for it — or not.
+//! Starting `git`, and waiting for it, or not.
 //!
 //! # Two ways, split by what they wait on
 //!
@@ -8,7 +8,7 @@
 //!
 //! Talking to a remote is neither. A push over a slow link is seconds at best,
 //! and a synchronous one would freeze the window with no way to say what it was
-//! doing — the worst possible moment to look broken. [`Job::start`] runs those
+//! doing: the worst possible moment to look broken. [`Job::start`] runs those
 //! on a thread and hands back a receiver; the event loop already wakes twice a
 //! second for the disk watcher, and it collects finished jobs on the same tick.
 //!
@@ -56,8 +56,8 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
 
 /// A git command running somewhere else, with its answer still to come.
 ///
-/// Held on `App` while it runs. Nothing else can start while one is in flight —
-/// see `App::start_job` — because two pushes at once is not a thing anyone
+/// Held on `App` while it runs. Nothing else can start while one is in flight
+/// (see `App::start_job`) because two pushes at once is not a thing anyone
 /// means to do, and a queue would only hide the first one's failure.
 pub struct Job {
     /// What to call it on screen: `pushing`, `pulling`.

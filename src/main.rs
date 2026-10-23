@@ -1,4 +1,4 @@
-//! tiny — a terminal knowledge manager.
+//! tiny: a terminal knowledge manager.
 //!
 //! Left pane is the project tree, right pane is whatever the cursor is on:
 //! markdown renders, code opens in an editor, pictures are described and
@@ -8,15 +8,15 @@
 //!
 //! Reading top to bottom, the program is four layers:
 //!
-//! 1. **Startup** — this file. Parse the command line, work out what to open
+//! 1. **Startup**: this file. Parse the command line, work out what to open
 //!    ([`files::project`]), load configuration ([`config`]), then hand control
 //!    to a plain blocking event loop.
-//! 2. **State** — [`app`]. One `App` struct owns everything mutable: the tree
+//! 2. **State**: [`app`]. One `App` struct owns everything mutable: the tree
 //!    cursor, the open buffers, the current mode, the status line. Every
 //!    keypress goes through `App::handle_key`.
-//! 3. **Drawing** — [`ui`]. Reads `App` and paints a frame. It is deliberately
+//! 3. **Drawing**: [`ui`]. Reads `App` and paints a frame. It is deliberately
 //!    the only module that knows about ratatui widgets.
-//! 4. **Support** — three folders of self-contained machinery that `app` and
+//! 4. **Support**: three folders of self-contained machinery that `app` and
 //!    `ui` call into: [`text`] (the buffer, markdown, highlighting, search),
 //!    [`files`] (the tree, project resolution, media), and [`map`] (the link
 //!    graph and the view of it), with [`parallel`] spreading the two
@@ -31,7 +31,7 @@
 //! `ui` never handles input, and `app` never touches a ratatui widget. The
 //! sanctioned exceptions are all one thing: `ui` writes back scroll offsets
 //! and the syntax-highlighting cache, because neither can be computed until
-//! the pane size is known — and the pane size is only known while drawing.
+//! the pane size is known, and the pane size is only known while drawing.
 //! `ui`'s own module docs list them. If you find yourself wanting another,
 //! that is usually a sign the state belongs on `App` instead.
 //!
@@ -39,7 +39,7 @@
 //!
 //! There is no background thread. `run` waits for the keyboard and redraws
 //! once when something arrives, so nothing happens between keypresses that the
-//! user did not cause — with one exception. The wait has a timeout, and each
+//! user did not cause, with one exception. The wait has a timeout, and each
 //! time it expires the loop asks three questions: has anything on screen been
 //! changed by another program (see [`app`'s disk watcher](app)), has a git
 //! push or pull finished on its thread, and has the [`update`] check come
@@ -49,7 +49,7 @@
 //!
 //! Everything is still synchronous: a slow search or a big graph build freezes
 //! the UI while it runs, so anything expensive needs its own budget (see the
-//! size caps in `text::search`, `map::graph`, and `text::highlight`) — and the
+//! size caps in `text::search`, `map::graph`, and `text::highlight`), and the
 //! two that touch every file in the project use every core to do it.
 
 mod app;
@@ -82,7 +82,7 @@ use config::{CONF_NAME, Config, PLUGINS_NAME};
 /// argument parser: there are only seven options, and a contributor changing
 /// the CLI should be able to see the whole surface in one place.
 const USAGE: &str = "\
-tiny — a terminal knowledge manager
+tiny: an IDE, text editor, knowledge manager and file browser in the terminal
 
 USAGE:
     tiny                open the current directory
@@ -120,7 +120,7 @@ fn emit(text: &str) {
 
 /// Thin wrapper so the real work can use `?`.
 ///
-/// Errors are printed with `{e:#}`, which walks anyhow's whole context chain —
+/// Errors are printed with `{e:#}`, which walks anyhow's whole context chain,
 /// so "cannot open /nope: No such file or directory" reaches the user instead
 /// of just the innermost io error. Exit code 1 on failure, for scripts.
 fn main() {
@@ -132,7 +132,7 @@ fn main() {
 
 /// Startup, in the order things have to happen.
 ///
-/// The ordering here is not arbitrary — each step needs the one before it:
+/// The ordering here is not arbitrary; each step needs the one before it:
 ///
 /// 1. Handle the options that never touch the disk (`--help`, `--version`,
 ///    `--config`) and return early.
@@ -145,7 +145,7 @@ fn main() {
 ///
 /// There is one config file and it is read once, before anything else: which
 /// folder ends up open cannot change how the program behaves. Only one warning
-/// survives to the status bar, the more urgent first — a broken config file
+/// survives to the status bar, the more urgent first: a broken config file
 /// beats "we just wrote you a config file".
 fn real_main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -193,20 +193,20 @@ fn real_main() -> Result<()> {
     let warning = warn_config.or(warn_first_run);
     let mut app = App::new(target, cfg, warning)?;
     // Which keys the terminal keeps for itself is known from the environment
-    // alone, so it is settled before the first frame — see `Keyboard`.
+    // alone, so it is settled before the first frame, see `Keyboard`.
     app.set_keyboard(Keyboard::detect());
-    // The plugins, from the one real folder — the app is only ever told where
+    // The plugins, from the one real folder: the app is only ever told where
     // it is from here, so a test never loads anybody's plugins.
     app.plugins_dir = Config::plugins_dir();
     app.load_plugins();
     app.tell_plugins_what_is_open();
     // A release build asks, once, whether there is a newer one. A debug build
-    // is somebody working on tiny, and is left alone — see `update`.
+    // is somebody working on tiny, and is left alone, see `update`.
     if app.config.update_check && !cfg!(debug_assertions) {
         app.start_update_check(false);
     }
 
-    // A clean message beats a panic when there is no terminal to draw on —
+    // A clean message beats a panic when there is no terminal to draw on:
     // piping the binary or running it from a script hits this.
     let mut terminal = ratatui::try_init().map_err(|e| {
         anyhow!("no interactive terminal available ({e}); tiny needs a real terminal")
@@ -262,13 +262,13 @@ fn hand_back_the_terminal_on_panic() {
 ///
 /// Half a second reads as "instantly" for a file changed by another program
 /// while you are looking at it, and costs a stat of each open file and each
-/// open directory twice a second — microseconds. Shorter would not be
+/// open directory twice a second: microseconds. Shorter would not be
 /// noticeably quicker; much longer starts to feel like the screen is lying.
 const IDLE: Duration = Duration::from_millis(500);
 
 /// The event loop: draw, wait for something to happen, dispatch, repeat.
 ///
-/// Note the order — the frame is drawn *before* the quit check, so the last
+/// Note the order: the frame is drawn *before* the quit check, so the last
 /// action a user takes is visible on screen before the program exits.
 ///
 /// The inner loop is what keeps "one frame per thing that happened" true now
@@ -286,8 +286,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
         }
         loop {
             if !event::poll(IDLE)? {
-                // Nobody typed anything. Has anyone else been writing — has
-                // the push we started come back — is there a newer tiny?
+                // Nobody typed anything. Has anyone else been writing, has
+                // the push we started come back, is there a newer tiny?
                 // Each is asked every time: one with news must not keep the
                 // others from being heard.
                 let git = app.poll_git_job();
@@ -301,8 +301,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             dispatch(app, event::read()?);
             break;
         }
-        // Whatever else arrived while that was being handled — fast typing, a
-        // paste — is taken now, before the one frame it will all appear in.
+        // Whatever else arrived while that was being handled (fast typing, a
+        // paste) is taken now, before the one frame it will all appear in.
         // Each key is cheap on its own; what is not, a search of the whole
         // project, waits for `settle` and happens once for the lot.
         while !app.should_quit && event::poll(Duration::ZERO)? {
@@ -320,8 +320,8 @@ fn dispatch(app: &mut App, event: Event) {
         Event::Key(k) if matches!(k.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
             app.handle_key(k)
         }
-        // One notch, one line. Everything else the mouse reports — moves,
-        // clicks, drags — is deliberately ignored: tiny is a keyboard program,
+        // One notch, one line. Everything else the mouse reports (moves,
+        // clicks, drags) is deliberately ignored: tiny is a keyboard program,
         // and the wheel is only here because three-line jumps make a page hard
         // to read.
         Event::Mouse(m) => match m.kind {
@@ -348,11 +348,11 @@ fn dispatch(app: &mut App, event: Event) {
 /// its own to take back. Deleting notes is not what removing a program means.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Removal {
-    /// The running binary — whatever `tiny` you just typed.
+    /// The running binary: whatever `tiny` you just typed.
     bin: Option<PathBuf>,
     /// `tiny.conf`, if one was ever written.
     conf: Option<PathBuf>,
-    /// The plugins folder, only when there is nothing in it — the settings
+    /// The plugins folder, only when there is nothing in it: the settings
     /// area's button makes it, and an empty one is nobody's work. One with
     /// plugins in it stays, and so does the folder around it.
     plugins_dir: Option<PathBuf>,
@@ -362,7 +362,7 @@ struct Removal {
     conf_dir: Option<PathBuf>,
     /// The `--root` cargo installed into, when its bookkeeping names tiny.
     /// `cargo uninstall` is then the right way to remove the binary, because
-    /// it also forgets the entry — unlinking alone leaves cargo believing
+    /// it also forgets the entry; unlinking alone leaves cargo believing
     /// tiny is still installed.
     cargo_root: Option<PathBuf>,
 }
@@ -441,7 +441,7 @@ impl Removal {
 
     /// Delete everything, collecting failures rather than stopping at the
     /// first. A config file that will not budge should not leave the binary
-    /// behind as well — you would have to run the uninstaller again to finish,
+    /// behind as well; you would have to run the uninstaller again to finish,
     /// and it would have less to work with the second time.
     ///
     /// Config goes before the binary so that a failure part-way leaves `tiny`

@@ -1,15 +1,15 @@
 #!/bin/sh
-# Install tiny — a terminal knowledge manager.
+# Install tiny on Linux or macOS.
 #
 #   curl -fsSL https://raw.githubusercontent.com/mattsaund/tiny/main/install.sh | sh
 #
 # It downloads the ready-made binary from the latest GitHub release, for macOS
 # or Linux, Intel or ARM. Only when there is none for this machine, or it will
 # not run here, or this is run from inside a checkout, does it build from
-# source — fetching the source itself when piped from the web.
+# source, fetching the source itself when piped from the web.
 #
-# Then it offers what tiny reaches for while it runs — git for the git window,
-# ffmpeg for video and audio details, xdg-utils to open files on Linux — with
+# Then it offers what tiny reaches for while it runs (git for the git window,
+# ffmpeg for video and audio details, xdg-utils to open files on Linux) with
 # the system's own package manager, in one question. tiny runs without them.
 #
 # Override anything with the environment:
@@ -42,7 +42,7 @@ ask() {
 
 # A temporary directory, and a temporary file.
 #
-# `mktemp -d` with no template is a GNU extension. BSD's — which is macOS's —
+# `mktemp -d` with no template is a GNU extension. BSD's (which is macOS's)
 # wants either a template or `-t`, and exits with a usage message otherwise, so
 # a script that only knows the GNU spelling dies on a Mac before it has done
 # anything. Try the short form, fall back to the form both understand.
@@ -64,14 +64,14 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Whether it is worth drawing anything that moves. A log file, a CI job or a
-# pipe gets plain lines instead — a progress bar redrawn with carriage returns
+# pipe gets plain lines instead: a progress bar redrawn with carriage returns
 # into a file is a single unreadable line thousands of characters long.
 tty_out() { [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; }
 
 # Put the binary at $1 in $PREFIX, over whatever tiny is already there.
 #
 # Copied in beside the old one and renamed over it. A rename replaces a program
-# even while it runs — which it is, when tiny is updating itself — without
+# even while it runs (which it is, when tiny is updating itself) without
 # touching the copy it is running from; writing over it in place would not,
 # and a copy from a temporary directory on another disk is a write.
 put_in_place() {
@@ -84,7 +84,7 @@ put_in_place() {
 
 # --- the system's package manager ---------------------------------------------
 
-# The package manager this system has, by the name of its command — the
+# The package manager this system has, by the name of its command: the
 # distribution's own first, Homebrew last. Nothing when there is none.
 package_manager() {
     for pm in apt-get dnf pacman zypper apk brew; do
@@ -190,17 +190,17 @@ offer_extras() {
     say "tiny can also use these, which are not installed:$why"
     pm=$(package_manager)
     if [ -z "$pm" ]; then
-        say "install them to turn those on — tiny works without them"
+        say "install them to turn those on; tiny works without them"
         return 0
     fi
     say "Install them with $pm?"
     if ! ask; then
-        say "skipped — tiny works without them"
+        say "skipped; tiny works without them"
         return 0
     fi
     # `$missing` is split into words on purpose: one package per word.
     install_packages "$pm" $missing \
-        || say "not all of them installed — tiny works without them"
+        || say "not all of them installed; tiny works without them"
 }
 
 # What to say once there is a binary, from either route to one.
@@ -234,12 +234,12 @@ finish() {
 
 # --- a ready-made binary -----------------------------------------------------
 #
-# Building needs Rust, and on a Mac the Xcode command line tools as well — a
-# large download to try a small program — so this takes the binary the release
+# Building needs Rust, and on a Mac the Xcode command line tools as well (a
+# large download to try a small program), so this takes the binary the release
 # workflow built, and only builds when there is none to take.
 #
 # A Linux binary is linked against the C library of the system that built it,
-# and will not start on an older one, or on a different one — Alpine's musl.
+# and will not start on an older one, or on a different one, like Alpine's musl.
 # So it is asked its version before it replaces anything, and a binary that
 # cannot answer is a reason to build instead.
 #
@@ -319,7 +319,7 @@ if [ "$(uname -s)" = Darwin ] \
 fi
 
 # Linux links with its C compiler too, and tiny compiles a little C of its
-# own — the map's parsers, and Lua for plugins. A minimal system often has
+# own: the map's parsers, and Lua for plugins. A minimal system often has
 # none, and the build would fail at the first crate that needs it.
 if [ "$(uname -s)" != Darwin ] && ! { have cc || have gcc || have clang; }; then
     say "Building tiny needs a C compiler, and this system has none."
@@ -341,7 +341,7 @@ if ! have cargo; then
         # Single quotes inside: backquotes in a double-quoted string are a
         # command substitution, so this line used to *run* the uninstaller.
         say "and 'rustup self uninstall' removes it again."
-        ask || die "cargo is required — see https://rustup.rs"
+        ask || die "cargo is required: see https://rustup.rs"
         have curl || die "curl is required to fetch rustup"
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain stable
@@ -376,13 +376,13 @@ mkdir -p "$PREFIX"
 # padded, because a shorter name has to wipe the longer one it replaced and no
 # clear-to-end-of-line escape is worth assuming.
 #
-# With no total — an old cargo, or a `cargo tree` that failed — it counts
+# With no total (an old cargo, or a `cargo tree` that failed) it counts
 # instead of filling. A bar that cannot say how far along it is should say so
 # rather than invent a denominator.
 #
 # This was an awk script, and the bar arrived in one burst at the end of the
 # build. The output was already flushed every frame, so it was not awk's
-# writing that was buffered — it was awk's *reading*. mawk, which is `awk` on
+# writing that was buffered; it was awk's *reading*. mawk, which is `awk` on
 # Debian and Ubuntu, fills a several-kilobyte input buffer before it runs a
 # single rule, so nothing reached the screen until cargo had printed enough to
 # fill it, which for a build is somewhere near the end. A `while read` loop has
@@ -441,7 +441,7 @@ watch_build() {
                     # tiny is always the last crate: everything it depends on
                     # has to exist before it can be built. So its arrival means
                     # the only work left is the link, however few `Compiling`
-                    # lines came before it — which is the ordinary case when
+                    # lines came before it, which is the ordinary case when
                     # the build directory is warm and the dependencies are all
                     # still there from last time.
                     if [ "$name" = tiny ] && [ "$TOTAL" -gt 0 ]; then
@@ -474,7 +474,7 @@ watch_build() {
         # let the log speak.
         cat >/dev/null
     fi
-    # The log is what actually says whether it worked — the loop's exit status
+    # The log is what actually says whether it worked: the loop's exit status
     # is its own, and the shell has no way to reach back for cargo's through a
     # pipe.
     ! grep -q 'tiny-install-failed' "$LOG"
@@ -482,12 +482,12 @@ watch_build() {
 
 # How many crates the bar is counting against.
 #
-# `cargo tree` lists the packages actually reachable at build time — normal and
-# build dependencies, no dev-dependencies — and cargo prints one `Compiling`
+# `cargo tree` lists the packages actually reachable at build time (normal and
+# build dependencies, no dev-dependencies) and cargo prints one `Compiling`
 # line for each. Asking cargo rather than writing a number down means the bar
 # stays right when the dependency list changes, and an old cargo that does not
 # know the command just leaves this empty, which turns the bar into a count.
-say "building — this takes a minute the first time"
+say "building (this takes a minute the first time)"
 draw "reading the dependency list"
 TOTAL=$(cargo tree --manifest-path "$SRC/Cargo.toml" \
             -e normal,build --prefix none --no-dedupe 2>/dev/null \
@@ -519,7 +519,7 @@ if ! build; then
     # only be one more confusing line among the ones that matter.
     say ""
     grep -v 'tiny-install-failed' "$LOG" | tail -n 30 >&2
-    die "build failed — the output above says why"
+    die "build failed: the output above says why"
 fi
 
 [ -x "$ROOT/bin/tiny" ] || die "the build finished without leaving a binary"

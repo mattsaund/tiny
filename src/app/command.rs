@@ -1,6 +1,6 @@
 //! Running a `*command`.
 //!
-//! Commands are the long tail — the things that deserve a name rather than a
+//! Commands are the long tail: the things that deserve a name rather than a
 //! key, and the things that need an argument. They are written as sentences:
 //! `*copy temp.txt to notes`, `*goto function main`, `*replace hi with hello
 //! in greetings.txt`. [`App::run_command`] is the whole of running one, in
@@ -42,8 +42,8 @@ impl App {
     /// The split is by what the thing *is*, not by how often it is done.
     /// Moving around and changing a file are keys: they happen constantly, in
     /// the middle of something else, and a key is the only shape fast enough.
-    /// Everything a command does is the other kind — deleting a path, re-reading
-    /// the disk, opening the settings, replacing a word across the project —
+    /// Everything a command does is the other kind (deleting a path, re-reading
+    /// the disk, opening the settings, replacing a word across the project)
     /// done deliberately, often with an argument to type, and none the worse
     /// for costing a sentence instead of a key.
     ///

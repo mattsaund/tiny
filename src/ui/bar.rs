@@ -1,13 +1,13 @@
 //! The two single-row strips: the bar, and the status line.
 //!
-//! Neither knows where it is. [`super::draw`] hands each one a row — the bar
-//! at the top, the status line at the bottom — and they fill it.
+//! Neither knows where it is. [`super::draw`] hands each one a row (the bar
+//! at the top, the status line at the bottom) and they fill it.
 //!
 //! The bar is one field that is three things: a search when it starts with
 //! anything, a command when it starts with the sigil, and the map's filter
 //! when the map is the window behind it. It decides which keystroke by
 //! keystroke rather than being opened in a mode, which is why there is only
-//! one of it — and why there is no separate filter box on the map.
+//! one of it, and why there is no separate filter box on the map.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -35,7 +35,7 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     let command = b.is_command();
     let sigil = if command { " * " } else { " / " };
     // The sigil is drawn as its own block, so the typed `*` is not shown a
-    // second time — and the cursor has to shift back past it to match.
+    // second time, and the cursor has to shift back past it to match.
     let (text, cursor) = if command {
         (b.command(), b.cursor.saturating_sub(1))
     } else {
@@ -69,7 +69,7 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
     } else {
         "  up/down pick | Enter jump | Esc close"
     };
-    // The real cursor lives in the editor, so the bar draws its own — on the
+    // The real cursor lives in the editor, so the bar draws its own: on the
     // next character of the line, or on the first character being offered when
     // there is nothing left of the line. Sitting it on a blank instead would
     // push the offer along by a space and break the word in half.
@@ -86,7 +86,7 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(ghost, pal.dim),
         Span::styled(hint, pal.dim),
     ]);
-    // Under a command, what Enter would do with it — or why it would not.
+    // Under a command, what Enter would do with it, or why it would not.
     // Read off the same plan Enter carries out, so the two cannot differ.
     let said = match &b.plan {
         Some(Ok(does)) => Some(Line::from(vec![
@@ -165,7 +165,7 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 // edge, and saying them twice is just more to read.
                 (Mode::Settings(_) | Mode::Keybinds(_), _) => String::new(),
                 (Mode::Bar(_), _) => "Esc close".into(),
-                // Written out in full rather than as `^S` — this line is the
+                // Written out in full rather than as `^S`; this line is the
                 // first place most people meet these keys, and a caret is a
                 // thing you have to already know.
                 //
@@ -201,7 +201,7 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// The right-hand end of the status line: how much disk the thing under the
-/// cursor takes, and — while editing — where in the file the cursor is.
+/// cursor takes, and (while editing) where in the file the cursor is.
 ///
 /// The size is there for every file and every folder, because "how big is
 /// this" is a question you ask of anything you are looking at. What used to be

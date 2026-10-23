@@ -1,9 +1,9 @@
 //! Turning git's output into values, with no process anywhere near it.
 //!
 //! Every function here is text in and values out, which is the whole point:
-//! the cases that are awkward to produce in a real repository — a rename whose
+//! the cases that are awkward to produce in a real repository (a rename whose
 //! two halves arrive as separate records, a conflicted file, a diff with no
-//! trailing newline — are tested as strings.
+//! trailing newline) are tested as strings.
 
 use super::{Branch, Change, Code, Diff, DiffLine, LineKind, Status};
 
@@ -124,7 +124,7 @@ fn code_of(c: char) -> Option<Code> {
 /// the reverse; a context line goes on both. The two sides therefore always
 /// have the same length, which is what makes reading across them mean anything.
 ///
-/// Runs of removals followed by additions — the ordinary shape of an edit — are
+/// Runs of removals followed by additions (the ordinary shape of an edit) are
 /// paired up rather than stacked, so a changed line sits opposite the line it
 /// replaced instead of below a column of blanks.
 pub fn diff(out: &str) -> Diff {

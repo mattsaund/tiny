@@ -192,8 +192,8 @@ fn markdown_previews_rendered_and_opens_into_the_editor() {
     app.on_key(k(KeyCode::Enter));
     assert_eq!(app.focus, Focus::Editor);
     let out = joined(&mut app);
-    // The cursor starts on the first line, so that block — and only that
-    // block — shows the hashes it was typed with.
+    // The cursor starts on the first line, so that block (and only that
+    // block) shows the hashes it was typed with.
     assert!(out.contains("# Design Notes"), "raw source shows:\n{out}");
     assert!(out.contains("EDIT"));
 }
@@ -227,7 +227,7 @@ fn editing_markdown_formats_every_block_but_the_cursor_s() {
     assert!(!out.contains("# Title"), "and the heading is not:\n{out}");
 
     // Into the list: the whole list unformats, not just the line under
-    // the cursor — half a list is not a list.
+    // the cursor; half a list is not a list.
     app.on_key(k(KeyCode::Down));
     app.on_key(k(KeyCode::Down));
     let out = joined(&mut app);

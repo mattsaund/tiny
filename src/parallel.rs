@@ -1,13 +1,13 @@
 //! Spreading one job over every core.
 //!
-//! The two things tiny does to a whole project at once — search it, and map
-//! it — are a loop over files where no file needs another's answer. Reading
+//! The two things tiny does to a whole project at once (search it, and map
+//! it) are a loop over files where no file needs another's answer. Reading
 //! and parsing them one at a time leaves every core but one idle while the
 //! user waits, so both hand the loop to [`par_map`] instead.
 //!
 //! Plain scoped threads rather than a thread-pool crate: the work arrives as
 //! one batch, the threads live exactly as long as it, and nothing outlives the
-//! call — which is all a pool would be for.
+//! call, which is all a pool would be for.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// so the result is the same as a plain loop would give.
 ///
 /// Items are handed out one at a time from a shared counter rather than split
-/// into fixed chunks up front, because what they cost is wildly uneven — one
-/// generated parser is worth a thousand notes — and a fixed split leaves
+/// into fixed chunks up front, because what they cost is wildly uneven (one
+/// generated parser is worth a thousand notes) and a fixed split leaves
 /// cores idle behind whichever chunk drew the expensive ones. Each thread
 /// gets its own `state`, for things like a tree-sitter context that cannot be
 /// shared.

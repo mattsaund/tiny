@@ -15,7 +15,7 @@ categories = ["command-line-utilities", "text-editors"]
 anyhow = "1.0.104"
 crossterm = "0.29.0"
 # Plugins. Lua 5.4 is compiled into the binary from source (`vendored`), so a
-# plugin needs nothing installed to run — see `plugins`.
+# plugin needs nothing installed to run (see `plugins`).
 mlua = { version = "0.12.1", default-features = false, features = ["lua54", "vendored"] }
 pulldown-cmark = { version = "0.13.4", default-features = false }
 ratatui = "0.30.2"
@@ -30,17 +30,17 @@ two-face = { version = "0.5.2", default-features = false, features = ["syntect-f
 unicode-width = "0.2.2"
 
 [dev-dependencies]
-# Reads `cargo metadata` when the third-party notices are written — see
-# `licenses`. Already in the build for other crates; never in the binary.
+# Reads `cargo metadata` when the third-party notices are written (see
+# `licenses`). Already in the build for other crates; never in the binary.
 serde_json = "1.0.151"
 tempfile = "3.27.0"
 
 # Release is what people install, and they wait for it: `install.sh` builds
 # from source on their machine, so this profile is the install time.
 #
-# Thin LTO still lets the optimizer see across crate boundaries — which matters
+# Thin LTO still lets the optimizer see across crate boundaries, which matters
 # here because the hot loop (syntect's regex matching, called from `highlight`)
-# sits behind two of them — but it does the work per-module and in parallel
+# sits behind two of them, but it does the work per-module and in parallel
 # instead of merging the whole program into one unit. With sixteen codegen
 # units to go at, that is the difference between a 42-second install and a
 # 19-second one, measured on a clean build of the full dependency graph. It
@@ -53,7 +53,7 @@ tempfile = "3.27.0"
 lto = "thin"
 codegen-units = 16
 strip = true
-# No unwinding. A panic in tiny is a bug with nothing to recover to — nothing
+# No unwinding. A panic in tiny is a bug with nothing to recover to: nothing
 # catches one, and the terminal is given back by a hook rather than by a
 # destructor (see `hand_back_the_terminal_on_panic`), so unwinding was only
 # ever paying for tables nobody read. Dropping them is 0.42 MB of the binary.

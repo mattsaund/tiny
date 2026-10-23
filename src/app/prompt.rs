@@ -2,13 +2,13 @@
 //!
 //! One tiny keyboard: a yes or a no, modal, closing on Esc without doing
 //! anything. What the question *means* is in its [`ConfirmKind`], and the work
-//! it triggers lives with the code that asked — deleting a file is
+//! it triggers lives with the code that asked: deleting a file is
 //! [`super::fileops`]'s job, not this module's. This is only the part that
 //! reads the answer.
 //!
 //! There used to be a text prompt here as well, for naming a new file and for
 //! renaming one. Both are commands now (`*new`, `*rename`), and a command line
-//! is a text prompt that already existed — so the second one went.
+//! is a text prompt that already existed, so the second one went.
 
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -26,7 +26,7 @@ impl App {
     /// `n` is not always the same key as Esc. For most of these there are two
     /// answers and no is the same as never mind, but the question on the way
     /// out has three: save and go, go without saving, or stay here. `n` is the
-    /// middle one — it answers "no, do not save" to what was asked — and Esc
+    /// middle one (it answers "no, do not save" to what was asked) and Esc
     /// is the one that takes the whole quit back.
     pub(super) fn on_confirm_key(&mut self, c: Confirm, key: KeyEvent) {
         match key.code {
@@ -51,7 +51,7 @@ impl App {
                     ConfirmKind::ResetSettings => self.mode = Mode::Settings(Settings::default()),
                     ConfirmKind::ResetKeybinds => self.mode = Mode::Keybinds(Keybinds::default()),
                     ConfirmKind::Update(_) => return self.decline_update(),
-                    // Staying, after all — and an update that was waiting on
+                    // Staying, after all, so an update that was waiting on
                     // the way out is not something a later Ctrl+Q should do.
                     ConfirmKind::QuitUnsaved => self.update_on_exit = None,
                     _ => {}
@@ -91,7 +91,7 @@ impl App {
     /// Carry out a confirmed project-wide replace.
     ///
     /// Files changed underneath any open buffer, so clean buffers are dropped
-    /// and will re-read from disk on next view. Dirty ones are kept — their
+    /// and will re-read from disk on next view. Dirty ones are kept: their
     /// unsaved edits are worth more than consistency with a file the user has
     /// already diverged from.
     fn do_replace(&mut self, find: &search::Needle, replace: &str) {

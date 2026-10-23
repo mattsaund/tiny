@@ -3,7 +3,7 @@
 //! The window is two panes and up to two single-row strips, each placeable at
 //! either end, so there are more arrangements than there look to be. These
 //! also hold the monochrome brief: with the shipped palette, nothing on screen
-//! may name a color — meaning is carried by bold, dim, underline and reverse
+//! may name a color; meaning is carried by bold, dim, underline and reverse
 //! so tiny inherits the terminal's own theme.
 
 use super::*;
@@ -80,7 +80,7 @@ fn the_chrome_names_no_colors_at_all() {
     t.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
     let buf = t.backend().buffer().clone();
 
-    // The tree pane holds only chrome — no syntax highlighting to excuse
+    // The tree pane holds only chrome: no syntax highlighting to excuse
     // a color. Everything in it should inherit the terminal's palette.
     for y in 0..buf.area.height {
         for x in 0..28 {

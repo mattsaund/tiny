@@ -3,11 +3,11 @@
 //! One file, and only one: `tiny.conf`, next to whatever else the platform
 //! keeps a user's settings in (see [`config_dir`]). How the program behaves is
 //! a property of the person using it, not of the folder they happen to have
-//! open, so there is deliberately no per-project override — every project on a
+//! open, so there is deliberately no per-project override: every project on a
 //! machine draws the same tree the same way.
 //!
 //! Every field has a default, so a partial or malformed file never stops the
-//! program starting — it falls back and says so in the status bar.
+//! program starting; it falls back and says so in the status bar.
 //!
 //! Colors are written as style specs rather than raw colors, so a line can
 //! carry weight as well as hue: `"bold"`, `"underline"`, `"white on black"`,
@@ -21,7 +21,7 @@
 //!
 //! 1. A field on [`Config`], with a doc comment.
 //! 2. A default in `impl Default for Config`.
-//! 3. A row in [`Config::settings_index`] — this drives both `*set` completion
+//! 3. A row in [`Config::settings_index`]; this drives both `*set` completion
 //!    and the in-program settings area.
 //! 4. Arms in [`Config::get`] and [`Config::set`].
 //!
@@ -75,7 +75,7 @@ pub enum Side {
 pub struct Config {
     /// Fallback when the working directory cannot be read.
     pub default_root: PathBuf,
-    /// Key bindings that differ from the shipped ones, by action name — see
+    /// Key bindings that differ from the shipped ones, by action name, see
     /// [`crate::config::keys`]. Only what has been changed is kept, so an untouched
     /// config has no `[keys]` section and a binding added in a later version
     /// reaches everyone who has not overridden that action.
@@ -88,7 +88,7 @@ pub struct Config {
     pub auto_reload: bool,
     /// Ask GitHub, once per run, whether a newer tiny has been released, and
     /// offer to install it. Off leaves `*update` and `tiny --update` as the
-    /// only ways to find out — see [`crate::update`].
+    /// only ways to find out, see [`crate::update`].
     pub update_check: bool,
 
     /// Which side the project tree sits on.
@@ -154,7 +154,7 @@ impl Config {
         config_dir().map(|d| d.join(CONF_NAME))
     }
 
-    /// `~/.config/tiny/plugins` — see [`crate::plugins`]. Beside `tiny.conf`,
+    /// `~/.config/tiny/plugins`, see [`crate::plugins`]. Beside `tiny.conf`,
     /// so everything that is tiny's own is in one folder.
     pub fn plugins_dir() -> Option<PathBuf> {
         config_dir().map(|d| d.join(PLUGINS_NAME))
@@ -163,14 +163,14 @@ impl Config {
     /// Read the one config file, if it is there. Returns the config plus
     /// anything worth telling the user about.
     ///
-    /// Called once, before the project is even resolved — nothing about which
+    /// Called once, before the project is even resolved; nothing about which
     /// folder is open can change the answer.
     pub fn load() -> (Self, Option<String>) {
         Self::load_from(Self::user_path().as_deref())
     }
 
     /// The body of `load`, with the path passed in. Tests use this so they
-    /// never depend on — or touch — whatever config the machine really has.
+    /// never depend on (or touch) whatever config the machine really has.
     pub fn load_from(user_conf: Option<&Path>) -> (Self, Option<String>) {
         let mut warning = None;
         let cfg = match user_conf {
@@ -214,7 +214,7 @@ impl Config {
     ///
     /// Counted through `get`, so it walks the same list the settings area
     /// shows and cannot fall out of step with it. Key bindings are not
-    /// settings and are not counted — they have their own reset.
+    /// settings and are not counted; they have their own reset.
     pub fn changed_from_default(&self) -> usize {
         let shipped = Config::default();
         Self::settings_index()
@@ -239,8 +239,8 @@ impl Config {
     /// Every key `*set` accepts, with a hint of a word or two. Also what the
     /// in-program settings area lists, so the two can never drift apart.
     ///
-    /// A hint says what the name does not — the values a setting takes, or
-    /// what it is for when the name is not enough — and is empty otherwise.
+    /// A hint says what the name does not (the values a setting takes, or
+    /// what it is for when the name is not enough) and is empty otherwise.
     /// The settings area shows it only beside the row under the cursor.
     pub fn settings_index() -> &'static [(&'static str, &'static str)] {
         &[
@@ -313,7 +313,7 @@ impl Config {
     /// Apply one `*set key value`. Rejects unknown keys and unparseable
     /// values rather than silently doing nothing.
     ///
-    /// Note that theme entries are stored as raw strings without validation —
+    /// Note that theme entries are stored as raw strings without validation:
     /// [`theme::parse_style`] ignores words it does not recognize, so a misspelled
     /// color is accepted here and simply has no effect when drawn. Callers
     /// must follow a successful `set` with `App::apply_config` to rebuild the
@@ -379,7 +379,7 @@ fn parse_bool(v: &str) -> Result<bool> {
 /// settings area. Leading dots on extensions are forgiven.
 ///
 /// So `*set prose_extensions md,.txt rst` and `*set prose_extensions md txt
-/// rst` mean the same thing. Never fails — an unparseable list is an empty
+/// rst` mean the same thing. Never fails: an unparseable list is an empty
 /// one, which is a legal value.
 fn parse_list(v: &str) -> Vec<String> {
     v.split([' ', ',', '\t'])
@@ -437,7 +437,7 @@ pub fn home_dir() -> Option<PathBuf> {
     })
 }
 
-/// The home directory, or `.` when there isn't one — used only as
+/// The home directory, or `.` when there isn't one, used only as
 /// `default_root`, the fallback for when the working directory cannot be read
 /// at all.
 fn home() -> PathBuf {

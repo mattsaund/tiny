@@ -3,7 +3,7 @@
 //! Every other yes-or-no in tiny is asked on the status line, because it is
 //! about something you just did and you are already looking there. This one
 //! arrives on its own, about nothing you did, so it gets a window in the middle
-//! of the screen — the only place sure to be seen.
+//! of the screen: the only place sure to be seen.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;

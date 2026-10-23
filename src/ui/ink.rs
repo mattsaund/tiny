@@ -2,7 +2,7 @@
 //!
 //! Terminal line art has one hard problem: two lines that cross have to become
 //! a junction glyph, not one line written over the other. [`Ink`] solves it by
-//! storing a *direction bitmask* per cell — up, down, left, right — instead of
+//! storing a *direction bitmask* per cell (up, down, left, right) instead of
 //! a character. Drawing a line ORs bits in, and the glyph is only chosen at
 //! the end, from whatever bits a cell ended up with. A cell that acquired
 //! `LEFT | RIGHT | UP` becomes `┴` without anything having to notice that two
@@ -27,8 +27,8 @@ use crate::map::layout::{Channels, Placed};
 /// How brightly one cell of the graph is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InkStyle {
-    /// A folder heading. Not part of the picture — it names the group of
-    /// boxes under it — so it is written into the grid rather than over the
+    /// A folder heading. Not part of the picture (it names the group of
+    /// boxes under it) so it is written into the grid rather than over the
     /// finished row, and a line running past it keeps the cells it had.
     Folder,
     /// Everything not connected to the cursor.
@@ -206,15 +206,15 @@ impl Ink {
 /// # Why no arrowheads
 ///
 /// A head is one cell, at the far end of a route that has already turned two
-/// corners, and at that size the difference between `▸` and `◂` is a smudge —
+/// corners, and at that size the difference between `▸` and `◂` is a smudge;
 /// it reads as debris on the end of the line rather than as a direction.
 /// Worse, it is debris in a place where two lines from the same trunk arrive a
 /// row apart, so the eye reads a column of them as texture. What the direction
-/// is actually *for* — which file calls which — is a thing you look up rather
+/// is actually *for* (which file calls which) is a thing you look up rather
 /// than glance at, and the `in:` and `out:` lists below say it in words that
 /// cannot be mistaken for a corner glyph.
 ///
-/// Orthogonal on purpose. A character grid has no diagonals worth the name —
+/// Orthogonal on purpose. A character grid has no diagonals worth the name:
 /// a diagonal has to be faked out of dots and reads as a smear rather than as
 /// a diagram. Right angles are what anyone drawing this on paper would use,
 /// and they land on cell boundaries exactly.
@@ -226,7 +226,7 @@ impl Ink {
 /// **A line only travels in a channel.** The grid leaves two clear rows under
 /// every box and a clear column beside every slot ([`Channels`]), and a route
 /// made of those is visible along its whole length. Aiming straight at the
-/// other box and turning at the halfway point — the obvious approach — puts
+/// other box and turning at the halfway point (the obvious approach) puts
 /// that corner inside some third box, and since boxes are drawn last and win,
 /// what you see is a stub leaving one file and an unrelated stub arriving at
 /// another with nothing joining them.
@@ -462,7 +462,7 @@ mod tests {
                                 ink.bits[i],
                                 0,
                                 "{what}: a line crosses the box at slot ({slot_c},{slot_r}) \
-                                 — it would vanish behind it:\n{}",
+                                 and would vanish behind it:\n{}",
                                 sketch(&ink)
                             );
                         }
@@ -478,7 +478,7 @@ mod tests {
         for (a, b, what) in arrangements() {
             let mut ink = Ink::new(90, 40);
             route(&mut ink, &a, &b, ch);
-            // `route` puts nothing in the text layer at all — every cell it
+            // `route` puts nothing in the text layer at all: every cell it
             // touches is a line bit, and line bits can only ever render as one
             // of the box-drawing runs or junctions.
             assert!(

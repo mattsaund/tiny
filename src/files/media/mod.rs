@@ -1,7 +1,7 @@
 //! What a picture, a video, a PDF or a sound *is*, and how to hand it to the
 //! desktop.
 //!
-//! tiny does not draw media. A terminal is a poor picture frame — half-block
+//! tiny does not draw media. A terminal is a poor picture frame: half-block
 //! rendering costs a decode and a scale on every resize, and what it buys you
 //! is a thumbnail you cannot zoom, pan, or seek. A PDF is worse: pages of
 //! laid-out type that a grid of characters can only approximate. Your desktop
@@ -9,7 +9,7 @@
 //! [`open_with_desktop`] hands the file to it and the pane sticks to what a
 //! terminal is actually good at: saying, in words, what the thing is.
 //!
-//! So the pane shows facts — format, resolution, running time, size — and
+//! So the pane shows facts (format, resolution, running time, size) and
 //! Enter opens the file in your own viewer.
 //!
 //! # Only things that are safe to open
@@ -23,7 +23,7 @@
 //! [`probe`] is called from `App::sync_preview`, which runs every time the
 //! tree cursor lands on a new file, so it must not decode anything. Images go
 //! through [`size`], which reads the few bytes of header that carry the
-//! dimensions and stops. Video needs `ffprobe`, and that is a process spawn —
+//! dimensions and stops. Video needs `ffprobe`, and that is a process spawn,
 //! but it reads the container header and exits, where the old poster frame
 //! decoded a whole frame and wrote a PNG to disk. Neither result is cached,
 //! because neither is expensive enough to be worth invalidating.
@@ -31,7 +31,7 @@
 //! # ffprobe is optional
 //!
 //! It is a runtime dependency, never a build one. Without it a video still
-//! previews — name, format and size all come from the filesystem — and the
+//! previews (name, format and size all come from the filesystem) and the
 //! pane says which tool would fill in the rest instead of pretending the
 //! fields do not exist.
 
@@ -50,7 +50,7 @@ pub enum Kind {
     Video,
     Pdf,
     Audio,
-    /// Anything else — text, binaries, files with no extension.
+    /// Anything else: text, binaries, files with no extension.
     Other,
 }
 
@@ -100,7 +100,7 @@ pub fn classify(path: &Path) -> Kind {
 /// reason worth distinguishing: a truncated PNG has no dimensions, a machine
 /// without ffprobe has no video anything. `note` carries that reason, and is
 /// shown *underneath* the facts that were readable rather than in place of
-/// them — a video whose length is unknown still has a format and a size.
+/// them: a video whose length is unknown still has a format and a size.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Info {
     /// Pixel dimensions, when they could be read.
@@ -142,7 +142,7 @@ pub fn format_name(path: &Path) -> String {
 /// Read what can be read about a media file without decoding it.
 ///
 /// Never fails: an unreadable file comes back as an `Info` whose `note`
-/// explains why it is empty, because the pane always has something to draw —
+/// explains why it is empty, because the pane always has something to draw:
 /// at minimum the name and the size, which came from the directory listing.
 pub fn probe(path: &Path, kind: Kind) -> Info {
     match kind {
@@ -165,7 +165,7 @@ pub fn probe(path: &Path, kind: Kind) -> Info {
 /// Whether a PDF really is one: the format puts `%PDF-` in its first kilobyte,
 /// and a file called `.pdf` without it is going to disappoint whatever it is
 /// handed to. Said in a note rather than refused, the way a mislabeled picture
-/// is — the viewer may still make something of it.
+/// is: the viewer may still make something of it.
 fn pdf_info(path: &Path) -> Info {
     use std::io::Read;
     let mut head = Vec::with_capacity(1024);
@@ -181,10 +181,10 @@ fn pdf_info(path: &Path) -> Info {
     }
 }
 
-/// Resolution and running time, via ffprobe — of a video, or the running time
+/// Resolution and running time of a video, via ffprobe, or the running time
 /// alone of a sound, which has no picture to measure.
 ///
-/// One invocation asks for both, in ffprobe's flat `key=value` output — the
+/// One invocation asks for both, in ffprobe's flat `key=value` output: the
 /// simplest of its formats to parse and the only one that needs no JSON. A
 /// stream with no duration reports `N/A`, which parses as `None` and reads as
 /// "unknown" rather than as zero.
@@ -249,7 +249,7 @@ static LAUNCHED: Mutex<Vec<Child>> = Mutex::new(Vec::new());
 
 /// Hand `path` to whatever the desktop opens that kind of file with.
 ///
-/// Returns as soon as the launcher is running, not when the viewer closes —
+/// Returns as soon as the launcher is running, not when the viewer closes,
 /// see [`LAUNCHED`]. A failure here means the launcher itself could not be
 /// run, which on a bare server usually means there is no desktop to hand it
 /// to; that is worth reporting, and it is the only thing this can detect,
@@ -274,7 +274,7 @@ pub fn open_with_desktop(path: &Path) -> Result<()> {
 }
 
 /// Hold on to a program tiny started and does not wait for, so that it is
-/// reaped once it finishes rather than lingering — see [`LAUNCHED`]. The
+/// reaped once it finishes rather than lingering, see [`LAUNCHED`]. The
 /// desktop's viewers come through here, and so do the windows `Ctrl+N` opens.
 pub fn keep_until_done(child: Child) {
     if let Ok(mut open) = LAUNCHED.lock() {
@@ -344,8 +344,8 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// A PNG header and nothing else. Only the header is ever read — see
-    /// [`size`] — so there are no pixels to invent.
+    /// A PNG header and nothing else. Only the header is ever read (see
+    /// [`size`]) so there are no pixels to invent.
     fn write_png(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
         let mut v = b"\x89PNG\r\n\x1a\n".to_vec();
         v.extend_from_slice(&13u32.to_be_bytes());
@@ -479,7 +479,7 @@ mod tests {
             matches!(program.as_str(), "open" | "xdg-open" | "cmd"),
             "unexpected launcher {program}"
         );
-        // The path goes last and goes whole — a space in a file name must not
+        // The path goes last and goes whole: a space in a file name must not
         // become two arguments.
         assert_eq!(args.last().map(String::as_str), Some("/tmp/a picture.png"));
     }

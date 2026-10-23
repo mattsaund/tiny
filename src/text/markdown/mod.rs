@@ -10,16 +10,16 @@
 //!
 //! # Two entry points
 //!
-//! - [`render()`] — full markdown. Headings get rules, lists get bullets, tables
+//! - [`render()`]: full markdown. Headings get rules, lists get bullets, tables
 //!   get drawn, fenced code is syntax-highlighted via `highlight`.
-//! - [`render_plain`] — `.txt` and friends. Wraps long lines and picks out
+//! - [`render_plain`]: `.txt` and friends. Wraps long lines and picks out
 //!   wikilinks and URLs, and does nothing else. A `#` at the start of a line in
 //!   a text file is a hash, not a heading; a plain-text file that silently
 //!   reformatted itself would be a bug, not a feature.
 //!
 //! # Why wrapping is done by hand
 //!
-//! ratatui's `Paragraph` can wrap, but it wraps a finished `Line` — and by
+//! ratatui's `Paragraph` can wrap, but it wraps a finished `Line`, and by
 //! then every span already carries its own style. Re-wrapping smears those
 //! styles across the break, so a bolded word split over two lines loses its
 //! bold on the second half. [`wrap()`](wrap::wrap) instead breaks the styled run into
@@ -43,14 +43,15 @@
 //! comes from a missing flush before a block boundary.
 //!
 //! Everything is measured in *display width* (`unicode-width`), not character
-//! count, so CJK text and emoji do not overflow the pane.//!
+//! count, so CJK text and emoji do not overflow the pane.
+//!
 //! # Where things are
 //!
-//! - here — the public entry points, and the block splitter that lets a
+//! - here: the public entry points, and the block splitter that lets a
 //!   document be rendered a piece at a time.
-//! - [`mod@render`] — the state machine that turns pulldown-cmark's events into
+//! - [`mod@render`]: the state machine that turns pulldown-cmark's events into
 //!   styled rows.
-//! - [`mod@wrap`] — fitting those rows into the pane without smearing their
+//! - [`mod@wrap`]: fitting those rows into the pane without smearing their
 //!   styles.
 
 #[cfg(test)]
@@ -71,7 +72,7 @@ use crate::config::Palette;
 use crate::text::highlight::Highlighter;
 
 /// Extract every `[[target]]` in document order, with any `|alias` stripped.
-/// Duplicates are kept — callers that want unique edges can dedupe.
+/// Duplicates are kept; callers that want unique edges can dedupe.
 ///
 /// This is how `graph` finds the wikilinks in a file, so the renderer and the
 /// project map agree on what counts as one.
@@ -108,7 +109,7 @@ pub(super) fn scan_wikilinks(text: &str) -> Vec<(usize, usize, Option<String>)> 
             let inner_start = i + 2;
             let inner_end = inner_start + close;
             let inner = &text[inner_start..inner_end];
-            // `[[target|alias]]` — the target is what the graph links to.
+            // `[[target|alias]]`: the target is what the graph links to.
             let target = inner.split('|').next().unwrap_or(inner).trim();
             if !target.is_empty() {
                 if plain_start < i {
@@ -131,7 +132,7 @@ pub(super) fn scan_wikilinks(text: &str) -> Vec<(usize, usize, Option<String>)> 
 /// Render plain text: wrap long lines to the pane, keep the line structure
 /// the author chose, and pick out `[[wikilinks]]` and bare URLs.
 ///
-/// Deliberately not markdown — a `.txt` file with a `#` at the start of a line
+/// Deliberately not markdown: a `.txt` file with a `#` at the start of a line
 /// means a hash, not a heading. Each source line wraps on its own, and
 /// continuations keep its indentation, so hand-made lists and tables survive.
 pub fn render_plain(source: &str, width: usize, pal: &Palette) -> Vec<Line<'static>> {
@@ -175,7 +176,7 @@ pub fn render_plain(source: &str, width: usize, pal: &Palette) -> Vec<Line<'stat
 
 /// Split a run of plain text so bare `http(s)://` URLs get the link style.
 ///
-/// Only used by [`render_plain`] — real markdown has `Tag::Link` for this.
+/// Only used by [`render_plain`]; real markdown has `Tag::Link` for this.
 /// Trailing sentence punctuation is trimmed off the URL, which is what makes
 /// `see https://example.com.` underline the address and not the full stop.
 pub(super) fn scan_urls(text: &str, pal: &Palette) -> Vec<Span<'static>> {
@@ -209,8 +210,8 @@ pub(super) fn scan_urls(text: &str, pal: &Palette) -> Vec<Span<'static>> {
 /// One markdown block: a run of source lines that renders as a unit.
 ///
 /// The unit the live editor swaps between formatted and raw. `end` is
-/// exclusive, and the blocks of a file tile it completely — every source line
-/// belongs to exactly one — so a cursor line always names a block.
+/// exclusive, and the blocks of a file tile it completely (every source line
+/// belongs to exactly one) so a cursor line always names a block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Block {
     pub start: usize,
@@ -233,7 +234,7 @@ impl Block {
 /// 2. A blank line is its own block, so the gap between paragraphs survives.
 /// 3. An ATX heading is its own block. CommonMark lets a heading interrupt a
 ///    paragraph, so `text / # Heading / text` is three blocks even with no
-///    blank lines around it — otherwise editing the heading would unformat the
+///    blank lines around it; otherwise editing the heading would unformat the
 ///    paragraphs either side of it.
 /// 4. Anything else groups with the non-blank lines next to it.
 ///
@@ -336,7 +337,7 @@ fn is_atx_heading(line: &str) -> bool {
 
 /// Render one block of source, as [`blocks`] carved it out.
 ///
-/// A blank-line block renders to nothing — [`render()`] trims trailing blanks —
+/// A blank-line block renders to nothing ([`render()`] trims trailing blanks)
 /// so it comes back as one empty line instead, because the gap between two
 /// paragraphs is a row on the screen and has to stay one.
 pub fn render_block(
@@ -354,8 +355,8 @@ pub fn render_block(
 
 /// Render markdown to styled lines fitted to `width`.
 ///
-/// The enabled extensions are strikethrough, tables, task lists and footnotes
-/// — GitHub-flavored markdown minus the parts with no sensible terminal
+/// The enabled extensions are strikethrough, tables, task lists and footnotes:
+/// GitHub-flavored markdown minus the parts with no sensible terminal
 /// representation. `hl` is threaded through only for fenced code blocks.
 ///
 /// Trailing blank lines are trimmed so a note does not open with dead space at
