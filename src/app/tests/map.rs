@@ -405,6 +405,26 @@ fn the_hint_names_the_window_keys_the_keymap_has() {
 }
 
 #[test]
+fn a_narrow_window_drops_hints_from_the_end_and_keeps_the_first() {
+    let (_td, mut app) = fixture();
+    // Too narrow for all three of the browser's hints, wide enough for two.
+    let bar = screen(&mut app, 55, 14).pop().expect("a status line");
+    assert!(bar.contains("/ search | Ctrl+G git"), "{bar}");
+    assert!(!bar.contains("Ctrl+L"), "no half hint either: {bar}");
+}
+
+#[test]
+fn a_lone_key_is_named_as_it_is_typed() {
+    use crate::config::keys::Action;
+    let (_td, app) = fixture();
+    // `R` would be Shift and r, which does nothing.
+    assert_eq!(app.key_name(Action::Refresh), "r");
+    assert_eq!(app.key_name(Action::Save), "Ctrl+S");
+    assert_eq!(app.key_name(Action::Back), "Esc");
+    assert_eq!(app.key_name(Action::PaneLeft), "Shift+Left");
+}
+
+#[test]
 fn a_rebinding_survives_the_terminal_being_asked() {
     let (_td, mut app) = fixture();
     app.config.keys.insert("map".into(), "ctrl+o".into());

@@ -118,9 +118,9 @@ pub(super) fn bar_height(app: &App) -> u16 {
 /// The status line: a question waiting for an answer, or the ordinary
 /// message plus the keys that work where the keyboard is.
 ///
-/// Hints are dropped before the readout at the end when the window is too
-/// narrow for both, so the line degrades gracefully instead of wrapping or
-/// being clipped mid-word.
+/// When the window is too narrow for everything, hints go first, one at a
+/// time from the end, then the readout, so the line degrades gracefully
+/// instead of wrapping or being clipped mid-word.
 pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let pal = app.palette;
     let line = match &app.mode {
@@ -143,8 +143,16 @@ pub(super) fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 Span::raw("   "),
             ];
             let used: usize = spans.iter().map(|s| s.content.width()).sum();
-            if used + hints.width() + pos.width() + 3 < room {
-                spans.push(Span::styled(hints, pal.dim));
+            // The first hints are the keys most worth knowing, and half of
+            // one is none, so whole ones come off the end until the rest fit.
+            let mut shown: Vec<&str> = hints.split(" | ").collect();
+            loop {
+                let fits = shown.join(" | ");
+                if fits.is_empty() || used + fits.width() + pos.width() + 3 < room {
+                    spans.push(Span::styled(fits, pal.dim));
+                    break;
+                }
+                shown.pop();
             }
             let used: usize = spans.iter().map(|s| s.content.width()).sum();
             if used + pos.width() + 1 < room {

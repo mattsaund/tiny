@@ -1,7 +1,7 @@
 //! How much disk a file or a folder takes.
 //!
 //! One number, for the right-hand end of the status line: what the cursor is
-//! on, in the units a person would say it in.
+//! on, in KiB, MiB or GiB, see [`human`].
 //!
 //! # A folder is a walk, and a walk has to be allowed to give up
 //!
@@ -9,7 +9,7 @@
 //! `node_modules` or a `target` is hundreds of thousands of them, far too slow
 //! to do while someone holds an arrow key down. So the walk carries a deadline
 //! and stops when it runs out, and what it reports is honest about that: a
-//! measurement that stopped early is marked incomplete and reads as `>1.2 GB`,
+//! measurement that stopped early is marked incomplete and reads as `>1.20 GiB`,
 //! which is true, rather than as a total that is quietly wrong.
 //!
 //! Callers are expected to remember the answer for a folder rather than ask
@@ -95,28 +95,28 @@ pub fn of(path: &Path) -> Option<Size> {
     })
 }
 
-/// A size as someone would say it: `812 B`, `9.4 KB`, `1.2 MB`, `47 GB`.
+/// A size in binary units, to two decimal places: `812 B`, `9.50 KiB`,
+/// `1.25 MiB`, `47.00 GiB`.
 ///
-/// One decimal below ten units and none above, because the decimal stops
-/// carrying information once there are two digits in front of it, and the
-/// status line is shared with everything else on it.
-///
-/// The units step by 1024 and are named the short way. Disks are sold in
-/// powers of ten and file managers disagree with each other about this; what
-/// matters here is that the number next to `MB` is the one the rest of the
-/// system will call a megabyte too.
+/// Each unit is 1024 of the one below, and named so: `KiB` says what `KB`
+/// left to be guessed, since disks are sold in powers of ten. The decimals
+/// are cut rather than rounded, so a size never reads as more than it is and
+/// a byte short of a MiB is `1023.99 KiB`, not a `1024.00 KiB` that should
+/// have been `1.00 MiB`. Bytes are counted whole.
 pub fn human(size: Size) -> String {
-    const UNITS: [(u64, &str); 3] = [(1 << 30, "GB"), (1 << 20, "MB"), (1 << 10, "KB")];
+    const UNITS: [(u64, &str); 4] = [
+        (1 << 40, "TiB"),
+        (1 << 30, "GiB"),
+        (1 << 20, "MiB"),
+        (1 << 10, "KiB"),
+    ];
     // A measurement that gave up early is a floor, not a total.
     let more = if size.complete { "" } else { ">" };
     for (scale, name) in UNITS {
         if size.bytes >= scale {
             let whole = size.bytes / scale;
-            if whole < 10 {
-                let tenths = (size.bytes % scale) * 10 / scale;
-                return format!("{more}{whole}.{tenths} {name}");
-            }
-            return format!("{more}{whole} {name}");
+            let hundredths = (size.bytes % scale) * 100 / scale;
+            return format!("{more}{whole}.{hundredths:02} {name}");
         }
     }
     format!("{more}{} B", size.bytes)
@@ -135,15 +135,18 @@ mod tests {
     }
 
     #[test]
-    fn sizes_are_written_the_way_people_say_them() {
+    fn sizes_are_written_in_binary_units_to_two_places() {
         assert_eq!(human(whole(0)), "0 B");
         assert_eq!(human(whole(812)), "812 B");
-        assert_eq!(human(whole(1024)), "1.0 KB");
-        assert_eq!(human(whole(9 * 1024 + 512)), "9.5 KB");
-        // Ten and over, the decimal has stopped telling anyone anything.
-        assert_eq!(human(whole(12 * 1024)), "12 KB");
-        assert_eq!(human(whole(3 * 1024 * 1024 / 2)), "1.5 MB");
-        assert_eq!(human(whole(47 * 1024 * 1024 * 1024)), "47 GB");
+        assert_eq!(human(whole(1024)), "1.00 KiB");
+        assert_eq!(human(whole(9 * 1024 + 512)), "9.50 KiB");
+        assert_eq!(human(whole(12 * 1024)), "12.00 KiB");
+        assert_eq!(human(whole(1024 + 52)), "1.05 KiB", "the zero is kept");
+        assert_eq!(human(whole(3 * 1024 * 1024 / 2)), "1.50 MiB");
+        assert_eq!(human(whole(47 * 1024 * 1024 * 1024)), "47.00 GiB");
+        assert_eq!(human(whole(5 << 40)), "5.00 TiB");
+        // Cut, not rounded: a byte short of a MiB is not a MiB.
+        assert_eq!(human(whole((1 << 20) - 1)), "1023.99 KiB");
     }
 
     #[test]
@@ -152,7 +155,7 @@ mod tests {
             bytes: 5 * 1024 * 1024,
             complete: false,
         };
-        assert_eq!(human(partial), ">5.0 MB");
+        assert_eq!(human(partial), ">5.00 MiB");
     }
 
     #[test]

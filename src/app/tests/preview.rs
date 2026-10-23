@@ -290,7 +290,7 @@ fn a_real_picture_reports_its_resolution_and_its_size() {
         "the resolution shows:\n{out}"
     );
     assert!(
-        out.contains("KB") || out.contains("B"),
+        out.contains("KiB") || out.contains(" B"),
         "and a size:\n{out}"
     );
     assert!(out.contains("Enter opens it"), "and the way out:\n{out}");
@@ -471,7 +471,7 @@ fn a_folder_is_measured_by_everything_inside_it() {
 
     let out = joined(&mut app);
     assert!(
-        out.contains("4.0 KB"),
+        out.contains("4.00 KiB"),
         "a folder reads as the sum of what is under it:\n{out}"
     );
 }
