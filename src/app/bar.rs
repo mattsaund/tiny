@@ -1,20 +1,20 @@
 //! The bar: one field that is both a search and a command line.
 //!
-//! There is no "search mode" and no "command mode" — there is one field, and
+//! There is no "search mode" and no "command mode"; there is one field, and
 //! what it is depends on whether what you typed starts with the sigil. It
 //! decides keystroke by keystroke rather than being opened one way or the
 //! other, which is why a `*` typed by mistake can simply be deleted.
 //!
 //! # Searching as you type
 //!
-//! Every change to the query re-runs the search — once typing pauses, not once
-//! a letter — and the preview follows the highlighted hit, so the pane shows
+//! Every change to the query re-runs the search (once typing pauses, not once
+//! a letter) and the preview follows the highlighted hit, so the pane shows
 //! the file *and* the place in it, marked, before you have committed to
 //! opening anything. The budget that makes this affordable is in
 //! [`crate::text::search`], not here.
 //!
 //! A command gets the same treatment: once typing pauses, the line under the
-//! bar says what Enter would do with it — see [`super::plan`].
+//! bar says what Enter would do with it, see [`super::plan`].
 //!
 //! # Completion
 //!
@@ -38,8 +38,8 @@ use super::preview::Preview;
 /// Entries that could finish the path fragment `typed`, as whole paths
 /// relative to the project root.
 ///
-/// Only the one directory being typed into is read — a `read_dir`, never a
-/// walk — so completing a path costs the same in a huge project as in a small
+/// Only the one directory being typed into is read (a `read_dir`, never a
+/// walk) so completing a path costs the same in a huge project as in a small
 /// one. Folders come back with a separator on the end so Tab can carry straight
 /// on into them.
 ///
@@ -81,7 +81,7 @@ fn path_candidates(root: &Path, typed: &str, show_hidden: bool) -> Vec<String> {
 ///
 /// Completes to the longest common prefix of the matches rather than to the
 /// first one, so Tab on an ambiguous prefix advances as far as it safely can
-/// and then stops — the shell behavior.
+/// and then stops: the shell behavior.
 ///
 /// The whole of `copy README.md to notes/today.md` can be typed with Tab, which
 /// is the point: a command that reads like a sentence is no use if every word
@@ -102,14 +102,14 @@ fn complete_command(
 /// What `Tab` would add to the line, if anything.
 ///
 /// Split out from [`complete_command`] so the bar can draw the same answer in
-/// gray before the key is pressed — a suggestion you can see is worth more than
+/// gray before the key is pressed: a suggestion you can see is worth more than
 /// one you have to guess at, and it costs one `read_dir`.
 ///
 /// Returns only the *remainder*: every candidate is filtered by what has been
 /// typed already, so the completion always begins with it.
 ///
-/// What is offered follows the sentence: a verb first, then — depending on
-/// the verb — the kind of thing (`line`, `function`, `file`...), a name, or
+/// What is offered follows the sentence: a verb first, then (depending on
+/// the verb) the kind of thing (`line`, `function`, `file`...), a name, or
 /// the joining word (`to`, `with`, `in`) that comes next. `added` is the
 /// commands plugins have added, which complete like tiny's own; `known` is
 /// every file and folder name in the project, when it has been listed.
@@ -193,7 +193,7 @@ pub fn completion_for(
         {
             names()
         }
-        // `copy README.md ` — what comes next is the word joining the two
+        // `copy README.md `: what comes next is the word joining the two
         // halves, so offer that and nothing else. Anyone copying a name with
         // spaces in it can type the two letters themselves.
         _ if TWO_ENDS.contains(&v) && position == 2 => words(&["to"]),
@@ -241,7 +241,7 @@ impl App {
     /// It opens as a search, and decides for itself, keystroke by keystroke,
     /// whether it is still one: a `*` typed first makes it the command line.
     /// There used to be a second key that opened it with the star already
-    /// typed — one key to save one keystroke, and one more row to read past.
+    /// typed: one key to save one keystroke, and one more row to read past.
     ///
     /// The file being edited is remembered as the bar opens, so a search
     /// started from inside a file can put that file's hits at the top. Only
@@ -291,7 +291,7 @@ impl App {
     /// Two structural things to know when editing this:
     ///
     /// - Branches that end with `return` leave `self.mode` as the `Normal` that
-    ///   `handle_key` swapped in — that is how Esc and Enter close the bar.
+    ///   `handle_key` swapped in; that is how Esc and Enter close the bar.
     ///   Every other branch has to put the bar back.
     /// - Ctrl chords are handled up front and never fall through, so a chord
     ///   cannot leak its letter into the query.
@@ -391,7 +391,7 @@ impl App {
             KeyCode::Left => b.cursor = b.cursor.saturating_sub(1),
             KeyCode::Right => {
                 // At the end of the line the only thing to the right of the
-                // cursor is the gray suggestion, so the arrow takes it up —
+                // cursor is the gray suggestion, so the arrow takes it up:
                 // the same key, doing the same thing, to what is drawn there.
                 // Anywhere else it moves along the text as it always did.
                 if b.is_command() && b.cursor == b.input.chars().count() {
@@ -437,7 +437,7 @@ impl App {
         self.mode = Mode::Bar(b);
     }
 
-    /// Every file and folder name in the project, for Tab to offer — once
+    /// Every file and folder name in the project, for Tab to offer, once
     /// the bar has listed them, and nothing until then. Each name once.
     pub fn known_names(&self) -> Vec<String> {
         self.names
@@ -485,7 +485,7 @@ impl App {
     /// `ui` uses this to mark the same word in the preview pane, so that
     /// stepping through results shows you *where* in the file each one is
     /// rather than only which file. `None` for a command, and for an empty
-    /// query — neither has a word to point at.
+    /// query: neither has a word to point at.
     pub fn live_query(&self) -> Option<&str> {
         match &self.mode {
             Mode::Bar(b) if !b.is_command() => Some(b.input.trim()).filter(|q| !q.is_empty()),
@@ -494,15 +494,15 @@ impl App {
     }
 
     /// Re-run the query from scratch and reset the result cursor. Called once
-    /// the query has stopped changing for the moment — see [`App::settle`],
+    /// the query has stopped changing for the moment, see [`App::settle`],
     /// and `search`'s module docs for why from scratch is fine.
     ///
     /// A search started from inside a file lists that file's hits first. When
     /// you search while writing, the word you are looking for is usually one
     /// you just wrote: the other occurrence of the name you are renaming, the
-    /// heading you are about to link to. Those hits were already in the list —
-    /// somewhere down it, in whatever order the directory walk happened to
-    /// reach them — and this is only about which end they come out of.
+    /// heading you are about to link to. Those hits were already in the list
+    /// (somewhere down it, in whatever order the directory walk happened to
+    /// reach them) and this is only about which end they come out of.
     ///
     /// A stable sort on one boolean, so everything else keeps the order
     /// [`search::search`] gave it: names before contents, directory order

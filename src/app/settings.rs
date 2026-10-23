@@ -5,7 +5,7 @@
 //! it to disk on an explicit `Ctrl+S`. A setting can therefore be tried and
 //! backed out of without `tiny.conf` ever changing.
 //!
-//! [`App::apply_config`] is the seam that makes "see it immediately" true —
+//! [`App::apply_config`] is the seam that makes "see it immediately" true;
 //! every successful change goes through it, and it re-derives the palette, the
 //! keymap and the syntax theme from the config. A change that does not reach
 //! the screen is usually a change that did not call it.
@@ -20,12 +20,12 @@ use super::mode::{BUTTONS, Confirm, ConfirmKind, KEYBIND_BUTTONS, Keybinds, Mode
 use super::parts::{char_byte, list_move, plural};
 
 /// How many rows an overlay's page keys move. The overlays do not know how
-/// tall they are drawn — `ui` decides that — and a fixed step reads the same
+/// tall they are drawn (`ui` decides that) and a fixed step reads the same
 /// in a tall window as in a short one.
 const OVERLAY_PAGE: usize = 10;
 
 impl App {
-    /// Take on which keys this terminal keeps for itself — see
+    /// Take on which keys this terminal keeps for itself, see
     /// [`Keyboard`].
     ///
     /// Called once, from `main`, before the first frame. Rebuilds the keymap,
@@ -59,7 +59,7 @@ impl App {
         }
         // Swap the theme in place. Rebuilding the highlighter here would
         // re-unpack all 213 grammars, which is the startup cost paid again
-        // every time any setting changes — including ones it has nothing to
+        // every time any setting changes, including ones it has nothing to
         // do with, since this runs after every successful `Config::set`.
         self.highlighter.set_theme(&self.config.syntax_theme);
         // The saved states carry styles taken from the old theme.
@@ -80,7 +80,7 @@ impl App {
     /// Two states in one function, separated by whether `s.editing` is set:
     /// navigating the list, or typing into one row's value. Taking the buffer
     /// out with `take()` at the top means each branch has to put it back to
-    /// stay in edit mode — the same "closing is the default" pattern as the
+    /// stay in edit mode: the same "closing is the default" pattern as the
     /// mode dispatch itself.
     ///
     /// `Ctrl+S` writes `tiny.conf` and works in both states, since finishing a
@@ -214,7 +214,7 @@ impl App {
     /// Keys for the keybinds window.
     ///
     /// Two states, like the settings area: reading the list, or waiting for the
-    /// key that will become a binding. In the second, *every* key is data — so
+    /// key that will become a binding. In the second, *every* key is data, so
     /// there is no Esc to cancel with, and the way out is to bind Esc to the
     /// action or to press it twice.
     pub(super) fn on_keybinds_key(&mut self, mut kb: Keybinds, key: KeyEvent) {
@@ -277,7 +277,7 @@ impl App {
     /// them all.
     ///
     /// The key is taken off anything else in the same pane that answered to
-    /// it, so what the window shows is what actually happens — two rows
+    /// it, so what the window shows is what actually happens: two rows
     /// claiming the same key, only one of which works, would be a lie.
     fn bind(&mut self, action: Action, spec: &str) {
         let Some(key) = crate::config::keys::Key::parse(spec) else {
@@ -306,7 +306,7 @@ impl App {
     }
 
     /// Record what reaches an action, dropping the override entirely when it is
-    /// back to the shipped keys — so the config file only ever holds what has
+    /// back to the shipped keys, so the config file only ever holds what has
     /// actually been changed.
     fn set_binding(&mut self, action: Action, spec: &str) {
         if spec == self.keymap.shipped(action) {

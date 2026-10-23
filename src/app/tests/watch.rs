@@ -4,7 +4,7 @@
 //! directly, then calls [`App::rescan_disk`] the way the event loop does when
 //! nothing has been typed for half a second.
 //!
-//! Note what is *not* mocked — the clock, or the filesystem. The scan compares
+//! Note what is *not* mocked: the clock, or the filesystem. The scan compares
 //! real modification times and sizes, so a test that passed by accident would
 //! have to have written the same bytes.
 
@@ -53,7 +53,7 @@ fn an_unsaved_buffer_is_never_overwritten_by_the_disk() {
     );
     assert!(
         !app.rescan_disk(),
-        "told once — the stamp moved on even though the buffer did not"
+        "told once: the stamp moved on even though the buffer did not"
     );
 }
 

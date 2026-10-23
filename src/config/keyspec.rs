@@ -1,7 +1,7 @@
 //! What a key binding looks like written down, and how it is matched.
 //!
-//! A binding is a string in the config file — `"ctrl+s"`, `"shift+f3"`,
-//! `"ctrl+space"` — and this is the only place that turns one into something
+//! A binding is a string in the config file (`"ctrl+s"`, `"shift+f3"`,
+//! `"ctrl+space"`) and this is the only place that turns one into something
 //! a `KeyEvent` can be compared against, and back again for display. Keeping
 //! the two directions in one file is what makes them round-trip: whatever
 //! [`Key`]'s `Display` writes, its `FromStr` reads.
@@ -17,7 +17,7 @@
 //!
 //! They disagree about `⌥←` too, which is a Mac's "a word left": iTerm2 sends
 //! it as `Alt` with the arrow, and macOS Terminal sends the `Esc b` a shell's
-//! readline expects — which arrives here as `Alt+B`. [`from_terminal`] turns
+//! readline expects, which arrives here as `Alt+B`. [`from_terminal`] turns
 //! the second spelling into the first, once, before any handler sees the key.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -26,7 +26,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 ///
 /// `Alt+B` and `Alt+F` become `Alt+←` and `Alt+→`. On macOS Terminal those
 /// are what `⌥←` and `⌥→` send; everywhere else they are readline's
-/// "back a word" and "forward a word", which is the same thing — so there is
+/// "back a word" and "forward a word", which is the same thing, so there is
 /// no terminal on which this changes what the key meant.
 pub fn from_terminal(mut ev: KeyEvent) -> KeyEvent {
     if ev.modifiers == KeyModifiers::ALT {
@@ -50,7 +50,7 @@ impl Key {
     /// Whether this key is a character someone could be typing.
     ///
     /// Shift counts as typing: `I` is a capital I, not a chord. Ctrl and Alt
-    /// do not, which is what makes them safe to bind globally — see
+    /// do not, which is what makes them safe to bind globally, see
     /// [`Keymap::resolve_while_typing`](super::keys::Keymap::resolve_while_typing).
     pub fn is_typing(&self) -> bool {
         matches!(self.code, KeyCode::Char(_))

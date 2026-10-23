@@ -6,14 +6,14 @@
 //! # A folder is a walk, and a walk has to be allowed to give up
 //!
 //! A file's size is one `stat`. A folder's is every file under it, which for a
-//! `node_modules` or a `target` is hundreds of thousands of them — far too slow
+//! `node_modules` or a `target` is hundreds of thousands of them, far too slow
 //! to do while someone holds an arrow key down. So the walk carries a deadline
 //! and stops when it runs out, and what it reports is honest about that: a
 //! measurement that stopped early is marked incomplete and reads as `>1.2 GB`,
 //! which is true, rather than as a total that is quietly wrong.
 //!
 //! Callers are expected to remember the answer for a folder rather than ask
-//! again on every frame — see `App::note_size`.
+//! again on every frame, see `App::note_size`.
 
 use std::fs;
 use std::path::Path;
@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 /// pressing an arrow and seeing the next row, and that is measured in
 /// milliseconds however many files happen to be behind it. Fifty of them is
 /// below what anyone notices, and reaches every file of an ordinary project
-/// folder — the ones it cannot finish are `target` and `node_modules`, whose
+/// folder: the ones it cannot finish are `target` and `node_modules`, whose
 /// exact size nobody is sitting there waiting for.
 const DEADLINE: Duration = Duration::from_millis(50);
 

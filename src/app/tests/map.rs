@@ -35,7 +35,7 @@ fn the_bottom_bar_says_only_what_is_not_already_on_screen() {
     let (_td, mut app) = fixture();
     let bar = screen(&mut app, 96, 14).pop().expect("a status line");
     assert!(bar.contains("| Ctrl+L map"), "dividers are pipes:\n{bar}");
-    assert!(!bar.contains('·'), "{bar}");
+    assert!(!bar.contains('\u{b7}'), "{bar}");
     assert!(
         !bar.contains("| ? help"),
         "the status already opens with `? for help`:\n{bar}"
@@ -74,7 +74,7 @@ fn the_map_joins_linked_files_with_a_line() {
     // in either set, is `ink`'s own test.
     assert!(
         !['◂', '▸', '▴', '▾'].iter().any(|a| out.contains(*a)),
-        "a connection is a plain line — which way it runs is in the strip below:\n{out}"
+        "a connection is a plain line; which way it runs is in the strip below:\n{out}"
     );
 }
 
@@ -359,7 +359,7 @@ fn a_command_still_runs_from_over_the_map() {
     open_map(&mut app);
     app.on_key(ch('/'));
     // A star turns the same field into the command line, whatever window it
-    // is drawn over — the filter is not what a starred line means.
+    // is drawn over: the filter is not what a starred line means.
     type_str(&mut app, "*new fromthemap.md");
     app.on_key(k(KeyCode::Enter));
 
@@ -387,8 +387,8 @@ fn the_window_keys_are_letters_every_terminal_sends() {
     app.on_key(k(KeyCode::Esc));
     assert_eq!(app.window, Window::Main, "Esc comes back from either");
 
-    // Ctrl with a digit is not in a terminal's legacy encoding — `Ctrl+3`
-    // arrives as Esc on most of them — so it is not bound to anything.
+    // Ctrl with a digit is not in a terminal's legacy encoding (`Ctrl+3`
+    // arrives as Esc on most of them) so it is not bound to anything.
     app.on_key(ctrl('3'));
     assert_eq!(app.window, Window::Main);
 }

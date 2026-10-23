@@ -7,7 +7,7 @@
 //! # It is a picture of git, taken at a moment
 //!
 //! Nothing here watches anything. [`App::refresh_git`] asks git what has
-//! changed, and the answer is held until something asks again — which is every
+//! changed, and the answer is held until something asks again, which is every
 //! time the window is switched to, and after every action that could have
 //! changed it. That is the same bargain the project map makes, and for the same
 //! reason: a repository is cheap to re-read and expensive to keep in step.
@@ -29,7 +29,7 @@ use super::mode::Window;
 /// The buttons across the top of the pane, in the order they are drawn.
 ///
 /// Ordered by how much they change: reading first, then writing, then the two
-/// that rewrite what is already there. Nothing is arranged alphabetically —
+/// that rewrite what is already there. Nothing is arranged alphabetically:
 /// the shape of the row is a warning label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Button {
@@ -128,7 +128,7 @@ pub struct GitPane {
     /// The commit message being written, if one is.
     ///
     /// A real [`Editor`], so the message gets the same keyboard as everything
-    /// else that types in tiny — undo, word motions, the lot. It is never
+    /// else that types in tiny: undo, word motions, the lot. It is never
     /// saved: git is handed its text and the buffer is dropped.
     pub message: Option<Editor>,
     /// Rows the two diff columns had on the last draw, so scrolling knows what
@@ -178,7 +178,7 @@ impl GitPane {
                 .extend((0..list.len()).map(|index| Row::File { staged, index }));
         }
         // Staging moves a file from one section to the other, so the cursor
-        // follows it by name and does not care which side it lands on — that
+        // follows it by name and does not care which side it lands on; that
         // is the whole point of Enter being a toggle.
         self.selected = keep
             .and_then(|path| {
@@ -207,7 +207,7 @@ impl App {
     /// Ask git everything the window needs, from scratch.
     ///
     /// Called on every switch into the window and after everything that could
-    /// have changed the answer. A failure — no git, no repository — is kept and
+    /// have changed the answer. A failure (no git, no repository) is kept and
     /// drawn rather than thrown, because "this is not a repository" is a
     /// perfectly good thing for the window to say.
     pub(super) fn refresh_git(&mut self) {
@@ -254,7 +254,7 @@ impl App {
         };
     }
 
-    /// Move the cursor in the list, or scroll the diff — whichever half has
+    /// Move the cursor in the list, or scroll the diff, whichever half has
     /// the keyboard.
     pub(super) fn move_git_cursor(&mut self, delta: isize) {
         if self.git.focus == GitFocus::Diff {
@@ -359,7 +359,7 @@ impl App {
     /// Run what a button says, or open the message box where it needs words.
     ///
     /// Commit is the one button that is two presses: the first opens a box to
-    /// write in, the second sends what is in it. That is deliberate — a commit
+    /// write in, the second sends what is in it. That is deliberate: a commit
     /// message is the one piece of writing in this window, and a one-line
     /// prompt is not where anyone wants to write the second paragraph of it.
     fn press_git_button(&mut self, button: Button) {

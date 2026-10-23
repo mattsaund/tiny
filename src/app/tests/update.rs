@@ -2,7 +2,7 @@
 //!
 //! Nothing here asks GitHub: the check's answer is put straight into
 //! `update_found`, the way [`App::poll_update`] would on finding one. What is
-//! tested is the part a person meets — when the question appears, what it
+//! tested is the part a person meets: when the question appears, what it
 //! says, and what each answer does.
 
 use super::*;
@@ -23,7 +23,7 @@ fn the_question_waits_until_you_are_in_the_browser() {
     app.on_key(k(KeyCode::Enter));
     found(&mut app);
 
-    // Put while you were typing, the next letter — a `y` — would answer it.
+    // Put while you were typing, the next letter (a `y`) would answer it.
     app.poll_update();
     assert!(!is_asking(&app), "not while a file has the keyboard");
 
@@ -131,5 +131,5 @@ fn the_update_command_puts_the_question_from_anywhere() {
     app.on_key(k(KeyCode::Enter));
     found(&mut app);
     command(&mut app, "update");
-    assert!(is_asking(&app), "asked for, so asked — even from a file");
+    assert!(is_asking(&app), "asked for, so asked, even from a file");
 }

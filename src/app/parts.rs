@@ -1,8 +1,8 @@
 //! Small helpers more than one part of `app` needs.
 //!
 //! Nothing here touches [`App`](super::App). They are the shared answers to questions that
-//! come up in several places — how a path is named in a message, how a list
-//! cursor moves, how a command line is split into arguments — kept in one
+//! come up in several places (how a path is named in a message, how a list
+//! cursor moves, how a command line is split into arguments) kept in one
 //! place so the answer cannot differ depending on which file asked.
 //!
 //! [`safe_join`] is the one that matters. Every path that arrives as text goes
@@ -29,8 +29,8 @@ pub(super) fn plural(n: usize) -> &'static str {
 /// Move a list cursor the way every list in tiny moves: an arrow or `i`/`k`,
 /// Shift or `I`/`K` for the ends, and a page at a time.
 ///
-/// `None` for anything else, which is how each caller keeps its own keys —
-/// Enter, Esc, Delete — to itself.
+/// `None` for anything else, which is how each caller keeps its own keys
+/// (Enter, Esc, Delete) to itself.
 ///
 /// These are not rebindable, and deliberately: an overlay you cannot get out
 /// of because you rebound its keys is a trap, and `keys` says so.
@@ -67,7 +67,7 @@ pub(super) fn char_byte(s: &str, ci: usize) -> usize {
 ///
 /// The `any` flag tracks whether the current argument was *started*, which is
 /// what lets `""` produce a deliberate empty argument rather than being
-/// dropped as whitespace. There is no escaping — a literal quote cannot be
+/// dropped as whitespace. There is no escaping: a literal quote cannot be
 /// passed, which is a known limit rather than an oversight.
 pub(super) fn split_args(line: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -99,12 +99,12 @@ pub(super) fn split_args(line: &str) -> Vec<String> {
 }
 
 /// Join a user-typed name onto `base`, refusing anything that would escape the
-/// project root — a typed `../../etc/passwd` must not create a file there.
+/// project root: a typed `../../etc/passwd` must not create a file there.
 ///
 /// **This is a security boundary.** Every path that comes from user input and
 /// is then created, renamed to, or written must pass through here. The check
 /// is lexical, done by walking components and popping on `..`, so it does not
-/// depend on the target existing — and it fails closed twice over: once if
+/// depend on the target existing, and it fails closed twice over: once if
 /// `..` pops past the start, and again if the normalized result does not sit
 /// under `root`.
 ///

@@ -1,7 +1,7 @@
 //! The two editing overlays: settings, and key bindings.
 //!
-//! Both are the same shape — a scrolling list of name-and-value rows, one of
-//! them selected, with the selected value editable in place — so they share
+//! Both are the same shape (a scrolling list of name-and-value rows, one of
+//! them selected, with the selected value editable in place) so they share
 //! [`super::parts::keep_visible`], [`super::parts::highlight_row`] and
 //! [`super::parts::split_at_char`] and differ only in where the rows come
 //! from. Settings reads [`crate::config::Config::settings_index`]; keybinds
@@ -35,7 +35,7 @@ use crate::config::keys::Action;
 ///
 /// Grouped with a heading for each pane, because the same key means different
 /// things in different panes and a flat list would hide that. The movements
-/// that work in several panes are one group of their own at the top — they
+/// that work in several panes are one group of their own at the top; they
 /// belong to no single pane, and listing them under the first one that happens
 /// to have them would be a lie about where they work.
 ///
@@ -164,8 +164,8 @@ enum BindRow {
     Action(usize, Action),
 }
 
-/// The widest a value is drawn in the settings list. A longer one — a list of
-/// a dozen extensions — is cut with `…`, and shown whole once it is being
+/// The widest a value is drawn in the settings list. A longer one (a list of
+/// a dozen extensions) is cut with `…`, and shown whole once it is being
 /// edited. Cut, it can no longer run on into the hint beside it, which is
 /// what made a long list read as one sentence with its description.
 const VALUE_WIDTH: usize = 24;
@@ -175,7 +175,7 @@ const VALUE_WIDTH: usize = 24;
 ///
 /// A row being edited swaps the value for an inline text field with its own
 /// drawn cursor. Values are read live from `app.config`, so a change takes
-/// effect on the screen behind the overlay immediately — `Ctrl+S` is what
+/// effect on the screen behind the overlay immediately: `Ctrl+S` is what
 /// makes it persist to `tiny.conf`.
 pub(super) fn draw_settings(f: &mut Frame, app: &App, area: Rect, s: &Settings) {
     let pal = app.palette;

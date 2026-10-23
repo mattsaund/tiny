@@ -2,10 +2,10 @@
 //!
 //! `*copy temp.txt to notes`, `*goto function main in app.rs`, `*replace hi
 //! with hello`: the command line takes sentences, and several ways of saying
-//! each one — `go to`, `jump to` and `open` are one verb, as are `delete`,
+//! each one; `go to`, `jump to` and `open` are one verb, as are `delete`,
 //! `remove` and `rm`. There is no language model anywhere in this. It is a
-//! verb, then what to do it to, then the little words that join the parts —
-//! `to`, `with`, `in` — and a list of the ways people tend to say each.
+//! verb, then what to do it to, then the little words that join the parts
+//! (`to`, `with`, `in`) and a list of the ways people tend to say each.
 //!
 //! This module only reads. It turns a line into a [`Sentence`] without
 //! looking at the disk, which is what keeps it testable line by line; finding
@@ -21,7 +21,7 @@
 //!   last `in`, so a name may have the other ones in it.
 //! - Anything in double quotes is a name, never a joining word:
 //!   `*copy "to do.md" to archive`.
-//! - Every spelling tiny had before still works — `*line 42`, `*42`,
+//! - Every spelling tiny had before still works: `*line 42`, `*42`,
 //!   `*replace old new`, `*cp`, `*mv`, `*rm`. More ways in is the point.
 
 /// One word of a command line, and whether it was written in quotes. A quoted
@@ -90,9 +90,9 @@ fn joined(words: &[Word]) -> String {
 /// Where a command is aimed, when it says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Place {
-    /// `in this file`, `here` — the file being looked at.
+    /// `in this file`, `here`: the file being looked at.
     This,
-    /// `in notes.md` — a file or folder, by name.
+    /// `in notes.md`: a file or folder, by name.
     Named(String),
 }
 
@@ -101,13 +101,13 @@ pub enum Place {
 pub enum Target {
     /// `line 42`, or just `42`. Counted from 1.
     Line(usize),
-    /// `function main` — a definition in code.
+    /// `function main`: a definition in code.
     Function(String),
-    /// `heading install` — a markdown heading.
+    /// `heading install`: a markdown heading.
     Heading(String),
-    /// `word test` — the word on its own, not inside a longer one.
+    /// `word test`: the word on its own, not inside a longer one.
     Word(String),
-    /// `text "not yet"` — anywhere, inside words too.
+    /// `text "not yet"`: anywhere, inside words too.
     Text(String),
     /// `file notes.md`.
     File(String),
@@ -115,7 +115,7 @@ pub enum Target {
     Folder(String),
     /// One of tiny's own windows: `goto map`, `open git`, `show help`.
     Window(Window),
-    /// No kind was given — `goto notes` — so whatever answers to the name:
+    /// No kind was given (`goto notes`) so whatever answers to the name:
     /// a file, a folder, a function, a heading, then a word.
     Anything(String),
 }
@@ -142,7 +142,7 @@ pub enum Sentence {
         target: Target,
         within: Option<Place>,
     },
-    /// `copy A to B` — B may be a folder to copy into.
+    /// `copy A to B`: B may be a folder to copy into.
     Copy {
         from: Place,
         to: String,
@@ -175,7 +175,7 @@ pub enum Sentence {
     Commit(String),
     Reload,
     Update,
-    /// A word tiny has no verb for — a plugin's command, perhaps, or a name to
+    /// A word tiny has no verb for: a plugin's command, perhaps, or a name to
     /// go to. Kept whole so either can be tried.
     Other {
         name: String,
@@ -227,7 +227,7 @@ const POLITE: &[&str] = &[
     "please", "pls", "kindly", "just", "now", "then", "ok", "okay", "hey", "so",
 ];
 /// Words with no part in a name when one starts it: `delete the file`,
-/// `make a new folder`. Never taken when it is the whole name — a file may be
+/// `make a new folder`. Never taken when it is the whole name: a file may be
 /// called `a`.
 const ARTICLES: &[&str] = &["the", "a", "an"];
 /// How a sentence says "the thing I am on".
@@ -385,7 +385,7 @@ fn place(w: &[Word]) -> Option<Place> {
 fn subject(w: &[Word]) -> Place {
     let mut w = without_articles(w);
     // `delete the file old.md`: the kind word in front says nothing a name
-    // does not, so it goes too — when a name follows it.
+    // does not, so it goes too, when a name follows it.
     if w.len() > 1 && (w[0].is(FILE) || w[0].is(FOLDER)) {
         w.remove(0);
     }

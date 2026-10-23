@@ -9,8 +9,8 @@
 //!
 //! An undo that took back one character at a time would need forty presses to
 //! remove a sentence. So consecutive edits of the same kind, on the same line,
-//! coalesce into one group, and anything that is not more of the same — moving
-//! the cursor, a different kind of edit — closes the group. That is what
+//! coalesce into one group, and anything that is not more of the same (moving
+//! the cursor, a different kind of edit) closes the group. That is what
 //! [`EditKind`] and [`Editor::break_undo_group`] are for.
 //!
 //! # The one line everything else depends on
@@ -18,7 +18,7 @@
 //! [`Editor::push_undo`] is the funnel every mutation goes through, which
 //! makes it the only place that has to record *what changed*. The low-water
 //! mark it keeps is what lets the syntax highlighter resume instead of
-//! re-parsing from the top — see [`crate::text::highlight::Resume`].
+//! re-parsing from the top, see [`crate::text::highlight::Resume`].
 
 use super::{EditKind, Editor, Snapshot};
 
@@ -61,7 +61,7 @@ impl Editor {
         }
     }
 
-    /// Break the coalescing run — cursor movement ends a typing group.
+    /// Break the coalescing run: cursor movement ends a typing group.
     ///
     /// Called by every movement method. Without it, typing "foo", arrowing
     /// away, and typing "bar" would revert both runs in one press.

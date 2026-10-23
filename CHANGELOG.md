@@ -13,17 +13,17 @@ Each version is a `v` tag, with ready-made binaries on its
   Tabs now expand to their stops everywhere: the editor, the preview, markdown
   and the git diff. Makefiles and Go keep their indentation.
 
-## 0.5.0 — 2026-10-11
+## 0.5.0 - 2026-10-11
 
 - **Commands are sentences.** `*copy temp.txt to notes`, `*goto function
   main`, `*goto word todo in notes.md`, `*replace hi with hello`. Many ways to
   say each (`go to`, `open`, `jump to`; `remove`, `rm`; `change … to`), and
   every older spelling still works.
-- **The bar says what Enter will do** on the line under it, with counts —
+- **The bar says what Enter will do** on the line under it, with counts,
   before anything happens.
 - **Names from anywhere.** `notes` is the folder called notes wherever it is;
   `readme` finds README.md. Two with one name are listed, not guessed.
-- **goto** a line, function, word, text, heading, file or folder — in one file
+- **goto** a line, function, word, text, heading, file or folder, in one file
   with `in a.md`, otherwise across the project. Again goes to the next one.
 - **replace** is whole words. With no `in` it does the whole project and asks
   first; `in a.md` changes that file, and `Ctrl+Z` undoes it.
@@ -33,7 +33,7 @@ Each version is a `v` tag, with ready-made binaries on its
   copyright and license of everything compiled in: each crate, Lua, and the
   color themes.
 
-## 0.4.6 — 2026-10-11
+## 0.4.6 - 2026-10-11
 
 - **A much faster project map.** Opening it reads files on every core and
   skips the ones with nothing to find in them, like pictures. A 20,000-note
@@ -47,7 +47,7 @@ Each version is a `v` tag, with ready-made binaries on its
 - **Fixes:** maps of very large projects lay out correctly; `tiny
   --licenses` lists the crates only the Windows build uses.
 
-## 0.4.5 — 2026-10-10
+## 0.4.5 - 2026-10-10
 
 - **Releases.** Ready-made tiny for macOS, Linux and Windows, Intel and ARM.
   The install line downloads it; no Rust needed. The installers also offer
@@ -70,4 +70,4 @@ Each version is a `v` tag, with ready-made binaries on its
 
 ## 0.3.1 and earlier
 
-Before releases — see the git history.
+Before releases, see the git history.

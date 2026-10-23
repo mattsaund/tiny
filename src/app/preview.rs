@@ -11,7 +11,7 @@
 //! open buffer wins over anything on disk, so a file with unsaved edits is
 //! never re-read out from under them. Then media, which is described rather
 //! than opened. Then the size ceiling. Only then is the file read, and only
-//! then is it decided to be text or binary — a file that is not valid UTF-8,
+//! then is it decided to be text or binary: a file that is not valid UTF-8,
 //! or that holds a zero byte, is reported as binary rather than opened as
 //! mojibake.
 //!
@@ -38,7 +38,7 @@ use super::parts::display_name;
 pub enum TextKind {
     /// Rendered markdown.
     Markdown,
-    /// Wrapped prose — notes, licenses, logs.
+    /// Wrapped prose: notes, licenses, logs.
     Prose,
     /// Source. Straight into the editor, with line numbers.
     Code,
@@ -50,7 +50,7 @@ impl TextKind {
     /// cursor in them; code is already at its most readable as itself.
     ///
     /// Says nothing about editing. Every text file opens into the editor the
-    /// same way — see [`App::focus_editor`].
+    /// same way, see [`App::focus_editor`].
     pub fn reads_first(self) -> bool {
         self != TextKind::Code
     }
@@ -81,7 +81,7 @@ pub(super) const PROSE_NAMES: &[&str] = &[
 /// Checked in order: markdown first (it is usually also in the prose list but
 /// has a renderer of its own), then the configured prose extensions, then
 /// anything else with an extension is code. Extensionless files fall back to
-/// [`PROSE_NAMES`], and are code otherwise — which is the right default for a
+/// [`PROSE_NAMES`], and are code otherwise, which is the right default for a
 /// `Makefile` or a shell script.
 pub(super) fn text_kind(path: &Path, prose_exts: &[String]) -> TextKind {
     match path
@@ -117,7 +117,7 @@ pub enum Preview {
         path: PathBuf,
         kind: TextKind,
     },
-    /// A picture, a video, a PDF or a sound. Described in words, not drawn —
+    /// A picture, a video, a PDF or a sound. Described in words, not drawn;
     /// Enter hands it to the desktop's own viewer. See [`crate::files::media`].
     Media {
         path: PathBuf,
@@ -140,7 +140,7 @@ pub enum Preview {
 }
 
 /// Files larger than this are not loaded into the editor. Shown as a
-/// "large file" preview instead — the undo model snapshots whole buffers, so
+/// "large file" preview instead: the undo model snapshots whole buffers, so
 /// there is a real ceiling on what can be edited comfortably.
 pub(super) const MAX_EDIT_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -213,8 +213,8 @@ impl App {
     pub(super) fn reveal(&mut self, path: &Path) -> bool {
         let root = self.tree.root_path().to_path_buf();
         // Two spellings of the same place. The tree's root has been through
-        // `canonical`, and a path from somewhere else — git's idea of where a
-        // file is, say — may not have been; or the other way round. A temp
+        // `canonical`, and a path from somewhere else (git's idea of where a
+        // file is, say) may not have been; or the other way round. A temp
         // directory under a symlink on macOS and an 8.3 short name such as
         // `RUNNER~1` on Windows both do this. Resolving *both* sides is the only
         // comparison that holds everywhere, and the part after the root is then
@@ -264,7 +264,7 @@ impl App {
     ///
     /// A file is one `stat` and is measured every time, so saving one shows
     /// the new size immediately. A folder is a walk of everything under it,
-    /// so it is measured once and remembered — see [`size`] for the budget
+    /// so it is measured once and remembered, see [`size`] for the budget
     /// that keeps the walk from being felt, and `size_cache` for how long the
     /// answer is kept.
     pub(super) fn note_size(&mut self) {
@@ -289,7 +289,7 @@ impl App {
     }
 
     /// Called after every cursor move. This is the single seam between the two
-    /// panes — the tree does not know about the preview and vice versa; they
+    /// panes: the tree does not know about the preview and vice versa; they
     /// are coupled only here.
     pub(super) fn sync_preview(&mut self) {
         self.preview_scroll = 0;
@@ -317,7 +317,7 @@ impl App {
     ///
     /// Order matters. An already-open buffer wins over anything on disk, so a
     /// file with unsaved edits is never re-read out from under them. Then
-    /// media, then the size ceiling, then a decode attempt — a file that is not
+    /// media, then the size ceiling, then a decode attempt: a file that is not
     /// valid UTF-8, or that contains a zero byte, is reported as binary rather
     /// than opened as mojibake.
     ///
@@ -358,7 +358,7 @@ impl App {
                 Ok(text) if !text.contains('\0') => {
                     // A fresh buffer reports no edits, so the highlight cache
                     // would go on believing whatever it last knew about this
-                    // path — which, after a rename or a delete, is a different
+                    // path, which, after a rename or a delete, is a different
                     // file's contents.
                     self.highlight_cache.clear();
                     self.buffers.insert(
@@ -366,7 +366,7 @@ impl App {
                         Editor::from_str(path.to_path_buf(), &text),
                     );
                     // Stamped as it is read, so a write landing a moment later
-                    // is a change and not the new normal — see `watch`.
+                    // is a change and not the new normal, see `watch`.
                     self.note_file(path);
                     Preview::Buffer {
                         path: path.to_path_buf(),

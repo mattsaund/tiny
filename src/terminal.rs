@@ -3,13 +3,13 @@
 //! `Ctrl+N` starts a second tiny on the same project, in a new window of the
 //! terminal this one is running in. There is no standard way to ask a terminal
 //! for a window, so [`candidates`] reads the variables terminals set about
-//! themselves, and tries what each one answers to — then the system's own
+//! themselves, and tries what each one answers to, then the system's own
 //! terminal, if nothing more specific was found or it would not start.
 //!
 //! # Not `Ctrl+Enter`
 //!
 //! It would read well, and it cannot work: in a terminal's legacy encoding
-//! `Ctrl+Enter` *is* Enter — macOS Terminal sends the same byte for both — so
+//! `Ctrl+Enter` *is* Enter (macOS Terminal sends the same byte for both) so
 //! the key would open the file under the cursor instead. `Ctrl+N` is what
 //! every program means by "new window", and every terminal sends it.
 //!
@@ -69,7 +69,7 @@ impl Candidate {
 /// Every way this terminal might open a window running `tiny` on `dir`, best
 /// first.
 ///
-/// `env` is how the environment is read — `std::env::var` for real, a table
+/// `env` is how the environment is read: `std::env::var` for real, a table
 /// in the tests. On a Mac, Terminal and iTerm2 are handed a `.command` script,
 /// which both run in a new window without needing permission to be scripted;
 /// `script` is where that file would be written.
@@ -105,7 +105,7 @@ pub fn candidates(
             }
             // `start` takes its first quoted argument as the window's title,
             // so it is given an empty one rather than having the path taken
-            // for it — the same as the desktop opener in `media`.
+            // for it: the same as the desktop opener in `media`.
             out.push(Candidate::new(
                 "a new console",
                 "cmd",
@@ -245,7 +245,7 @@ fn wezterm(env: &dyn Fn(&str) -> Option<String>, dir: &str, tiny: &str) -> Candi
 
 /// The `.command` script Terminal and iTerm2 run: into the folder, and tiny
 /// in place of the shell. It deletes itself first, since nothing else is
-/// left to — the terminal reads it after tiny has moved on.
+/// left to: the terminal reads it after tiny has moved on.
 fn command_script(tiny: &Path, dir: &Path) -> String {
     format!(
         "#!/bin/sh\nrm -f \"$0\"\ncd {} && exec {}\n",
@@ -264,7 +264,7 @@ pub fn open_window(dir: &Path) -> Result<&'static str> {
     let tiny = std::env::current_exe().map_err(|e| anyhow!("cannot find tiny: {e}"))?;
     let os = Os::this();
     // A desktop is something to open a window *on*. Over ssh without one
-    // there is nowhere for it to go — except a tmux window, which needs none.
+    // there is nowhere for it to go, except a tmux window, which needs none.
     let env = |var: &str| std::env::var(var).ok();
     if os == Os::Unix
         && env("DISPLAY").is_none()
@@ -315,7 +315,7 @@ fn write_script(script: &Path, tiny: &Path, dir: &Path) -> Result<()> {
 }
 
 /// Start one candidate, detached from this tiny: its own folder, no shared
-/// input or output. Whether it *started* is all that can be known — a terminal
+/// input or output. Whether it *started* is all that can be known: a terminal
 /// opens its window after the program that asked has moved on.
 fn spawn(candidate: &Candidate, dir: &Path) -> bool {
     if cfg!(test) {
@@ -338,7 +338,7 @@ fn spawn(candidate: &Candidate, dir: &Path) -> bool {
     }
 }
 
-/// What a test build would have started: nothing, written down — a test must
+/// What a test build would have started: nothing, written down; a test must
 /// not open windows on the machine running it.
 #[cfg(test)]
 pub mod spawned {

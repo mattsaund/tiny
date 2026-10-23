@@ -1,4 +1,4 @@
-//! `tiny example.py` — one file, opened on its own.
+//! `tiny example.py`: one file, opened on its own.
 //!
 //! The tree folds away and the editor takes the keyboard, because naming a
 //! file is asking to edit it. The exceptions are what these are mostly about:
@@ -92,7 +92,7 @@ fn naming_a_markdown_file_opens_it_in_the_editor() {
     let file = td.path().join("notes/design.md");
     let mut app = App::new(target(td.path(), Some(file)), Config::default(), None).unwrap();
     assert_eq!(app.focus, Focus::Editor);
-    // Formatted, but with a cursor in it — the heading under the cursor
+    // Formatted, but with a cursor in it: the heading under the cursor
     // wears its hashes and the rest of the note does not.
     let out = joined(&mut app);
     assert!(out.contains("# Design Notes"), "{out}");

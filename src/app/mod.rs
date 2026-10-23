@@ -10,7 +10,7 @@
 //! # Where each part lives
 //!
 //! There is exactly one [`App`], and it is defined here along with the
-//! handful of questions anyone can ask it — where the root is, what the
+//! handful of questions anyone can ask it: where the root is, what the
 //! cursor is on, which buffers are dirty. Everything it *does* is split by
 //! the kind of thing the user was doing at the time:
 //!
@@ -41,8 +41,8 @@
 //! Almost every question about "why did that key do that" is answered by two
 //! independent pieces of state:
 //!
-//! - [`Focus`] — which pane the keyboard belongs to, `Tree` or `Editor`.
-//! - [`Mode`] — what, if anything, is layered on top: a prompt, a confirmation,
+//! - [`Focus`]: which pane the keyboard belongs to, `Tree` or `Editor`.
+//! - [`Mode`]: what, if anything, is layered on top: a prompt, a confirmation,
 //!   the search or command bar, the settings area, the help overlay, or
 //!   `Normal` for none of them.
 //!
@@ -53,7 +53,7 @@
 //! # `i j k l` are the arrow keys
 //!
 //! Everywhere a pane is being navigated rather than typed into, `i j k l` do
-//! what the four arrows do — up, left, down, right, in the inverted-T anyone
+//! what the four arrows do (up, left, down, right) in the inverted-T anyone
 //! who has held a keyboard sideways already knows. `I` and `K` go all the way,
 //! the same as Home and End. They exist for keyboards with no cursor
 //! cluster, and they are deliberately *not* the vim `h j k l`: `j` and `k`
@@ -67,8 +67,8 @@
 //!
 //! There used to be a third flag deciding whether a focused text file showed
 //! rendered output or raw source. It is gone. Markdown keeps its formatting
-//! while you edit it — every block but the one under the cursor, see
-//! [`crate::ui`] — so a separate rendered view was a step to press through
+//! while you edit it (every block but the one under the cursor, see
+//! [`crate::ui`]) so a separate rendered view was a step to press through
 //! rather than a thing you wanted. Every text file now opens the same way,
 //! straight into the editor, and `Focus` alone says who has the keyboard.
 //!
@@ -82,7 +82,7 @@
 //! hands the owned mode to a handler. This is not a borrow-checker workaround
 //! so much as a useful default: a handler that does nothing leaves `Normal`
 //! behind, so **closing is the default and staying open is explicit**. Every
-//! handler that wants its mode to persist has to put it back — which is why
+//! handler that wants its mode to persist has to put it back, which is why
 //! you see `self.mode = Mode::Bar(b)` at the end of so many branches. Forget
 //! it and the overlay closes; that is the intended failure direction.
 //!
@@ -94,7 +94,7 @@
 //! under it), a rename (moves the entry to the new key so edits follow the
 //! file), a refresh or replace (drops *clean* buffers so they re-read from
 //! disk, keeps dirty ones), and [`watch`] finding that a file has stopped
-//! being readable text. Every one of them keeps dirty buffers — there is
+//! being readable text. Every one of them keeps dirty buffers; there is
 //! nowhere else for unsaved work to live.
 //!
 //! # Where drawing state lives
@@ -102,7 +102,7 @@
 //! `preview_len`, `last_edit_height` and `last_tree_height` are written by
 //! `ui` during a draw and read here by the key handlers. They are how paging
 //! and scroll clamping know the size of a window this module cannot see. On
-//! the very first frame they hold their defaults, which is harmless — every
+//! the very first frame they hold their defaults, which is harmless: every
 //! use is clamped.
 
 #[cfg(test)]
@@ -160,7 +160,7 @@ pub struct App {
     /// Flattened tree, rebuilt after every structural change. The cursor
     /// indexes into this.
     pub rows: Vec<Row>,
-    /// Cursor position in `rows`. Kept valid by every mutation path — a stale
+    /// Cursor position in `rows`. Kept valid by every mutation path: a stale
     /// index would silently preview the wrong file.
     pub selected: usize,
     /// First visible row. Owned here but written by `ui` once the pane height
@@ -180,11 +180,11 @@ pub struct App {
     /// never set directly.
     pub cursor_size: Option<Size>,
     /// Folder sizes already measured, so arrowing back onto one does not walk
-    /// it again. Emptied by [`App::rebuild_rows`] — every way the tree can
+    /// it again. Emptied by [`App::rebuild_rows`]; every way the tree can
     /// change goes through it, and any of them can change what a folder holds.
     size_cache: HashMap<PathBuf, Size>,
     /// Open files, keyed by path. Outlives the selection so unsaved edits
-    /// survive arrowing away and back — see the module docs.
+    /// survive arrowing away and back, see the module docs.
     pub buffers: HashMap<PathBuf, Editor>,
     /// The live config. Mutated by `*set` and the settings area; persisted
     /// only on an explicit `Ctrl+S`.
@@ -194,7 +194,7 @@ pub struct App {
     /// keypress without a restart.
     pub keymap: Keymap,
     /// What this terminal turned out to be able to send, which decides which
-    /// keyboard the program has. Assumed whole until `main` has asked — see
+    /// keyboard the program has. Assumed whole until `main` has asked, see
     /// [`App::set_keyboard`].
     pub keyboard: Keyboard,
     /// Parsed styles. Rebuilt from `config.theme` by [`App::apply_config`], so
@@ -206,12 +206,12 @@ pub struct App {
     /// Saved syntax-parser state for the buffer being edited, so a window deep
     /// in a long file does not have to be reached by parsing everything above
     /// it on every keystroke. Written by `ui` while drawing, like the media
-    /// cache and for the same reason — see the module docs.
+    /// cache and for the same reason, see the module docs.
     pub highlight_cache: Resume,
     /// Which of the three windows is on screen. `Ctrl+G` and `Ctrl+L` switch
     /// to the other two, and back.
     pub window: Window,
-    /// Everything the source-control window draws — see [`source`].
+    /// Everything the source-control window draws, see [`source`].
     pub git: GitPane,
     /// The project map, built when [`Window::Map`] is switched to and kept
     /// until the next time it is.
@@ -221,10 +221,10 @@ pub struct App {
     /// pastes what is there now rather than a stale snapshot.
     pub clipboard: Option<PathBuf>,
     /// `Ctrl+T` folds the tree away to give the whole window to the file.
-    /// Purely a view state — nothing about the tree itself changes, so
+    /// Purely a view state; nothing about the tree itself changes, so
     /// bringing it back costs no reading.
     pub tree_hidden: bool,
-    /// The release check, while it is out asking — see [`update`].
+    /// The release check, while it is out asking, see [`update`].
     update_check: Option<crate::update::Check>,
     /// A newer version the check found, waiting for a moment it can be asked
     /// about without catching a keystroke meant for something else.
@@ -232,12 +232,12 @@ pub struct App {
     /// The check was asked for with `*update`, so its answer is reported
     /// whatever it is, and the question goes up wherever you are.
     update_by_hand: bool,
-    /// The version to install once tiny has quit — set by a `y` to the update
+    /// The version to install once tiny has quit, set by a `y` to the update
     /// question, and read by `main` after the terminal is handed back.
     pub update_on_exit: Option<String>,
     /// The project's files and folders, listed for looking up the names a
     /// command says. Kept while the bar is open, so it is not walked again on
-    /// every keystroke; dropped when a command runs — see `plan`.
+    /// every keystroke; dropped when a command runs, see `plan`.
     names: Option<plan::Names>,
     /// The last `goto` that went somewhere, and which of its places it went
     /// to, so running it again goes on to the next one.
@@ -245,16 +245,16 @@ pub struct App {
     /// A plan is being made to describe under the bar, not to be carried
     /// out: anything too slow to do on a keystroke can say so and wait.
     planning_for_preview: bool,
-    /// Every plugin, loaded — see [`crate::plugins`].
+    /// Every plugin, loaded, see [`crate::plugins`].
     pub plugins: crate::plugins::Plugins,
-    /// Where plugins are loaded from. `None` until `main` says — so a test,
+    /// Where plugins are loaded from. `None` until `main` says, so a test,
     /// which builds an `App` directly, never runs or opens anyone's real
     /// plugins folder unless it hands this one of its own.
     pub plugins_dir: Option<PathBuf>,
     /// Which pane had the keyboard when the tree was folded away, so unfolding
     /// puts it back and the key is a true toggle.
     focus_before_hide: Focus,
-    /// The message on the status line. Every action sets this — it is the
+    /// The message on the status line. Every action sets this; it is the
     /// program's only channel for telling the user what just happened.
     pub status: String,
     /// Checked by the event loop after each draw, so the final frame is shown
@@ -285,7 +285,7 @@ pub struct App {
 impl App {
     /// Build the initial state from a resolved target and a loaded config.
     ///
-    /// The startup warning, if any, is shown in place of the usual greeting —
+    /// The startup warning, if any, is shown in place of the usual greeting:
     /// a broken config file should be the first thing you see, not something
     /// buried behind a "? for help".
     ///
@@ -365,7 +365,7 @@ impl App {
         // away, the file across the whole window, the keyboard already in it.
         // Naming one file is asking to edit that file, and everything else on
         // screen is in the way of it. Esc, or the fold key, brings the project
-        // back — nothing is lost, it is just not shown first.
+        // back. Nothing is lost; it is just not shown first.
         //
         // Only for a file there is something to type into. A picture cannot
         // take the keyboard, so it keeps the tree.
@@ -426,7 +426,7 @@ impl App {
     }
 
     /// Whether a tree row should wear the unsaved marker: the file itself is
-    /// dirty, or — for a directory — something inside it is.
+    /// dirty, or (for a directory) something inside it is.
     ///
     /// Collapsing a folder used to hide the fact that there was unsaved work
     /// under it. Marking every ancestor means the star is always visible from
@@ -510,7 +510,7 @@ impl App {
         }
     }
 
-    /// Build the map. Synchronous, so a large project pauses here — see
+    /// Build the map. Synchronous, so a large project pauses here, see
     /// `graph::build`.
     fn open_map(&mut self) {
         let root = self.root().to_path_buf();

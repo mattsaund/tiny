@@ -15,15 +15,15 @@
 //!
 //! `app` holds the flattened rows and indexes into them with a single `usize`
 //! cursor; `ui` draws a window of them. Nothing outside this module walks the
-//! nested form. That means every structural change — expand, collapse,
-//! refresh — has to be followed by a re-flatten, which `App::rebuild_rows`
+//! nested form. That means every structural change (expand, collapse,
+//! refresh) has to be followed by a re-flatten, which `App::rebuild_rows`
 //! does while preserving the cursor by path rather than by index.
 //!
 //! # Who asks it to re-read
 //!
 //! The tree never watches anything itself: it re-reads when something asks it
-//! to. That is a create/rename/delete, a `.`-toggle, `*reload`, or — twice a second
-//! while tiny is idle — [`app`'s disk watcher](crate::app), which stats the
+//! to. That is a create/rename/delete, a `.`-toggle, `*reload`, or (twice a second
+//! while tiny is idle) [`app`'s disk watcher](crate::app), which stats the
 //! directories [`Tree::loaded_dirs`] names and calls [`Tree::refresh_all`] when
 //! one of them has a new modification time. There is still no inotify and no
 //! background thread; see `app::watch` for why polling was the cheaper answer.
@@ -75,7 +75,7 @@ impl Node {
 
 /// One visible line in the tree pane.
 ///
-/// A flattened snapshot of a [`Node`], not a reference to one — `app` keeps a
+/// A flattened snapshot of a [`Node`], not a reference to one: `app` keeps a
 /// `Vec<Row>` and indexes it by cursor position, so rows have to outlive any
 /// borrow of the tree. Cloning the path and name on every flatten is the price
 /// of that, and it is cheap next to the disk read that produced them.
@@ -157,7 +157,7 @@ impl Tree {
     /// component at a time.
     ///
     /// Returns `None` for anything outside the root, and for anything inside a
-    /// directory that has not been loaded yet — an unloaded directory has no
+    /// directory that has not been loaded yet: an unloaded directory has no
     /// children to find, even though the file exists on disk. Callers that
     /// need the node to exist have to `expand` the parents first; that is what
     /// `App::reveal` does.
@@ -235,7 +235,7 @@ impl Tree {
     /// Re-read every directory that has been loaded so far.
     ///
     /// The blunt instrument behind `*reload` and every file operation.
-    /// Cost is one `read_dir` per open directory — fine for a project you are
+    /// Cost is one `read_dir` per open directory: fine for a project you are
     /// looking at, and the reason unopened directories are skipped entirely.
     pub fn refresh_all(&mut self) {
         let dirs = self.loaded_dirs();
@@ -274,7 +274,7 @@ impl Tree {
     /// in the fresh list, so they disappear; new ones arrive collapsed.
     ///
     /// The `prev.is_dir == fresh_child.is_dir` guard handles the case where a
-    /// name was deleted and recreated as the other kind — inheriting a
+    /// name was deleted and recreated as the other kind: inheriting a
     /// directory's children onto a file would be nonsense.
     ///
     /// A read failure is recorded as `unreadable` rather than propagated: a

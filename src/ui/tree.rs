@@ -19,7 +19,7 @@ use crate::text::search::{HitKind, Matcher};
 
 /// The project tree. Draws a window of `app.rows` around the cursor.
 ///
-/// Scrolling is resolved here — this is one of the three sanctioned mutations
+/// Scrolling is resolved here; this is one of the three sanctioned mutations
 /// (see the module docs): `tree_scroll` is nudged the minimum needed to keep
 /// the selected row on screen, so the list stays still while the cursor moves
 /// within the visible region. `last_tree_height` is recorded for the key
@@ -65,7 +65,7 @@ pub(super) fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         .take(height)
     {
         // Every arrow is drawn in the text color. An arrow says what a row
-        // *is* — you are inside here, this is shut — which is part of reading
+        // *is* (you are inside here, this is shut) which is part of reading
         // the row rather than chrome around it, and arrows in two weights
         // read as two kinds of importance that do not exist. The selected row
         // inverts as one piece (see [`highlight_row`]), so its arrow comes
@@ -128,14 +128,14 @@ pub(super) fn results_height(area: Rect, hits: usize) -> u16 {
 /// project without taking the project off screen.
 ///
 /// It pushes the panes down instead of covering them, which costs a few rows
-/// and buys their titles and their top lines — a list that hides the thing it
+/// and buys their titles and their top lines: a list that hides the thing it
 /// is pointing at is answering the wrong half of the question.
 ///
 /// Full width for the same reason it used to want the tree's place: a result
 /// line carries a path, a line number and a snippet, and there is no
 /// filename-width version of that worth reading.
 ///
-/// Note that scrolling is computed into a local, not written back to `b` — the
+/// Note that scrolling is computed into a local, not written back to `b`: the
 /// bar is borrowed immutably here, and the offset is cheap to recompute each
 /// frame.
 pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect, b: &Bar) {

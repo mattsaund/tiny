@@ -13,7 +13,7 @@
 //! interesting structure buried in the middle of it.
 //!
 //! Grouping by folder gives up the clustering and gets back something worth
-//! more — a position you can predict. `src/app/mod.rs` is under the `src/app/`
+//! more: a position you can predict. `src/app/mod.rs` is under the `src/app/`
 //! heading, in alphabetical order, on every machine and after every edit.
 //!
 //! # Channels
@@ -29,7 +29,7 @@
 //!
 //! A file nothing reaches gets a heading of its own at the bottom rather than
 //! being left off. Being unlinked is a fact about a project worth being able
-//! to see — a note you meant to link and did not is exactly what you would
+//! to see: a note you meant to link and did not is exactly what you would
 //! open the map to find.
 
 use std::collections::BTreeMap;
@@ -53,7 +53,7 @@ impl Placed {
     /// Boxes are always three rows: a top border, the name, a bottom border.
     pub const HEIGHT: u16 = 3;
 
-    /// The row the name sits on — where a line into this box should arrive.
+    /// The row the name sits on: where a line into this box should arrive.
     pub fn middle(&self) -> u16 {
         self.row + 1
     }
@@ -76,17 +76,17 @@ impl Placed {
 /// nothing to say about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Group {
-    /// An index into `ProjectMap::folders`, which is in path order — so
+    /// An index into `ProjectMap::folders`, which is in path order, so
     /// ordering by index is ordering by path.
     Folder(usize),
-    /// Files nothing drawn reaches. Kept on screen — a map that omits files is
-    /// a map you have to remember the gaps in — but out of the way of the part
+    /// Files nothing drawn reaches. Kept on screen (a map that omits files is
+    /// a map you have to remember the gaps in) but out of the way of the part
     /// that has structure in it.
     Unconnected,
 }
 
 /// One folder's heading: the strip of dim text naming the folder whose files
-/// sit under it. Folders are not nodes — you cannot select one, and nothing
+/// sit under it. Folders are not nodes; you cannot select one, and nothing
 /// connects to one. They are how the files are arranged, and the heading is
 /// what says so.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +103,7 @@ pub struct Folder {
 /// whichever way round they go.
 ///
 /// The direction is deliberately not here. The picture draws a plain line
-/// either way — see `ui::ink`'s routing for why — and the detail strip reads
+/// either way (see `ui::ink`'s routing for why) and the detail strip reads
 /// direction off the edges themselves, where it is still exact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Link {
@@ -148,7 +148,7 @@ pub struct Placement {
     pub folders: Vec<Folder>,
     /// How many visible files did not fit on the pane. Non-zero means the
     /// picture is cut off and the view has to say so rather than looking
-    /// complete — moving the cursor is what reaches them.
+    /// complete; moving the cursor is what reaches them.
     pub offscreen: usize,
     /// The clear rows and columns, for routing.
     pub channels: Channels,
@@ -219,7 +219,7 @@ impl ProjectMap {
     /// Lay the visible files out on the pane and say where every box goes.
     ///
     /// Files are grouped by the folder they live in, and the folders run down
-    /// the pane in path order — root first, then alphabetically. That is the
+    /// the pane in path order: root first, then alphabetically. That is the
     /// whole layout: no simulation, no settling, no seed. A project map is
     /// something you consult, and you consult it by name, so a file's position
     /// should be predictable from the tree you already know rather than from
@@ -231,7 +231,7 @@ impl ProjectMap {
     /// time an edge changes.
     ///
     /// `pos` is refreshed here rather than at build time, because it *is* the
-    /// picture — the arrow keys move between boxes exactly as they are drawn,
+    /// picture: the arrow keys move between boxes exactly as they are drawn,
     /// which is why this takes `&mut self`.
     pub fn place(&mut self, width: u16, height: u16) -> Placement {
         let empty = Placement::default();
@@ -282,7 +282,7 @@ impl ProjectMap {
             });
             // Two rows, not one. The blank is what makes the row above every
             // box a row no heading occupies, which is where lines arriving
-            // from above have to land — see the routing in `ui`.
+            // from above have to land, see the routing in `ui`.
             row += 2;
             for (n, &i) in members.iter().enumerate() {
                 let (c, r) = (n % cols, n / cols);
@@ -378,7 +378,7 @@ impl ProjectMap {
     /// The visible files, split by heading. Never empty when `visible` is not.
     ///
     /// A file goes under its folder if anything drawn reaches it, and under
-    /// [`Group::Unconnected`] otherwise — which means the headings shift as
+    /// [`Group::Unconnected`] otherwise, which means the headings shift as
     /// the `1`-`3` toggles change what counts as a connection. That is the
     /// honest arrangement: the picture should say which files it is actually
     /// telling you something about.
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn the_row_above_a_box_is_never_a_heading() {
         // Lines arriving from above land on it, and a heading there would be
-        // overwritten by them — or would cut the line in half.
+        // overwritten by them, or would cut the line in half.
         let (_td, mut view) = fixture();
         let place = view.place(90, 60);
         for p in &place.boxes {
@@ -511,7 +511,7 @@ mod tests {
         let (_td, view) = fixture();
         // design.md and architecture.md point at each other, and main.py calls
         // utils.py; alone.md is joined to nothing. Whichever is picked, it must
-        // not be the lonely one — the map would open showing no connections.
+        // not be the lonely one: the map would open showing no connections.
         assert!(
             view.connected(view.selected),
             "opening on a file with no lines makes the map look broken"
@@ -540,7 +540,7 @@ mod tests {
         for p in &place.boxes {
             let rel = view.graph.nodes[p.node].rel.clone();
             if !view.connected(p.node) {
-                continue; // filed by connectedness instead — see below
+                continue; // filed by connectedness instead, see below
             }
             let want = format!("{}/", folder_of(&rel));
             assert_eq!(

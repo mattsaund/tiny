@@ -1,7 +1,7 @@
 //! Working out what `tiny <thing>` meant, and what to write if it is not
 //! there yet.
 //!
-//! A project is a directory. That is the whole definition — no marker folder,
+//! A project is a directory. That is the whole definition: no marker folder,
 //! no registry, no database, and no state anywhere else on the machine. Point
 //! tiny at a folder and it opens the folder; move the folder and nothing
 //! breaks, because nothing ever knew where it was.
@@ -9,7 +9,7 @@
 //! # Nothing is written into your project
 //!
 //! tiny never writes a file into a folder of yours that you did not name. No
-//! starter page, no dotfiles, no caches, no per-project settings — how the
+//! starter page, no dotfiles, no caches, no per-project settings: how the
 //! program behaves comes from one config file per user (see
 //! [`crate::config`]), never from the folder being opened. A new project is an
 //! empty folder, and an existing folder of someone's work is left exactly as
@@ -20,7 +20,7 @@
 //! Naming a path that does not exist creates it. That collapses "make a
 //! project" and "open a project" into the same gesture, which is the whole
 //! reason there is no separate subcommand. The cost is that a typo in a path
-//! silently creates a directory instead of erroring — a trade the design
+//! silently creates a directory instead of erroring: a trade the design
 //! accepts, because the alternative is a `new` command nobody remembers.
 //!
 //! # Naming a file
@@ -28,7 +28,7 @@
 //! `tiny todo.txt` opens that one file in the editor with the tree beside it,
 //! which is how tiny stands in for a plain text editor when a whole project is
 //! more than you wanted. A name that is not on disk yet is created either way;
-//! the extension is what decides which — see [`names_a_file`].
+//! the extension is what decides which, see [`names_a_file`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ use crate::config::{self, Config};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Target {
     pub root: PathBuf,
-    /// Set when the argument named a file — the tree opens on its directory
+    /// Set when the argument named a file: the tree opens on its directory
     /// and the cursor starts on the file itself.
     pub file: Option<PathBuf>,
     /// True when this run made the directory, which is what puts the "new
@@ -82,7 +82,7 @@ pub fn resolve(arg: Option<&str>, cfg: &Config) -> Result<Target> {
             } else if names_a_file(a, &path) {
                 // `tiny todo.txt` on a name that is not there yet writes the
                 // file and edits it, rather than making a folder called
-                // `todo.txt` — which is what a `.` in the name always meant.
+                // `todo.txt`, which is what a `.` in the name always meant.
                 touch(&path)?;
                 (folder_of(&path), Some(path), false)
             } else {
@@ -125,7 +125,7 @@ fn folder_of(file: &Path) -> PathBuf {
 /// The same rule answers the question on the command line and at the `n`
 /// prompt inside the app, which is why it lives here and is called from both:
 /// one place to read, and no chance of the two disagreeing. Neither can make
-/// an extensionless *file* — `*new LICENSE` is the way to do that.
+/// an extensionless *file*: `*new LICENSE` is the way to do that.
 pub fn names_a_file(arg: &str, path: &Path) -> bool {
     !arg.ends_with(std::path::is_separator) && path.extension().is_some()
 }
@@ -150,7 +150,7 @@ fn touch(path: &Path) -> Result<()> {
 /// Expand a leading `~`, which the shell leaves alone inside quotes.
 ///
 /// Needed because `tiny "~/notes"` and `tiny '~/notes'` reach us with a
-/// literal tilde — the shell only expands it unquoted, and cmd.exe never does.
+/// literal tilde: the shell only expands it unquoted, and cmd.exe never does.
 /// Deliberately handles just `~` and `~/...`; `~otheruser` is not supported and
 /// is left as a literal path, which will simply fail to open.
 fn expand(s: &str) -> PathBuf {
@@ -168,14 +168,14 @@ fn expand(s: &str) -> PathBuf {
 
 /// `canonicalize`, spelled the way the rest of the system expects to read it.
 ///
-/// On Windows the standard library's answer is a *verbatim* path — `\\?\C:\x`
+/// On Windows the standard library's answer is a *verbatim* path: `\\?\C:\x`
 /// rather than `C:\x`. The file APIs take it happily, which is why it goes
 /// unnoticed until something else is handed one: git given it as a working
 /// directory, `cmd /C start` given it as a file to open, a path from git that
 /// has to be compared with it. None of those agree it is the same place.
 ///
 /// So the prefix comes off wherever that is safe, which is what the `dunce`
-/// crate does and the reason it exists — a dozen lines are not worth a
+/// crate does and the reason it exists: a dozen lines are not worth a
 /// dependency. Everywhere else this is `canonicalize` and nothing more.
 pub fn canonical(path: &Path) -> std::io::Result<PathBuf> {
     let resolved = path.canonicalize()?;
@@ -194,7 +194,7 @@ pub fn canonical(path: &Path) -> std::io::Result<PathBuf> {
 /// `NUL`, `COM1`…) all genuinely need the prefix to mean what they say.
 ///
 /// Plain text in and out rather than a `Path`, so it is compiled and tested on
-/// every platform — not only on the one where it is ever called.
+/// every platform, not only on the one where it is ever called.
 fn strip_verbatim(s: &str) -> Option<&str> {
     let rest = s.strip_prefix(r"\\?\")?;
     let b = rest.as_bytes();
@@ -247,7 +247,7 @@ mod tests {
         assert!(t.root.is_dir(), "the folder is made");
         assert!(
             listing(&t.root).is_empty(),
-            "and left empty — tiny writes no starter page"
+            "and left empty: tiny writes no starter page"
         );
         assert_eq!(t.file, None, "so there is nothing to open on");
     }

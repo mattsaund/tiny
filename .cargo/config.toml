@@ -3,7 +3,7 @@
 # Visual C++ Redistributable. A fresh Windows does not have that, and the
 # binary would stop at "VCRUNTIME140.dll was not found" before drawing a thing.
 #
-# The C that tiny compiles — the map's parsers, and Lua — follows the same
+# The C that tiny compiles (the map's parsers, and Lua) follows the same
 # setting, so everything in the binary agrees on which runtime it has.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]

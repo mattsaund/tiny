@@ -1,13 +1,13 @@
-# Install tiny - a terminal knowledge manager. Windows.
+# Install tiny on Windows.
 #
 #   irm https://raw.githubusercontent.com/mattsaund/tiny/main/install.ps1 | iex
 #
 # Downloads the ready-made tiny.exe from the latest GitHub release. Only when
-# there is none to download - no release published, or a branch asked for by
-# name - does it build from source, which on Windows needs Rust and the Visual
+# there is none to download (no release published, or a branch asked for by
+# name) does it build from source, which on Windows needs Rust and the Visual
 # Studio Build Tools; it offers to install both. Then it offers what tiny
-# reaches for while it runs - git for the git window, ffmpeg for video and
-# audio details - with winget, in one question. tiny runs without them.
+# reaches for while it runs (git for the git window, ffmpeg for video and
+# audio details) with winget, in one question. tiny runs without them.
 #
 # Override anything with the environment:
 #   $env:TINY_REPO         git URL (default: https://github.com/mattsaund/tiny.git)
@@ -21,7 +21,7 @@
 #
 #   * It is plain ASCII. Windows PowerShell 5.1 reads a local .ps1 in the ANSI
 #     code page, and the last byte of a UTF-8 em dash is, in that code page, a
-#     curly double quote - which PowerShell takes as the end of a string.
+#     curly double quote, which PowerShell takes as the end of a string.
 #
 #   * It never sets $ErrorActionPreference to Stop. 5.1 turns every line a
 #     native program writes to stderr into an error record once the stream is
@@ -32,7 +32,7 @@
 #     -ErrorAction Stop on the few cmdlets whose failure matters.
 #
 #   * It never calls exit. Piped through iex, this runs in the caller's own
-#     session, and an exit there closes the window the user typed into - along
+#     session, and an exit there closes the window the user typed into, along
 #     with the message saying what went wrong.
 
 & {
@@ -48,7 +48,7 @@
     }
 
     # Ask a yes-or-no question, where Enter means yes. With nobody there to
-    # answer - a CI job, input redirected from somewhere - the answer is no:
+    # answer (a CI job, input redirected from somewhere) the answer is no:
     # Read-Host would otherwise wait for an answer that is never coming.
     function Confirm-Yes([string]$Question) {
         if ($env:CI -or [Console]::IsInputRedirected) { return $false }
@@ -83,8 +83,8 @@
     # --- the ready-made binary ----------------------------------------------
 
     # The release workflow's zip for this machine, unpacked into $Prefix.
-    # Returns whether it worked. Every way it can fail - no release yet, no
-    # network, a repository that is not on GitHub - is a reason to build
+    # Returns whether it worked. Every way it can fail (no release yet, no
+    # network, a repository that is not on GitHub) is a reason to build
     # instead, not a reason to stop.
     #
     # `main` means the newest release, and a version tag means that one.
@@ -131,7 +131,7 @@
     # Whether the MSVC build tools are installed.
     #
     # Not Get-Command cl: the compiler is never on PATH outside a Visual Studio
-    # developer prompt, even when it is installed - which is why that check
+    # developer prompt, even when it is installed, which is why that check
     # told everyone they had no compiler. vswhere is how Rust itself finds it.
     function Test-Msvc {
         $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -157,12 +157,12 @@
         if (-not (Have 'winget')) {
             throw 'winget is not here to install them. Get the Build Tools from https://visualstudio.microsoft.com/visual-cpp-build-tools/ ("Desktop development with C++"), then run this again'
         }
-        Write-Host 'installing the Build Tools - this takes a while ...'
+        Write-Host 'installing the Build Tools (this takes a while) ...'
         & winget install --id Microsoft.VisualStudio.2022.BuildTools --exact `
             --accept-package-agreements --accept-source-agreements `
             --override '--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
-        # winget's exit code is not a reliable answer - it is non-zero for
-        # "already installed" - so ask the same question again instead.
+        # winget's exit code is not a reliable answer: it is non-zero for
+        # "already installed", so ask the same question again instead.
         if (-not (Test-Msvc)) {
             throw 'the Build Tools did not install; see the message above, or install them by hand and run this again'
         }
@@ -206,7 +206,7 @@
 
     function Build-Tiny([string]$Source, [string]$Prefix, [string]$Root, [string]$Log) {
         New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
-        Write-Host 'building - this takes a minute the first time'
+        Write-Host 'building (this takes a minute the first time)'
 
         # How many crates the bar counts against. Asking cargo rather than
         # writing a number down keeps the bar right when the dependencies
@@ -351,11 +351,11 @@
         Write-Host 'tiny can also use these, which are not installed:'
         foreach ($m in $missing) { Write-Host "  $($m.Why)" }
         if (-not (Have 'winget')) {
-            Write-Host 'install them to turn those on - tiny works without them'
+            Write-Host 'install them to turn those on; tiny works without them'
             return
         }
         if (-not (Confirm-Yes 'Install them with winget?')) {
-            Write-Host 'skipped - tiny works without them'
+            Write-Host 'skipped; tiny works without them'
             return
         }
         foreach ($m in $missing) {
@@ -402,15 +402,15 @@
         Install-Tiny
         # And a clean code when it worked. The download path runs no program
         # of its own, so without this anything checking $LASTEXITCODE reads
-        # whatever was there before - often $null, which PowerShell holds to
-        # be "not 0".
+        # whatever was there before (often $null, which PowerShell holds to
+        # be "not 0").
         $global:LASTEXITCODE = 0
     }
     catch {
         Write-Host ''
         Write-Host "install: $($_.Exception.Message)" -ForegroundColor Red
         # Not exit, which would close the window. A failed exit code is still
-        # there for anything that checks - a CI job, a script.
+        # there for anything that checks: a CI job, a script.
         $global:LASTEXITCODE = 1
     }
 }

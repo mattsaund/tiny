@@ -16,7 +16,7 @@
 //! map stays quiet.
 //!
 //! Call matching is a heuristic and behaves like one. A name defined in many
-//! files is ambiguous — `new`, `main`, `get` — so past `max_ambiguity`
+//! files is ambiguous (`new`, `main`, `get`) so past `max_ambiguity`
 //! definitions a symbol stops producing edges rather than wiring the project
 //! to itself.
 //!
@@ -24,17 +24,17 @@
 //!
 //! [`build`] is one pass over the project, then one pass over what it found:
 //!
-//! 1. **Walk.** `search::walk` lists the files — the same traversal search
+//! 1. **Walk.** `search::walk` lists the files: the same traversal search
 //!    uses, so the two always agree on what the project contains.
 //! 2. **Collect.** Each file becomes a [`Node`] plus a private `Facts` record:
 //!    what it defines, what it calls, and what it links to. Notes are
 //!    scanned for links; source is parsed for symbols. Files are independent
-//!    of each other here, so this runs on every core — see `parallel`.
-//! 3. **Index.** Two lookup tables are built — `by_rel` (path to node) and
-//!    `by_stem` (bare filename to nodes) — plus `definers`, mapping each
+//!    of each other here, so this runs on every core (see `parallel`).
+//! 3. **Index.** Two lookup tables are built: `by_rel` (path to node) and
+//!    `by_stem` (bare filename to nodes), plus `definers`, mapping each
 //!    symbol to the files that define it.
 //! 4. **Resolve.** Every recorded link and call is turned into an
-//!    [`Edge`] where a target can be found — per file, on every core again.
+//!    [`Edge`] where a target can be found, per file, on every core again.
 //!    Identical edges are merged and counted, which is why the map is keyed
 //!    by `(from, to, kind, label)`.
 //!
@@ -47,11 +47,11 @@
 //!
 //! Three guards keep that heuristic honest, and all three matter:
 //!
-//! - `max_ambiguity` — a name defined in more than N files says nothing about
+//! - `max_ambiguity`: a name defined in more than N files says nothing about
 //!   which one was meant, so it produces no edge at all. Without this, `new`
 //!   and `main` connect the entire project to itself.
 //! - [`is_test_file`](super::scan::is_test_file) and
-//!   [`strip_tests`](super::scan::strip_tests) — test helpers are named
+//!   [`strip_tests`](super::scan::strip_tests): test helpers are named
 //!   `fixture`, `render`, `setup`, and collide with real code everywhere.
 //! - Only tags typed `call` become edges, and only definitions of callable
 //!   things become definitions. A `mod x;` is a definition to tree-sitter but
@@ -67,7 +67,7 @@
 //! `scan::lang_of` and a `scan::tags_for` arm. Nothing on screen lists the
 //! languages, so there is no fourth place to remember.
 //!
-//! A language with no tags query still appears in the graph as a node — it
+//! A language with no tags query still appears in the graph as a node; it
 //! just has no call edges. That is what `scan::is_sourcelike` is for.
 
 use std::collections::{BTreeMap, HashMap};
@@ -84,7 +84,7 @@ use crate::text::search;
 pub enum NodeKind {
     /// Markdown. Scanned for both wikilinks and `[text](path)` links.
     Note,
-    /// Other prose — `.txt`, `.rst`, `.org`. Wikilinks only; a `[a](b)` in a
+    /// Other prose: `.txt`, `.rst`, `.org`. Wikilinks only; a `[a](b)` in a
     /// text file is not a link.
     Prose,
     /// Source. Parsed for symbols where a grammar exists.
@@ -133,7 +133,7 @@ pub struct Edge {
     pub count: usize,
 }
 
-/// The finished graph. Immutable once built — `ProjectMap` filters what is
+/// The finished graph. Immutable once built: `ProjectMap` filters what is
 /// drawn without ever changing this.
 #[derive(Debug, Clone)]
 pub struct Graph {
@@ -145,7 +145,7 @@ pub struct Graph {
 
 /// How many files may define a name before a call to it links to nothing.
 ///
-/// Three. It was a setting, and a setting is a question — this one asked the
+/// Three. It was a setting, and a setting is a question; this one asked the
 /// reader to tune a heuristic they cannot see the workings of, and every
 /// answer but a small number makes the map worse. A name defined in four
 /// places is not evidence about any of them.
@@ -190,7 +190,7 @@ impl Default for Options {
 /// every core, and why `scan::MAX_PARSE_BYTES` and the `ignore` list exist.
 ///
 /// Edges accumulate into a `BTreeMap` keyed by `(from, to, kind, label)` so
-/// repeats merge into a count rather than stacking up as duplicate lines —
+/// repeats merge into a count rather than stacking up as duplicate lines,
 /// and so the output order is deterministic, which keeps the layout stable
 /// between runs however the work was shared out.
 pub fn build(root: &Path, opts: &Options) -> Graph {

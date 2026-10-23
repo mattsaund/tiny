@@ -7,7 +7,7 @@
 //!
 //! # Formatting while you type
 //!
-//! Markdown is drawn formatted *as it is edited* — see [`live_rows`]. The line
+//! Markdown is drawn formatted *as it is edited*, see [`live_rows`]. The line
 //! the cursor is on stays raw, because you cannot put a cursor in the middle
 //! of a heading that has had its `#` taken away and have the arrow keys still
 //! mean anything. Every other line renders. The result is that a document
@@ -31,13 +31,13 @@ use crate::text::tabs;
 
 /// Raw source with line numbers, syntax highlighting, and the real cursor.
 ///
-/// Only the visible window is highlighted — see `highlight::highlight_window`
+/// Only the visible window is highlighted, see `highlight::highlight_window`
 /// for why that is both correct and cheap.
 ///
 /// The cursor is placed with `set_cursor_position` so the terminal's own
 /// blinking cursor lands in the right cell, rather than being faked with a
 /// reversed span. That means converting the character-indexed cursor column
-/// into a *display width* offset, accounting for the horizontal scroll — which
+/// into a *display width* offset, accounting for the horizontal scroll, which
 /// is what the `before` / `skipped` width subtraction is doing.
 pub(super) fn draw_editor(
     f: &mut Frame,
@@ -69,7 +69,7 @@ pub(super) fn draw_editor(
     // its own vertical scrolling in drawn rows rather than source lines, since
     // the two stop being the same thing once a block is formatted.
     // `touched` comes out here because this is the one place the buffer is
-    // held mutably, and asking clears it — so it has to be asked exactly once
+    // held mutably, and asking clears it, so it has to be asked exactly once
     // per frame, whether or not anything ends up being highlighted.
     let (scroll_y, scroll_x, cur_line, cur_col, touched) = {
         let ed = app.buffers.get_mut(path).expect("checked above");
@@ -101,7 +101,7 @@ pub(super) fn draw_editor(
     let ed = &app.buffers[path];
     app.preview_len = ed.line_count();
 
-    // Raw rows are one contiguous run — the block the cursor is in — so a
+    // Raw rows are one contiguous run (the block the cursor is in) so a
     // single highlight window covers all of them.
     let raw: Vec<usize> = rows
         .iter()
@@ -110,7 +110,7 @@ pub(super) fn draw_editor(
         .filter_map(Row::raw_line)
         .collect();
     let first_line = ed.lines().first().map(String::as_str).unwrap_or("");
-    // Borrowed, not cloned — see `highlight::Highlighter::syntax_for_path`.
+    // Borrowed, not cloned, see `highlight::Highlighter::syntax_for_path`.
     let syntax = app.highlighter.syntax_for_path(path, first_line);
     let highlighted = match (raw.first(), raw.last()) {
         (Some(&a), Some(&b)) => {
@@ -177,7 +177,7 @@ pub(super) fn draw_editor(
     if focused {
         // Place the real terminal cursor, so it blinks where the user expects.
         // It is always in a raw block, so the column arithmetic is the plain
-        // one — display width of the text before it, less the horizontal
+        // one: display width of the text before it, less the horizontal
         // scroll.
         let line = ed.lines().get(cur_line).map(String::as_str).unwrap_or("");
         // Columns, not characters: a tab was drawn as the spaces that reach
@@ -231,8 +231,8 @@ impl Row {
 /// the cursor is in, which is shown as it was typed.
 ///
 /// This is the Obsidian trick, and the reason it works is that a block is the
-/// unit of both. Formatting is a property of the whole block — a fence, a
-/// table, a list — so showing "the line under the cursor" raw and the rest of
+/// unit of both. Formatting is a property of the whole block (a fence, a
+/// table, a list) so showing "the line under the cursor" raw and the rest of
 /// its block formatted would render half-syntax. The cursor unformats what it
 /// is inside, and the moment it leaves, the block comes back.
 ///
@@ -308,7 +308,7 @@ fn clip_pieces<'a>(
     tab_width: usize,
 ) -> Vec<Span<'a>> {
     // Tabs become spaces before anything is measured or cut, each piece
-    // expanded from the column the ones before it reached — a tab's width is
+    // expanded from the column the ones before it reached: a tab's width is
     // where it sits, so a piece cannot be expanded on its own. After this
     // there are no tabs left, and a character's width is the truth again.
     let mut col = 0usize;

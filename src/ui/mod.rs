@@ -41,7 +41,7 @@
 //! - **`preview_len`.** How far the preview can scroll depends on how many
 //!   lines the content produced at *this* width, which means rendering it.
 //! - **The highlight cache.** Which lines the parser has to reach is decided
-//!   by which lines are on screen — see [`crate::text::highlight::Resume`]. It
+//!   by which lines are on screen, see [`crate::text::highlight::Resume`]. It
 //!   is filled in by the parse that had to happen anyway.
 //!
 //! Everything else must stay read-only. If you find yourself wanting to set
@@ -51,7 +51,7 @@
 //! # Styling rules
 //!
 //! Nothing here writes a literal color. Every style comes from `app.palette`,
-//! and the shipped palette names no color at all — meaning is carried by bold,
+//! and the shipped palette names no color at all; meaning is carried by bold,
 //! dim, underline and reverse, so tiny inherits the user's terminal theme. The
 //! one exception is syntax highlighting, whose colors come from the syntect
 //! theme by design.
@@ -96,14 +96,14 @@ use crate::config::Side;
 /// are derived from it. The main area is whatever is left.
 ///
 /// Overlays (help, settings) are drawn against the *full* screen area rather
-/// than the main region, so they float above the panes — and over whichever
+/// than the main region, so they float above the panes, and over whichever
 /// window is up, since every one of them can be opened from all three.
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
 
     // Rows: the bar at the top when it is open, the panes, the status line at
     // the bottom. Both used to be settable at either end, which was two
-    // settings to describe a window everyone left alone — and a bar that could
+    // settings to describe a window everyone left alone, and a bar that could
     // be anywhere is a bar you have to look for.
     let bar_open = matches!(app.mode, Mode::Bar(_));
     let mut order: Vec<(Slot, u16)> = Vec::new();
@@ -170,9 +170,9 @@ fn draw_overlay(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 /// a search is open.
 fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
     // Results drop down from the top of the panes, pushing them down rather
-    // than covering them. What you are searching *from* stays on screen — the
+    // than covering them. What you are searching *from* stays on screen (the
     // browser beside you, the file behind the list with the match marked in
-    // it — so a search is laid over your place in the project rather than
+    // it) so a search is laid over your place in the project rather than
     // standing in for it.
     let main = match &app.mode {
         Mode::Bar(b) if !b.is_command() => {
@@ -188,7 +188,7 @@ fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
         _ => main,
     };
 
-    // The browser keeps whatever share of the width it was last given —
+    // The browser keeps whatever share of the width it was last given:
     // `<` and `>` move it, and `Ctrl+T` takes it away entirely.
     let (side_area, preview_area) = if app.tree_hidden {
         (None, main)

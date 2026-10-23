@@ -1,7 +1,7 @@
 //! Colors, or rather the deliberate absence of them.
 //!
-//! Styles are written as *specs* rather than as raw colors — `"bold"`,
-//! `"underline"`, `"white on black"`, `"#7dcfff bold"` — so a line can carry
+//! Styles are written as *specs* rather than as raw colors (`"bold"`,
+//! `"underline"`, `"white on black"`, `"#7dcfff bold"`) so a line can carry
 //! weight as well as hue, and so the shipped defaults can name no color at
 //! all. That is the point: tiny renders in whatever the terminal is already
 //! using, and meaning is carried by bold, dim, underline and reverse.
@@ -15,7 +15,7 @@
 //!
 //! [`parse_style`] ignores words it does not recognize and returns whatever it
 //! did understand. A misspelled modifier therefore loses you that modifier and
-//! nothing else — there is no error to report and nothing to fail.
+//! nothing else; there is no error to report and nothing to fail.
 
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,7 @@ pub struct Theme {
     pub code: String,
     pub marker: String,
     /// The project map's two directions: files that reach the selected one,
-    /// and files it reaches. The only colors tiny ships with — see [`Theme`]'s
+    /// and files it reaches. The only colors tiny ships with, see [`Theme`]'s
     /// default for why they are the exception.
     pub map_in: String,
     pub map_out: String,
@@ -45,7 +45,7 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         // Monochrome by design. Nothing here names a color, so tiny inherits
-        // whatever palette the terminal is already using — weight, underline
+        // whatever palette the terminal is already using; weight, underline
         // and reverse video carry the meaning instead.
         Self {
             text: "default".into(),
@@ -61,7 +61,7 @@ impl Default for Theme {
             // The two exceptions, and deliberate ones. Everywhere else a style
             // means "this is more or less important than that", which weight
             // and reverse can say. These two mean *opposite directions*, which
-            // is a difference in kind rather than in degree — there is no
+            // is a difference in kind rather than in degree; there is no
             // bolder-than-bold that reads as "the other way round". Any spec
             // works here, so `#7dcfff` or `cyan bold` replaces them.
             map_in: "green".into(),
@@ -73,7 +73,7 @@ impl Default for Theme {
 /// A resolved theme: specs parsed once at startup so drawing never re-parses,
 /// and the characters to draw with.
 ///
-/// `Copy`, and deliberately so — `ui` passes it around by value on every line
+/// `Copy`, and deliberately so: `ui` passes it around by value on every line
 /// it draws, and threading a reference through would add lifetimes to most of
 /// that module for no benefit. Rebuilt by `App::apply_config` whenever the
 /// theme changes, which is how `*set theme.heading cyan bold` repaints without
@@ -133,7 +133,7 @@ impl Default for Palette {
 
 /// Parse a style spec: color names, `#rrggbb`, palette indices, `on <color>`
 /// for a background, and the modifiers bold / dim / italic / underline /
-/// reverse / strike. Unknown words are ignored rather than failing — a typo in
+/// reverse / strike. Unknown words are ignored rather than failing: a typo in
 /// a config file should cost you an underline, not the program.
 pub(super) fn parse_style(spec: &str) -> Style {
     let mut style = Style::default();
@@ -164,7 +164,7 @@ pub(super) fn parse_style(spec: &str) -> Style {
 /// Parse one color word: a name, `#rgb`, `#rrggbb`, or a 0-255 palette index.
 ///
 /// Named colors and `default` map to ratatui's 16-color constants, which the
-/// terminal renders with its own palette — that is what lets tiny match the
+/// terminal renders with its own palette; that is what lets tiny match the
 /// theme a user already has. `#rrggbb` forces a true-color value instead, and
 /// needs a 24-bit terminal.
 fn parse_color(s: &str) -> Option<Color> {

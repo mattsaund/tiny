@@ -11,7 +11,7 @@
 //! normalizes CRLF to LF, or appends a trailing newline that was not there,
 //! turns "I opened a file" into a diff. Three fields exist purely to prevent
 //! that: `line_ending`, `trailing_newline`, and `was_empty`. If you add a new
-//! way to construct or write a buffer, keep all three honest — the tests in
+//! way to construct or write a buffer, keep all three honest: the tests in
 //! this file's `preserves_crlf_and_missing_trailing_newline` case are the
 //! contract.
 //!
@@ -19,7 +19,7 @@
 //!
 //! `cursor_col` is a *character* index into the line, never a byte offset.
 //! Every mutation converts to bytes at the last moment via [`byte_of_char`].
-//! Getting this wrong does not produce a wrong-looking cursor — it panics, by
+//! Getting this wrong does not produce a wrong-looking cursor; it panics, by
 //! slicing a `String` in the middle of a multi-byte character. Note that this
 //! is still not the same as *display width*: a CJK character is one column
 //! here but two cells on screen, which is why `ui` recomputes widths with
@@ -29,13 +29,14 @@
 //!
 //! No selection, no clipboard, no search-within-buffer, no syntax awareness.
 //! Highlighting is applied at draw time by `highlight`, and project-wide
-//! find-replace lives in `search` and works on files rather than buffers.//!
+//! find-replace lives in `search` and works on files rather than buffers.
+//!
 //! # Where things are
 //!
-//! - here — the buffer, the cursor, and reading and writing the file.
-//! - [`edit`] — everything that changes the text.
-//! - [`motion`] — everything that moves the cursor.
-//! - [`undo`] — the history, and the grouping that makes it usable.
+//! - here: the buffer, the cursor, and reading and writing the file.
+//! - [`edit`]: everything that changes the text.
+//! - [`motion`]: everything that moves the cursor.
+//! - [`undo`]: the history, and the grouping that makes it usable.
 
 mod edit;
 mod motion;
@@ -75,8 +76,8 @@ pub(super) enum EditKind {
 ///
 /// Snapshotting every line is wasteful in principle and completely fine in
 /// practice: notes and source files are small, edits are coalesced so this
-/// runs once per typed word rather than once per key, and the alternative —
-/// a proper piece table or per-edit delta log — is a large amount of machinery
+/// runs once per typed word rather than once per key, and the alternative
+/// (a proper piece table or per-edit delta log) is a large amount of machinery
 /// for a text editor of this size. If you ever open a 50 MB file in here, that
 /// is the thing to revisit.
 #[derive(Debug, Clone)]
@@ -109,7 +110,7 @@ pub struct Editor {
     /// follow the file to its new name.
     pub path: PathBuf,
     lines: Vec<String>,
-    /// Index into `lines`. Always valid — see [`Editor::clamp_cursor`].
+    /// Index into `lines`. Always valid, see [`Editor::clamp_cursor`].
     pub cursor_line: usize,
     /// Character index into the current line, not a byte offset.
     pub cursor_col: usize,
@@ -117,7 +118,7 @@ pub struct Editor {
     /// tree and the confirm-on-quit prompt.
     pub dirty: bool,
     /// Column the cursor tries to return to when moving vertically past
-    /// short lines — the behavior every editor has and nobody notices
+    /// short lines: the behavior every editor has and nobody notices
     /// until it is missing.
     goal_col: usize,
     /// Viewport offsets, in lines and characters. Owned here but written by
@@ -127,7 +128,7 @@ pub struct Editor {
     /// The file's own line ending, sampled on open and restored on save, so a
     /// CRLF file edited on Linux stays CRLF.
     line_ending: LineEnding,
-    /// Whether the file ended with a newline. Preserved either way — adding
+    /// Whether the file ended with a newline. Preserved either way: adding
     /// one that was not there is a diff nobody asked for.
     trailing_newline: bool,
     /// Whether the file was empty on open. An empty buffer is written back
@@ -136,7 +137,7 @@ pub struct Editor {
     was_empty: bool,
     /// Pre-edit states, most recent last.
     undo: Vec<Snapshot>,
-    /// States popped off `undo`, cleared as soon as a new edit happens — the
+    /// States popped off `undo`, cleared as soon as a new edit happens: the
     /// usual editor rule that typing after an undo abandons the redo branch.
     redo: Vec<Snapshot>,
     /// Kind of the last edit, for coalescing. `None` means the next edit
@@ -149,7 +150,7 @@ pub struct Editor {
 
 impl Editor {
     /// Build a buffer from text already in memory. This is the real
-    /// constructor — `App` reads and validates the bytes itself so it can fall
+    /// constructor: `App` reads and validates the bytes itself so it can fall
     /// back to a binary preview, and hands the decoded string here.
     ///
     /// Splitting is done by hand rather than with `str::lines` because that
@@ -194,8 +195,8 @@ impl Editor {
 
     /// Read a file straight into a buffer.
     ///
-    /// `App` loads through its own classification path — it has to decide
-    /// whether a file is text at all first — so nothing but the tests below
+    /// `App` loads through its own classification path (it has to decide
+    /// whether a file is text at all first) so nothing but the tests below
     /// comes in this way.
     #[cfg(test)]
     pub fn open(path: &std::path::Path) -> std::io::Result<Self> {
@@ -224,7 +225,7 @@ impl Editor {
     /// were on screen.
     ///
     /// For a file another program has rewritten while it is open here. Cursor
-    /// and viewport survive — clamped, since the file may have got shorter —
+    /// and viewport survive (clamped, since the file may have got shorter)
     /// because the whole point of noticing an external change is that you are
     /// looking at the file while it happens, and a jump back to line 1 would
     /// lose your place every time a formatter ran.
@@ -268,7 +269,7 @@ impl Editor {
     /// not have to be reached by parsing from line 0, and this is how it learns
     /// how much of that state an edit threw away: everything from here down.
     ///
-    /// Clearing on read is what makes it cheap — the editor does not have to
+    /// Clearing on read is what makes it cheap: the editor does not have to
     /// know whether anyone is listening, and the answer is only ever asked for
     /// once per frame.
     pub fn take_touched(&mut self) -> Option<usize> {

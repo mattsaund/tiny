@@ -35,10 +35,10 @@ enum KeyRow {
     Blank,
     /// The keys are looked up in the live keymap when the window is drawn, so
     /// a rebinding shows here as well as in the keybinds window. Several
-    /// actions on one row read as one idea — "move the cursor" is up and down.
+    /// actions on one row read as one idea: "move the cursor" is up and down.
     Bound(&'static [Action], &'static str),
     /// Like [`KeyRow::Bound`], but the keys are folded together rather than
-    /// listed one action at a time — see [`merge`]. For the rows where four
+    /// listed one action at a time, see [`merge`]. For the rows where four
     /// actions are one gesture, and writing `ctrl+` four times says nothing
     /// the first one did not.
     Merged(&'static [Action], &'static str),
@@ -122,8 +122,8 @@ const KEYS: &[KeyRow] = &[
 /// rebinding that breaks the shared modifier simply falls back to a plain list,
 /// which is longer but never wrong.
 fn merge(keymap: &Keymap, actions: &[Action]) -> String {
-    // Group by the modifier prefix — everything up to and including the last
-    // `+` — keeping the order the groups first appeared in.
+    // Group by the modifier prefix (everything up to and including the last
+    // `+`), keeping the order the groups first appeared in.
     let mut groups: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
     for spec in actions.iter().flat_map(|a| keymap.keys(*a)) {
         let written = spec.to_string();
@@ -143,9 +143,9 @@ fn merge(keymap: &Keymap, actions: &[Action]) -> String {
         } else {
             &mut slot.1
         };
-        // Once each. Four actions share `Home` and `End` between them — the
+        // Once each. Four actions share `Home` and `End` between them (the
         // ends of a list and the ends of a line are the same two keys in two
-        // panes — and a row reading `home end home end` says nothing twice.
+        // panes) and a row reading `home end home end` says nothing twice.
         if !half.iter().any(|k| k == base) {
             half.push(base.to_string());
         }
@@ -185,7 +185,7 @@ fn key_rows(keymap: &Keymap) -> Vec<(String, String)> {
 
 /// The right half of the `?` window: every command, as an example of saying it.
 ///
-/// Written with the star, because that is what reaches them — there is one bar
+/// Written with the star, because that is what reaches them; there is one bar
 /// and this is how you tell it you meant a command. Examples rather than
 /// templates, because a command is a sentence and a sentence is learned from
 /// one: the other ways of saying each (`go to`, `open`, `cp`, `remove`...)
@@ -217,7 +217,7 @@ const COMMANDS: &[(&str, &str)] = &[
 ];
 
 /// The keymap overlay. Scrollable, because the full list does not fit a short
-/// terminal — the footer says which of the two situations you are in.
+/// terminal: the footer says which of the two situations you are in.
 pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect, pal: &Palette, scroll: usize) {
     // Keys on the left, commands on the right, so `?` answers both halves of
     // "how do I do this" at once. Every width here is measured from the tables
@@ -230,7 +230,7 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect, pal: &Palette, scr
         .iter()
         .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
         .collect();
-    // What the plugins added, under the name of the plugin that added each —
+    // What the plugins added, under the name of the plugin that added each;
     // they are commands like any other, and this is where commands are found.
     let added = app.plugins.commands();
     if !added.is_empty() {

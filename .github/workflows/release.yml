@@ -3,7 +3,7 @@
 #
 # This is what makes tiny installable on a machine with no compiler. Building
 # from source needs Rust, and on Windows it also needs the Visual Studio Build
-# Tools — several gigabytes, an administrator prompt and twenty minutes, to try
+# Tools: several gigabytes, an administrator prompt and twenty minutes, to try
 # a seven-megabyte program. A Mac needs the Xcode command line tools for the
 # same reason. The installers download one of these instead, and only fall back
 # to building when there is none for the machine.
@@ -16,7 +16,7 @@
 #   3. git tag v0.4.5 && git push origin v0.4.5
 #
 # The tag has to match Cargo.toml and the changelog has to have the version in
-# it — the `version` job stops the release before anything is built otherwise.
+# it; the `version` job stops the release before anything is built otherwise.
 name: release
 
 on:
@@ -116,8 +116,8 @@ jobs:
         if: ${{ matrix.cross }}
         run: lipo -info "target/${{ matrix.target }}/release/tiny" | grep x86_64
 
-      # The names here are what the installers ask for — `tiny-<target>.zip` on
-      # Windows, `tiny-<target>.tar.gz` everywhere else — so change them in both
+      # The names here are what the installers ask for (`tiny-<target>.zip` on
+      # Windows, `tiny-<target>.tar.gz` everywhere else), so change them in both
       # places or neither. The notices go beside the license: the binary
       # carries other people's work, and theirs travel with it.
       - name: Package for Windows

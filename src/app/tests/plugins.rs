@@ -1,6 +1,6 @@
 //! Plugins, end to end: a `.lua` file in a folder, and what it does to tiny.
 //!
-//! The Lua side — loading, errors, the deadline — is tested where it lives, in
+//! The Lua side (loading, errors, the deadline) is tested where it lives, in
 //! `crate::plugins`. These are the seams with the app: a plugin's command run
 //! from the bar, its edits landing in the buffer as edits, its hooks firing on
 //! a real save, and the folder being looked at again on `*reload`.

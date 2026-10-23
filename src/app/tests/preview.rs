@@ -84,7 +84,7 @@ fn a_bare_left_moves_the_cursor_instead_of_leaving() {
     assert_eq!(
         app.focus,
         Focus::Editor,
-        "an unshifted arrow is cursor movement — it has to be"
+        "an unshifted arrow is cursor movement; it has to be"
     );
     assert_eq!(app.active_buffer().unwrap().cursor_col, 0);
 }
@@ -125,7 +125,7 @@ fn a_page_key_moves_a_screen_in_the_editor_and_stops_at_both_ends() {
 
     app.on_key(k(KeyCode::PageDown));
     assert_eq!(line(&app), page);
-    // The chord beside it, for the keyboards — every MacBook — with no
+    // The chord beside it, for the keyboards (every MacBook) with no
     // Page Down to press.
     app.on_key(ctrl('d'));
     assert_eq!(line(&app), 2 * page);
@@ -398,7 +398,7 @@ fn a_short_note_previews_formatted() {
 #[test]
 fn a_note_too_long_to_format_previews_as_its_own_source() {
     // Formatting is linear in the length of the file and redone every frame,
-    // so past the ceiling the pane shows the file as it is — which is also
+    // so past the ceiling the pane shows the file as it is, which is also
     // exactly what pressing Enter would show.
     let (td, mut app) = fixture();
     let lines = long_note(td.path(), "huge.md", 900);

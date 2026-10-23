@@ -7,12 +7,12 @@
 //! - Everything it is compiled with, in `THIRD-PARTY-NOTICES.txt`: each crate
 //!   with its copyright lines and the license it is offered under, Lua (which
 //!   is built from source into the binary), and the color themes syntect
-//!   bundles — then the text of each license once. Their code is *inside*
+//!   bundles, then the text of each license once. Their code is *inside*
 //!   the binary, which is what makes this a redistribution and their notices
 //!   tiny's to carry. Every one is permissive; nothing here is copyleft,
 //!   which is what keeps the MIT above honest.
 //! - The syntax definitions, which are third-party data files and carry their
-//!   own notices — see [`crate::text::highlight::acknowledgments`].
+//!   own notices, see [`crate::text::highlight::acknowledgments`].
 //!
 //! The notices file goes into every release download beside `LICENSE` too,
 //! for anyone reading them without running tiny.
@@ -29,12 +29,12 @@
 //! What it documents is `CRATES`, the written-down list of every crate in the
 //! binary, in the tests below. Two tests keep both honest: every crate in
 //! `Cargo.lock` that ships has to be in the list, and every crate in the list
-//! has to be in the notices — so a new dependency fails the suite until it is
+//! has to be in the notices, so a new dependency fails the suite until it is
 //! listed and the notices are written again.
 //!
 //! To rebuild the list after changing dependencies, take every target a
-//! release is built for (see `release.yml`) — Windows compiles in crates the
-//! others do not:
+//! release is built for (see `release.yml`), since Windows compiles in
+//! crates the others do not:
 //!
 //! ```text
 //! for t in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu \
@@ -46,7 +46,7 @@
 //! and take each crate's `license` field from `cargo metadata`.
 
 /// tiny's own terms, everything it is compiled with, and the grammars it
-/// bundles — the whole of what `tiny --licenses` prints.
+/// bundles: the whole of what `tiny --licenses` prints.
 pub fn notice() -> String {
     let mut out = String::new();
     out.push_str(concat!("tiny ", env!("CARGO_PKG_VERSION"), "\n\n"));
@@ -59,9 +59,9 @@ pub fn notice() -> String {
 }
 
 /// Every crate compiled into tiny, on any platform it is released for, with
-/// the license expression it declares — what the notices are written from.
+/// the license expression it declares: what the notices are written from.
 ///
-/// Spelled exactly as each crate spells it — `MIT/Apache-2.0` and
+/// Spelled exactly as each crate spells it: `MIT/Apache-2.0` and
 /// `MIT OR Apache-2.0` are the same permission and different strings, and
 /// reproducing a notice means reproducing it.
 #[cfg(test)]
@@ -252,7 +252,7 @@ mod tests {
             }
             assert!(
                 CRATES.iter().any(|(c, _)| *c == name),
-                "{name} is a dependency but is not in CRATES — see the module docs"
+                "{name} is a dependency but is not in CRATES (see the module docs)"
             );
         }
     }
@@ -334,7 +334,7 @@ mod tests {
         let listed: Vec<&str> = CRATES.iter().map(|(n, _)| *n).collect();
         assert_eq!(
             named, listed,
-            "THIRD-PARTY-NOTICES.txt is out of date — run \
+            "THIRD-PARTY-NOTICES.txt is out of date: run \
              `cargo test write_third_party_notices -- --ignored`"
         );
         for ((name, said), (_, declared)) in entries.iter().zip(CRATES) {
@@ -536,9 +536,9 @@ mod tests {
                         if !holder.chars().all(|c| c.is_ascii_digit()) {
                             line
                         } else if authors.is_empty() {
-                            format!("{line} — the {name} developers")
+                            format!("{line}, the {name} developers")
                         } else {
-                            format!("{line} — {}", authors.join(", "))
+                            format!("{line}, {}", authors.join(", "))
                         }
                     }));
                     if license != "MIT" {

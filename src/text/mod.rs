@@ -5,12 +5,12 @@
 //! four pieces with real algorithms in them, and keeping them free of `App`
 //! is what lets each one be tested against plain input and plain output.
 //!
-//! - [`editor`] — the buffer: lines, a cursor, and undo.
-//! - [`markdown`] — markdown to styled terminal lines.
-//! - [`highlight`] — syntax colors, and the parser-state cache that keeps
+//! - [`editor`]: the buffer: lines, a cursor, and undo.
+//! - [`markdown`]: markdown to styled terminal lines.
+//! - [`highlight`]: syntax colors, and the parser-state cache that keeps
 //!   them cheap.
-//! - [`search`] — finding a string, in one file or in a whole project.
-//! - [`tabs`] — the one rule for drawing a tab, shared by everything that
+//! - [`search`]: finding a string, in one file or in a whole project.
+//! - [`tabs`]: the one rule for drawing a tab, shared by everything that
 //!   draws text.
 //!
 //! [`search::Matcher`] is the one piece shared sideways: both the search

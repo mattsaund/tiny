@@ -1,7 +1,7 @@
 //! Fitting styled text into a fixed number of cells.
 //!
 //! The reason this is not `Paragraph::wrap`: every line here carries per-span
-//! styling — a bold word inside a sentence, a link inside a bullet — and a
+//! styling (a bold word inside a sentence, a link inside a bullet) and a
 //! re-wrap that does not know where the spans end smears those styles across
 //! the break. So the wrapping is done on the spans themselves, and a span that
 //! straddles a break is cut in two with both halves keeping the style.
@@ -76,7 +76,7 @@ pub(super) fn push_trimmed(lines: &mut Vec<Line<'static>>, mut spans: Vec<Span<'
 /// 2. Place tokens one at a time. A word that will not fit starts a new line.
 /// 3. Whitespace is dropped at a break rather than carried over, so a wrapped
 ///    line never begins with the space that caused the wrap.
-/// 4. A single token wider than the pane — a long URL or path — is hard-broken
+/// 4. A single token wider than the pane (a long URL or path) is hard-broken
 ///    across lines, since there is no break opportunity inside it.
 ///
 /// `indent_w` tracks the current line's prefix width and exists to stop rule

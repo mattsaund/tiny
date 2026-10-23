@@ -1,7 +1,7 @@
 //! The source-control window: `Ctrl+G`.
 //!
 //! Three parts, laid out the way the questions are asked. On the left, what has
-//! changed. On the right, the file the cursor is on — before on one side, after
+//! changed. On the right, the file the cursor is on: before on one side, after
 //! on the other. Underneath, the branch map, because "what have I done" and
 //! "where am I" are the two halves of the same look.
 //!
@@ -14,7 +14,7 @@
 //!
 //! # Color is the code
 //!
-//! The letter and the color say the same thing twice on purpose — the letters
+//! The letter and the color say the same thing twice on purpose: the letters
 //! are git's own, and on a terminal with no color the window still works.
 
 use ratatui::Frame;
@@ -37,7 +37,7 @@ const GRAPH_HEIGHT: u16 = 8;
 
 /// The color of a status letter.
 ///
-/// Git's own scheme is two colors — green for staged, red for not — which
+/// Git's own scheme is two colors (green for staged, red for not) which
 /// says where a change is but not what it is. These say what it is, which is
 /// the question the letter answers too.
 fn code_style(code: Code, pal: &Palette) -> Style {
@@ -225,8 +225,8 @@ fn button_lines(selected: usize, on_row: bool, width: u16, pal: &Palette) -> Vec
 
 /// The right column: the file before, and the file after.
 ///
-/// Both sides are syntax-highlighted, by the grammar the file's own name picks
-/// — a diff of a `.rs` file reads as Rust on both sides. The two sides are
+/// Both sides are syntax-highlighted, by the grammar the file's own name picks:
+/// a diff of a `.rs` file reads as Rust on both sides. The two sides are
 /// highlighted separately, because they *are* two different texts: a line that
 /// opens a string on the right may not exist on the left at all.
 ///
@@ -343,7 +343,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
 /// of them.
 ///
 /// A gap on one side is lines the other side has, so the two stay level. Marking
-/// every line of it — which is what a `~` per row was — turns a twelve-line
+/// every line of it (which is what a `~` per row was) turns a twelve-line
 /// addition into a twelve-row column of marks sitting where the file's own text
 /// should be, and the eye reads it as content. One quiet line saying how many
 /// lines are missing and why says the same thing and then gets out of the way.
@@ -372,13 +372,13 @@ fn gap_label(lines: &[DiffLine], n: usize, before: bool) -> Option<String> {
 /// One line of one side: a two-character gutter, then the line itself in
 /// whatever colors its grammar gives it.
 ///
-/// The gutter is what carries the diff — `-` red on the left, `+` green on the
-/// right — because the text is already spoken for by the syntax colors, and a
+/// The gutter is what carries the diff (`-` red on the left, `+` green on the
+/// right) because the text is already spoken for by the syntax colors, and a
 /// line cannot be two colors at once. Keeping them apart means a change is
 /// still obvious at a glance *and* the code still reads as code.
 ///
 /// A filler is the absence of a line rather than an empty one; the run it
-/// belongs to says so once, on its first row — see [`gap_label`].
+/// belongs to says so once, on its first row, see [`gap_label`].
 fn diff_line(
     line: &DiffLine,
     pieces: Option<&Vec<Piece>>,

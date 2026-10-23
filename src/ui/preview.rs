@@ -1,7 +1,7 @@
 //! The right pane, and what it decides to be.
 //!
 //! [`draw_preview`] is a dispatch: it builds the title, then hands the inside
-//! of the pane to whichever drawing the current [`Preview`] calls for — the
+//! of the pane to whichever drawing the current [`Preview`] calls for; the
 //! editor for a text file, a rendered page for prose the keyboard has not
 //! reached yet, a description for a picture, a line or two of facts for
 //! anything else.
@@ -9,7 +9,7 @@
 //! The rule the `EDIT` / `VIEW` tag encodes: prose and markdown are rendered
 //! while the tree has the keyboard and become the editor the moment the pane
 //! is focused; code is the editor either way. The tag says which keyboard you
-//! have, not whether there is formatting on screen — markdown keeps its
+//! have, not whether there is formatting on screen: markdown keeps its
 //! formatting while you type into it.
 
 use ratatui::Frame;
@@ -32,7 +32,7 @@ use crate::text::search::Matcher;
 /// The `READ` / `EDIT` / `VIEW` tag encodes the same rule the key handling
 /// uses: prose and markdown open rendered and only take the keyboard once you
 /// have deliberately pressed Enter, while code goes straight into the editor.
-/// `EDIT` on markdown is still formatted — see `ui::editor::live_rows` — so the tag says
+/// `EDIT` on markdown is still formatted (see `ui::editor::live_rows`) so the tag says
 /// which keyboard you have, not whether there is any formatting on screen.
 pub(super) fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Editor && matches!(app.mode, Mode::Normal | Mode::Help(_));
@@ -139,7 +139,7 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, area: Rect, focused: bool)
 
     match app.preview.clone() {
         Preview::Buffer { path, kind } => {
-            // Rendered while the tree still has the keyboard — the preview is
+            // Rendered while the tree still has the keyboard: the preview is
             // a picture of the file then, with no cursor in it. The moment it
             // is focused it becomes the editor, markdown formatting and all.
             if kind.reads_first() && !focused {
@@ -207,8 +207,8 @@ pub(super) fn draw_pane(f: &mut Frame, app: &mut App, area: Rect, focused: bool)
 
 /// What a picture, a video, a PDF or a sound *is*, in words.
 ///
-/// tiny stopped drawing media into the terminal — see the [`crate::files::media`]
-/// module docs for why — so this pane is a description and an invitation:
+/// tiny stopped drawing media into the terminal (see the [`crate::files::media`]
+/// module docs for why) so this pane is a description and an invitation:
 /// the facts `media::probe` could read, then the one key that opens the file
 /// in the viewer the desktop already has for it.
 ///
@@ -257,7 +257,7 @@ fn draw_media(
 
 /// What to call the program Enter will hand the file to.
 ///
-/// Deliberately vague — "your image viewer", not a program name. Which one it
+/// Deliberately vague: "your image viewer", not a program name. Which one it
 /// actually is depends on the desktop's own association, and tiny does not
 /// know it and should not claim to.
 fn opener_name(kind: crate::files::media::Kind) -> &'static str {
@@ -274,7 +274,7 @@ fn opener_name(kind: crate::files::media::Kind) -> &'static str {
 ///
 /// Only ever drawn for a preview the keyboard has not reached yet: focus the
 /// pane and it becomes the editor. Nothing here has a cursor, which is exactly
-/// why markdown can be rendered whole — there is no block to leave raw.
+/// why markdown can be rendered whole; there is no block to leave raw.
 ///
 /// Renders from the *buffer* rather than from disk, which is what makes
 /// unsaved edits show up here the moment you step back out to the tree.
@@ -284,12 +284,12 @@ fn opener_name(kind: crate::files::media::Kind) -> &'static str {
 /// Formatting a document is linear in its length, and this redoes all of it on
 /// every keypress, then throws away everything outside the visible window. The
 /// alternative is a cache, which would need invalidating whenever the buffer,
-/// the width or the palette changed — three things that change for different
+/// the width or the palette changed: three things that change for different
 /// reasons. At note scale the render is a fraction of a millisecond, so the
 /// cache would be complexity bought with nothing.
 ///
 /// [`FORMAT_LIMIT`] is what keeps that true. Past it the document is shown as
-/// its own source, one row per line, and only the rows on screen are built —
+/// its own source, one row per line, and only the rows on screen are built,
 /// which is both cheap and exactly what the editor would show for the same
 /// file.
 ///
@@ -364,7 +364,7 @@ fn draw_reading(
 
     // Scroll position, on the bottom border so it never covers a line of text.
     // The guard decides whether to draw at all, so `checked_div` would not
-    // replace it — a note that fits on screen should show no indicator.
+    // replace it: a note that fits on screen should show no indicator.
     #[allow(clippy::manual_checked_ops)]
     if max_scroll > 0 && app.config.borders {
         let pct = (app.preview_scroll * 100) / max_scroll;
@@ -388,7 +388,7 @@ fn draw_reading(
 /// One source line, cut to the pane's width.
 ///
 /// Only used for a document too long to format, where the alternative to
-/// clipping is wrapping — and wrapping would mean measuring every line in the
+/// clipping is wrapping, and wrapping would mean measuring every line in the
 /// file to know how many rows it takes, which is the cost this path exists to
 /// avoid.
 fn clip_to(line: &str, width: usize) -> String {
