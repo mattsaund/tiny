@@ -258,10 +258,20 @@ const EVERYWHERE: &[&str] = &[
 /// Read a command line, without the `*`.
 pub fn parse(line: &str) -> Sentence {
     let mut w = words(line);
-    drop_politeness(&mut w);
+    let polite = drop_leading_politeness(&mut w);
     let Some(first) = w.first().cloned() else {
         return Sentence::Empty;
     };
+    let verb = first.text.to_lowercase();
+    let v = verb.as_str();
+    // A commit message, a setting's value and a replacement are free text,
+    // where a last word like `now` belongs to what was said: `commit Disable
+    // the flaky test for now` must not lose its `now`. Everything else can
+    // end with a `please`.
+    let free = !first.quoted && (v == "commit" || v == "set" || REPLACE.contains(&v));
+    if !free {
+        drop_trailing_politeness(&mut w);
+    }
     let rest = &w[1..];
 
     if first.quoted {
@@ -271,8 +281,6 @@ pub fn parse(line: &str) -> Sentence {
         // `*42`, the way `:42` is everywhere else.
         return goto(&w);
     }
-    let verb = first.text.to_lowercase();
-    let v = verb.as_str();
 
     // `move to line 4` is going somewhere, not moving a file.
     if (MOVE.contains(&v) || v == "skip") && rest.first().is_some_and(|w| w.is(&["to"])) {
@@ -289,7 +297,8 @@ pub fn parse(line: &str) -> Sentence {
         _ if NEW_FILE.contains(&v) => new(rest, None),
         _ if REPLACE.contains(&v) => replace(rest),
         "set" => Sentence::Set(rest.iter().map(|w| w.text.clone()).collect()),
-        "commit" => Sentence::Commit(joined(rest)),
+        // As typed: its quotes, its spacing, every word.
+        "commit" => Sentence::Commit(after_words(line, polite + 1).to_string()),
         "reload" | "refresh" | "rescan" => Sentence::Reload,
         "update" | "upgrade" => Sentence::Update,
         "config" | "settings" | "preferences" | "prefs" | "options" => Sentence::Goto {
@@ -312,9 +321,10 @@ fn rest_from(w: &[Word], i: usize) -> &[Word] {
     w.get(i..).unwrap_or(&[])
 }
 
-/// Take `please`, `can you` and their like off the front, and `please` and
-/// `thanks` off the end.
-fn drop_politeness(w: &mut Vec<Word>) {
+/// Take `please`, `can you` and their like off the front. Returns how many
+/// words went, so free text can be found again in the line as it was typed.
+fn drop_leading_politeness(w: &mut Vec<Word>) -> usize {
+    let before = w.len();
     loop {
         if w.first().is_some_and(|x| x.is(POLITE)) {
             w.remove(0);
@@ -329,6 +339,38 @@ fn drop_politeness(w: &mut Vec<Word>) {
             break;
         }
     }
+    before - w.len()
+}
+
+/// The line as typed, after its first `n` words: what a commit message is.
+///
+/// Words are found the way [`words`] finds them, a quoted run counting as one,
+/// so the count lines up with theirs.
+fn after_words(line: &str, n: usize) -> &str {
+    let line = line.trim();
+    let mut quoted = false;
+    let mut in_word = false;
+    let mut done = 0;
+    for (at, c) in line.char_indices() {
+        if c == '"' {
+            quoted = !quoted;
+        }
+        let space = c.is_whitespace() && !quoted;
+        if in_word && space {
+            done += 1;
+            in_word = false;
+        } else if !space {
+            if !in_word && done == n {
+                return &line[at..];
+            }
+            in_word = true;
+        }
+    }
+    ""
+}
+
+/// Take `please` and `thanks` off the end.
+fn drop_trailing_politeness(w: &mut Vec<Word>) {
     while w
         .last()
         .is_some_and(|x| x.is(&["please", "thanks", "thx", "now"]))
@@ -542,17 +584,29 @@ fn delete(w: &[Word]) -> Sentence {
 /// `new A`, `new folder A`, `make a file called A in B`. `folder` is already
 /// decided for `mkdir`.
 fn new(w: &[Word], folder: Option<bool>) -> Sentence {
-    let w: Vec<Word> = w
-        .iter()
-        .filter(|x| !x.is(ARTICLES) && !x.is(&["new", "called", "named"]))
-        .cloned()
-        .collect();
-    let (is_folder, w) = match (folder, w.first()) {
-        (Some(f), _) => (f, &w[..]),
-        (None, Some(k)) if k.is(FOLDER) => (true, &w[1..]),
-        (None, Some(k)) if k.is(FILE) => (false, &w[1..]),
-        (None, _) => (false, &w[..]),
-    };
+    // The words before the name, `a new file called`, are taken only from
+    // the front, and an article never when it is the last word left: inside
+    // a name they are part of it (`notes on a train.md`), and a file may be
+    // called `a`.
+    let mut i = 0;
+    while i + 1 < w.len() && (w[i].is(ARTICLES) || w[i].is(&["new"])) {
+        i += 1;
+    }
+    let mut is_folder = folder;
+    if folder.is_none() {
+        if w.get(i).is_some_and(|x| x.is(FOLDER)) {
+            is_folder = Some(true);
+            i += 1;
+        } else if w.get(i).is_some_and(|x| x.is(FILE)) {
+            is_folder = Some(false);
+            i += 1;
+        }
+    }
+    while i + 1 < w.len() && (w[i].is(ARTICLES) || w[i].is(&["called", "named"])) {
+        i += 1;
+    }
+    let is_folder = is_folder.unwrap_or(false);
+    let w = rest_from(w, i);
     let (name, within) = match split_last(w, &["in", "inside", "within", "under"]) {
         Some((name, place_words)) if !name.is_empty() => (joined(name), place(place_words)),
         _ => (joined(w), None),
@@ -600,10 +654,16 @@ fn replace(w: &[Word]) -> Sentence {
             _ => Sentence::Incomplete("say it like: replace hi with hello".into()),
         };
     };
+    // Saying what to put in place of it is not optional: an empty
+    // replacement deletes, which has to be asked for, with `""`.
+    if rest.is_empty() {
+        return Sentence::Incomplete(
+            "say what to put in its place: replace hi with hello, or with \"\" to delete it".into(),
+        );
+    }
     let (with, within) = match split_last(rest, IN) {
         Some((with, place_words)) if !with.is_empty() => (joined(with), place(place_words)),
         _ => {
-            // `replace hi with hello everywhere`
             // `replace hi with hello everywhere` says what no `in` means.
             match rest.split_last() {
                 Some((last, before)) if last.is(EVERYWHERE) && !before.is_empty() => {
@@ -977,6 +1037,79 @@ mod tests {
     }
 
     // ---- replace ----------------------------------------------------------
+
+    #[test]
+    fn a_commit_message_is_kept_as_it_was_typed() {
+        assert_eq!(
+            parse("commit Disable the flaky test for now"),
+            Sentence::Commit("Disable the flaky test for now".into()),
+            "a last `now` belongs to the message"
+        );
+        assert_eq!(
+            parse("please commit Fix \"quoted\"  spacing"),
+            Sentence::Commit("Fix \"quoted\"  spacing".into()),
+            "quotes and spacing too, after any politeness in front"
+        );
+    }
+
+    #[test]
+    fn a_replacement_is_never_quietly_nothing() {
+        assert_eq!(
+            parse("replace soon with now"),
+            Sentence::Replace {
+                find: "soon".into(),
+                with: "now".into(),
+                within: None,
+                whole_words: true,
+            },
+            "`now` is what to put there, not a politeness"
+        );
+        assert!(
+            matches!(parse("replace foo with"), Sentence::Incomplete(_)),
+            "nothing after `with` is a sentence half said"
+        );
+        assert_eq!(
+            parse("replace foo with \"\""),
+            Sentence::Replace {
+                find: "foo".into(),
+                with: String::new(),
+                within: None,
+                whole_words: true,
+            },
+            "nothing, asked for in quotes, deletes"
+        );
+    }
+
+    #[test]
+    fn a_new_name_keeps_the_small_words_inside_it() {
+        assert_eq!(
+            parse("new notes on a train.md"),
+            Sentence::New {
+                name: "notes on a train.md".into(),
+                folder: false,
+                within: None,
+            }
+        );
+        assert_eq!(
+            parse("make a new file called notes on a train.md"),
+            Sentence::New {
+                name: "notes on a train.md".into(),
+                folder: false,
+                within: None,
+            },
+            "the lead-in goes, from the front only"
+        );
+        assert_eq!(
+            parse("new a"),
+            Sentence::New {
+                name: "a".into(),
+                folder: false,
+                within: None,
+            },
+            "a file may be called a"
+        );
+        assert!(matches!(parse("new file"), Sentence::Incomplete(_)));
+    }
 
     #[test]
     fn replace_with_no_in_is_the_whole_project() {

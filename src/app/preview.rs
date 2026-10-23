@@ -235,6 +235,11 @@ impl App {
     /// false when the path is outside the project or could not be found, and
     /// still syncs the preview either way so the pane never shows something
     /// stale.
+    ///
+    /// A hidden path (`.env`, `.github/workflows/ci.yml`) is asked for by
+    /// name, so hidden files are shown, the way `.` would show them: there
+    /// is no row to put the cursor on otherwise, and opening the file is
+    /// what was asked.
     pub(super) fn reveal(&mut self, path: &Path) -> bool {
         let root = self.tree.root_path().to_path_buf();
         // Two spellings of the same place. The tree's root has been through
@@ -259,6 +264,13 @@ impl App {
             }
         };
         let path = root.join(&rel);
+        let hidden = rel
+            .components()
+            .any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
+        if hidden && !self.tree.show_hidden() {
+            self.tree.set_show_hidden(true);
+            self.config.show_hidden = true;
+        }
         let mut cur = root;
         let parts: Vec<_> = rel.components().collect();
         for part in parts.iter().take(parts.len().saturating_sub(1)) {

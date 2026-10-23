@@ -372,6 +372,18 @@ impl App {
                 self.mode = Mode::Bar(b);
                 return;
             }
+            _ => {}
+        }
+
+        // Editing the line. What follows only matters if the text changed:
+        // moving the cursor along it is not a new search, and redoing one
+        // would put the selection back on the first hit.
+        let before = b.input.clone();
+        // A command's cursor stops after its `*`: the sigil is drawn apart
+        // from the text, and a letter typed in front of it would turn the
+        // command back into a search. Backspace can still take it away.
+        let floor = usize::from(b.is_command());
+        match key.code {
             KeyCode::Backspace => {
                 if b.cursor > 0 {
                     let s = char_byte(&b.input, b.cursor - 1);
@@ -388,7 +400,7 @@ impl App {
                     b.input.replace_range(s..e, "");
                 }
             }
-            KeyCode::Left => b.cursor = b.cursor.saturating_sub(1),
+            KeyCode::Left => b.cursor = b.cursor.saturating_sub(1).max(floor),
             KeyCode::Right => {
                 // At the end of the line the only thing to the right of the
                 // cursor is the gray suggestion, so the arrow takes it up:
@@ -407,17 +419,18 @@ impl App {
                     b.cursor = (b.cursor + 1).min(b.input.chars().count());
                 }
             }
-            KeyCode::Home => b.cursor = 0,
+            KeyCode::Home => b.cursor = floor,
             KeyCode::End => b.cursor = b.input.chars().count(),
             KeyCode::Char(c) => {
                 let byte = char_byte(&b.input, b.cursor);
                 b.input.insert(byte, c);
                 b.cursor += 1;
             }
-            _ => {
-                self.mode = Mode::Bar(b);
-                return;
-            }
+            _ => {}
+        }
+        if b.input == before {
+            self.mode = Mode::Bar(b);
+            return;
         }
 
         // The line may have just become a command, or stopped being one.
@@ -529,8 +542,14 @@ impl App {
 
     /// Commit to a result: move to it and hand the keyboard to the preview.
     /// The Enter-key counterpart to [`App::preview_hit`].
+    ///
+    /// Into the main window, from wherever the bar was opened over: a hit is
+    /// a place in a file, and the file is there.
     pub(super) fn jump_to(&mut self, hit: &Hit) {
-        self.reveal(&hit.path);
+        self.window = super::mode::Window::Main;
+        if !self.reveal(&hit.path) {
+            return;
+        }
         self.place_cursor_on(hit);
         if matches!(self.preview, Preview::Buffer { .. }) {
             self.focus = Focus::Editor;
