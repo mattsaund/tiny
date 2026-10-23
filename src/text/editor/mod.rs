@@ -87,8 +87,6 @@ pub(super) struct Snapshot {
     cursor_col: usize,
 }
 
-/// One open file. `App` keeps a map of these keyed by path, so a buffer with
-/// unsaved edits survives arrowing away from it and back.
 /// Where one view of a file is: the cursor, the column it is trying to get
 /// back to, and the scroll.
 ///
@@ -105,6 +103,8 @@ pub struct View {
     pub scroll_x: usize,
 }
 
+/// One open file. `App` keeps a map of these keyed by path, so a buffer with
+/// unsaved edits survives arrowing away from it and back.
 #[derive(Debug)]
 pub struct Editor {
     /// Where `save` writes. Updated in place by a rename, so unsaved edits
@@ -337,6 +337,16 @@ impl Editor {
             scroll_rows: self.scroll_rows,
             scroll_x: self.scroll_x,
         }
+    }
+
+    /// Whether this buffer is exactly what opening its file again would
+    /// make: no edits, nothing to undo or redo, and the cursor and the
+    /// scroll still at the top. Letting go of one loses nothing.
+    pub fn untouched(&self) -> bool {
+        !self.dirty
+            && self.undo.is_empty()
+            && self.redo.is_empty()
+            && self.view() == View::default()
     }
 
     /// Take up `view`, kept inside the file as it is now: another pane may

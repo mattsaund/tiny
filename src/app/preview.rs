@@ -326,7 +326,37 @@ impl App {
     /// Called after every cursor move. This is the single seam between the two
     /// panes: the tree does not know about the preview and vice versa; they
     /// are coupled only here.
+    ///
+    /// A file only looked at in passing is let go of on the way past, so that
+    /// arrowing down a folder of large files does not keep every one of them
+    /// in memory, and on the watcher's list, for the rest of the session.
     pub(super) fn sync_preview(&mut self) {
+        let leaving = match &self.preview {
+            Preview::Buffer { path, .. } => Some(path.clone()),
+            _ => None,
+        };
+        self.preview_selection();
+        if let Some(path) = leaving {
+            self.let_go_if_untouched(&path);
+        }
+    }
+
+    /// Let go of the buffer for `path` when it holds nothing that reading the
+    /// file again would not give back (see [`Editor::untouched`]) and no pane
+    /// is showing it.
+    fn let_go_if_untouched(&mut self, path: &Path) {
+        let shown = self.preview.path() == Some(path)
+            || self
+                .split
+                .as_ref()
+                .is_some_and(|s| s.pinned.preview.path() == Some(path));
+        if !shown && self.buffers.get(path).is_some_and(Editor::untouched) {
+            self.buffers.remove(path);
+        }
+    }
+
+    /// Make the preview whatever the browser's cursor is on.
+    fn preview_selection(&mut self) {
         self.preview_scroll = 0;
         self.note_size();
         self.sync_pinned();

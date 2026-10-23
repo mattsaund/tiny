@@ -311,3 +311,69 @@ fn a_file_that_grows_past_what_the_editor_opens_is_let_go() {
     );
     assert!(app.status.contains("too large"), "{}", app.status);
 }
+
+#[test]
+fn a_file_only_looked_at_is_let_go_of_on_the_way_past() {
+    let (td, mut app) = fixture();
+    let readme = td.path().join("README.md");
+    select(&mut app, "README.md");
+    assert!(app.buffers.contains_key(&readme), "open while it is shown");
+    select(&mut app, "main.py");
+    assert!(
+        !app.buffers.contains_key(&readme),
+        "nothing of yours in it, so nothing is kept, or watched"
+    );
+    // Coming back reads it again, as it is now.
+    fs::write(&readme, "# Fixture\n\nnewer\n").unwrap();
+    select(&mut app, "README.md");
+    assert!(joined(&mut app).contains("newer"));
+}
+
+#[test]
+fn a_file_with_anything_of_yours_in_it_is_kept() {
+    let (td, mut app) = fixture();
+    let main = td.path().join("src/main.py");
+    select(&mut app, "main.py");
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(k(KeyCode::Down));
+    app.on_key(k(KeyCode::Esc));
+    select(&mut app, "README.md");
+    assert_eq!(
+        app.buffers.get(&main).map(|ed| ed.cursor_line),
+        Some(1),
+        "the place you left it is yours"
+    );
+}
+
+#[test]
+fn a_file_in_the_other_pane_is_kept_while_the_cursor_moves_on() {
+    let (td, mut app) = fixture();
+    select(&mut app, "README.md");
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(ctrl('w'));
+    app.on_key(k(KeyCode::Esc));
+    select(&mut app, "main.py");
+    assert!(app.buffers.contains_key(&td.path().join("README.md")));
+}
+
+#[test]
+fn a_hidden_file_arriving_redraws_nothing() {
+    // The folder's stamp moves, and it is read again, but the tree does not
+    // show dotfiles, so the rows come out the same and no frame is spent.
+    let (td, mut app) = fixture();
+    select(&mut app, "README.md");
+    fs::write(td.path().join(".swap"), "x").unwrap();
+    assert!(!app.rescan_disk());
+}
+
+#[test]
+fn a_hidden_file_arriving_in_the_folder_under_the_cursor_is_counted() {
+    // Its count of entries takes in hidden ones, and it is on screen.
+    let (td, mut app) = fixture();
+    select(&mut app, "notes");
+    let before = joined(&mut app);
+    assert!(before.contains("1 entry"), "{before}");
+    fs::write(td.path().join("notes/.swap"), "x").unwrap();
+    assert!(app.rescan_disk());
+    assert!(joined(&mut app).contains("2 entries"));
+}

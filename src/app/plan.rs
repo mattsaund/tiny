@@ -186,6 +186,7 @@ impl App {
     /// Forget the listing, so the next lookup sees the disk as it is now.
     pub(super) fn forget_names(&mut self) {
         self.names = None;
+        self.replace_count = None;
     }
 
     /// A path as the project spells it: from the root, forward slashes.
@@ -599,41 +600,33 @@ impl App {
     /// Where functions called `name` are defined, in one file or the whole
     /// project. An exact match wins; failing any, the same name in another
     /// case.
+    ///
+    /// The project's definitions are read once while the bar is open and
+    /// looked through in place after that, so a keystroke costs a filter of
+    /// the list rather than a copy of it.
     fn definitions(&mut self, name: &str, file: Option<PathBuf>) -> Result<Vec<Hit>, String> {
-        let all = match file {
-            Some(f) => self.read_definitions(&[f]),
-            None => match self.names().definitions.clone() {
-                Some(all) => all,
-                None => {
-                    let files = self.names().files.clone();
-                    let code = files.iter().filter(|p| scan::lang_of(p).is_some()).count();
-                    // Too many to read on a pause in typing; Enter reads them.
-                    if code > MAX_PREVIEW_CODE_FILES && self.planning_for_preview {
-                        return Err(format!(
-                            "Enter looks for function {name} in {code} code files"
-                        ));
-                    }
-                    let all = self.read_definitions(&files);
-                    if let Some(names) = self.names.as_mut() {
-                        names.definitions = Some(all.clone());
-                    }
-                    all
-                }
-            },
-        };
-        let exact = all.iter().any(|(n, _)| n == name);
-        Ok(all
-            .into_iter()
-            .filter(|(n, _)| {
-                if exact {
-                    n == name
-                } else {
-                    n.eq_ignore_ascii_case(name)
-                }
-            })
-            .map(|(_, h)| h)
-            .take(MAX_SPOTS)
-            .collect())
+        if let Some(f) = file {
+            return Ok(named(&self.read_definitions(&[f]), name));
+        }
+        self.names();
+        let names = self.names.as_ref().expect("listed just above");
+        if names.definitions.is_none() {
+            let code = names
+                .files
+                .iter()
+                .filter(|p| scan::lang_of(p).is_some())
+                .count();
+            // Too many to read on a pause in typing; Enter reads them.
+            if code > MAX_PREVIEW_CODE_FILES && self.planning_for_preview {
+                return Err(format!(
+                    "Enter looks for function {name} in {code} code files"
+                ));
+            }
+            let all = self.read_definitions(&names.files);
+            self.names.as_mut().expect("listed just above").definitions = Some(all);
+        }
+        let all = self.names.as_ref().and_then(|n| n.definitions.as_deref());
+        Ok(named(all.unwrap_or_default(), name))
     }
 
     /// Every definition in `files`, by tree-sitter (the same reading the map
@@ -672,29 +665,17 @@ impl App {
     /// Markdown headings with `name` in them, ignoring case, in one file or
     /// the whole project: the ones that say exactly that first.
     fn headings(&mut self, name: &str, file: Option<PathBuf>) -> Vec<Hit> {
-        let all = match file {
-            Some(f) => self.read_headings(&[f]),
-            None => match self.names().headings.clone() {
-                Some(all) => all,
-                None => {
-                    let files = self.names().files.clone();
-                    let all = self.read_headings(&files);
-                    if let Some(names) = self.names.as_mut() {
-                        names.headings = Some(all.clone());
-                    }
-                    all
-                }
-            },
-        };
-        let wanted = name.to_lowercase();
-        let mut found: Vec<(bool, Hit)> = all
-            .into_iter()
-            .filter(|(title, _)| title.contains(&wanted))
-            .map(|(title, h)| (title == wanted, h))
-            .collect();
-        // Exact titles first; otherwise the project's own order.
-        found.sort_by_key(|(exact, _)| !*exact);
-        found.into_iter().map(|(_, h)| h).take(MAX_SPOTS).collect()
+        if let Some(f) = file {
+            return titled(&self.read_headings(&[f]), name);
+        }
+        self.names();
+        let names = self.names.as_ref().expect("listed just above");
+        if names.headings.is_none() {
+            let all = self.read_headings(&names.files);
+            self.names.as_mut().expect("listed just above").headings = Some(all);
+        }
+        let all = self.names.as_ref().and_then(|n| n.headings.as_deref());
+        titled(all.unwrap_or_default(), name)
     }
 
     /// Every heading in the markdown among `files`, by its title in lower
@@ -778,22 +759,15 @@ impl App {
         };
         match within {
             None => {
-                // A file open with unsaved edits is counted as it is on
-                // screen, which is the copy the replace will change.
-                let unsaved = self.unsaved_paths();
-                let mut report = search::count(
-                    self.tree.root_path(),
-                    &needle,
-                    &self.search_opts(),
-                    &|path| unsaved.contains(path),
-                );
-                for path in &unsaved {
-                    let n = needle.find_in(&self.buffers[path].to_text()).len();
-                    if n > 0 {
-                        report.files += 1;
-                        report.occurrences += n;
+                let report = match &self.replace_count {
+                    // Only the replacement has changed since the last pause.
+                    Some((counted, report)) if *counted == needle => *report,
+                    _ => {
+                        let report = self.count_in_project(&needle);
+                        self.replace_count = Some((needle.clone(), report));
+                        report
                     }
-                }
+                };
                 if report.occurrences == 0 {
                     return Err(format!("`{find}` is not in this project{as_what}"));
                 }
@@ -820,6 +794,27 @@ impl App {
                 })
             }
         }
+    }
+
+    /// How many times, and in how many files, `needle` is in the project.
+    /// A file open with unsaved edits is counted as it is on screen, which
+    /// is the copy the replace will change.
+    fn count_in_project(&self, needle: &Needle) -> Report {
+        let unsaved = self.unsaved_paths();
+        let mut report = search::count(
+            self.tree.root_path(),
+            needle,
+            &self.search_opts(),
+            &|path| unsaved.contains(path),
+        );
+        for path in &unsaved {
+            let n = needle.find_in(&self.buffers[path].to_text()).len();
+            if n > 0 {
+                report.files += 1;
+                report.occurrences += n;
+            }
+        }
+        report
     }
 
     // ---- saying what it will do --------------------------------------------
@@ -1102,6 +1097,40 @@ fn what_of(target: &Target) -> String {
         Target::File(n) | Target::Folder(n) => n.clone(),
         Target::Window(_) => String::new(),
     }
+}
+
+/// The definitions called `name`, by their places. An exact match wins;
+/// failing any, the same name in another case.
+fn named(all: &[(String, Hit)], name: &str) -> Vec<Hit> {
+    let exact = all.iter().any(|(n, _)| n == name);
+    all.iter()
+        .filter(|(n, _)| {
+            if exact {
+                n == name
+            } else {
+                n.eq_ignore_ascii_case(name)
+            }
+        })
+        .map(|(_, h)| h.clone())
+        .take(MAX_SPOTS)
+        .collect()
+}
+
+/// The headings with `name` in their lowercased titles, by their places:
+/// the ones that say exactly that first, then the project's own order.
+fn titled(all: &[(String, Hit)], name: &str) -> Vec<Hit> {
+    let wanted = name.to_lowercase();
+    let mut found: Vec<(bool, &Hit)> = all
+        .iter()
+        .filter(|(title, _)| title.contains(&wanted))
+        .map(|(title, h)| (*title == wanted, h))
+        .collect();
+    found.sort_by_key(|(exact, _)| !*exact);
+    found
+        .into_iter()
+        .map(|(_, h)| h.clone())
+        .take(MAX_SPOTS)
+        .collect()
 }
 
 /// The title of a markdown heading line (`## Install` is `Install`) or
