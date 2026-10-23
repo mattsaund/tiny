@@ -157,23 +157,39 @@ impl Editor {
     /// Splitting is done by hand rather than with `str::lines` because that
     /// discards the information this module exists to preserve: whether the
     /// file ended with a newline, and which ending it used.
+    ///
+    /// A file is CRLF only when every line break in it is: one stray `\r\n`
+    /// among LF lines leaves the file LF, with that `\r` kept in its line,
+    /// so a save writes back the endings it read rather than turning every
+    /// other line's into it.
     pub fn from_str(path: PathBuf, content: &str) -> Self {
-        let line_ending = if content.contains("\r\n") {
+        let breaks = content.matches('\n').count();
+        let crlf = breaks > 0 && content.matches("\r\n").count() == breaks;
+        let line_ending = if crlf {
             LineEnding::Crlf
         } else {
             LineEnding::Lf
         };
         let trailing_newline = content.ends_with('\n') || content.is_empty();
-        let body = content
-            .strip_suffix('\n')
-            .map(|s| s.strip_suffix('\r').unwrap_or(s))
-            .unwrap_or(content);
+        let body = match content.strip_suffix('\n') {
+            Some(body) if crlf => body.strip_suffix('\r').unwrap_or(body),
+            Some(body) => body,
+            None => content,
+        };
         let lines: Vec<String> = if content.is_empty() {
             vec![String::new()]
         } else {
-            body.split('\n')
-                .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
-                .collect()
+            let mut parts: Vec<&str> = body.split('\n').collect();
+            // Every part but the last came before a break, which in a CRLF
+            // file is where its `\r` belongs. The last came before nothing,
+            // and a `\r` there is the file's own.
+            let last = parts.len() - 1;
+            if crlf {
+                for part in &mut parts[..last] {
+                    *part = part.strip_suffix('\r').unwrap_or(part);
+                }
+            }
+            parts.into_iter().map(str::to_string).collect()
         };
         Self {
             path,
@@ -599,6 +615,27 @@ mod tests {
         assert_eq!(e.take_touched(), Some(0), "every line is in doubt");
         assert!(e.undo());
         assert_eq!(e.to_text(), "a\r\nb\r\n");
+    }
+
+    #[test]
+    fn mixed_line_endings_are_written_back_as_they_were_read() {
+        for text in [
+            "a\nb\r\nc\n",
+            "a\r\nb\nc",
+            "a\nb\r",
+            "a\r\nb\r",
+            "\r\n",
+            "only\r",
+        ] {
+            assert_eq!(ed(text).to_text(), text, "{text:?}");
+        }
+        let mut e = ed("a\nb\r\nc\n");
+        e.insert_char('x');
+        assert_eq!(
+            e.to_text(),
+            "xa\nb\r\nc\n",
+            "an edit on one line leaves every other line's ending alone"
+        );
     }
 
     #[test]

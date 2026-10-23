@@ -128,7 +128,7 @@ fn jpeg(file: &mut File) -> Result<Option<(u32, u32)>> {
     let mut pos = 2u64;
     while pos < MAX_JPEG_SCAN {
         let header = at(file, pos, 4)?;
-        let [mut lead, mut marker] = [*header.first().unwrap_or(&0), *header.get(1).unwrap_or(&0)];
+        let [lead, mut marker] = [*header.first().unwrap_or(&0), *header.get(1).unwrap_or(&0)];
         if lead != 0xFF {
             return Ok(None);
         }
@@ -137,10 +137,8 @@ fn jpeg(file: &mut File) -> Result<Option<(u32, u32)>> {
         while marker == 0xFF {
             skipped += 1;
             let next = at(file, pos + 1 + skipped, 2)?;
-            lead = 0xFF;
             marker = *next.first().unwrap_or(&0);
         }
-        let _ = lead;
         pos += 2 + skipped;
         match marker {
             // Start of frame, in every one of its flavors.

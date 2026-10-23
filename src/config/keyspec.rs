@@ -93,7 +93,7 @@ impl Key {
             "enter" | "return" => KeyCode::Enter,
             "esc" | "escape" => KeyCode::Esc,
             "tab" => KeyCode::Tab,
-            "backtab" | "shift+tab" => KeyCode::BackTab,
+            "backtab" => KeyCode::BackTab,
             "space" => KeyCode::Char(' '),
             "backspace" => KeyCode::Backspace,
             "delete" | "del" => KeyCode::Delete,
@@ -118,6 +118,15 @@ impl Key {
                 }
             }
         };
+        // Shift+Tab has a key of its own in every terminal, BackTab, and
+        // Shift is part of what it is rather than something held with it.
+        let code = match code {
+            KeyCode::Tab if mods.contains(KeyModifiers::SHIFT) => KeyCode::BackTab,
+            code => code,
+        };
+        if code == KeyCode::BackTab {
+            mods.remove(KeyModifiers::SHIFT);
+        }
         Some(Key { code, mods })
     }
 
@@ -134,6 +143,8 @@ impl Key {
         }
         match (self.code, ev.code) {
             (KeyCode::Char(a), KeyCode::Char(b)) => a == b,
+            // Arrives with Shift set, from crossterm, on every platform.
+            (KeyCode::BackTab, KeyCode::BackTab) => true,
             (a, b) => a == b && want(KeyModifiers::SHIFT),
         }
     }
@@ -161,7 +172,7 @@ impl std::fmt::Display for Key {
             KeyCode::Enter => f.write_str("enter"),
             KeyCode::Esc => f.write_str("esc"),
             KeyCode::Tab => f.write_str("tab"),
-            KeyCode::BackTab => f.write_str("backtab"),
+            KeyCode::BackTab => f.write_str("shift+tab"),
             KeyCode::Backspace => f.write_str("backspace"),
             KeyCode::Delete => f.write_str("delete"),
             KeyCode::Insert => f.write_str("insert"),
@@ -178,9 +189,10 @@ impl std::fmt::Display for Key {
 /// cannot be written down.
 pub fn spec_of(ev: &KeyEvent) -> Option<String> {
     let mut mods = ev.modifiers;
-    // A character already carries its own shift; saying so twice would produce
-    // `shift+I`, which reads as a different key than the one just pressed.
-    if matches!(ev.code, KeyCode::Char(_)) {
+    // A character already carries its own shift, and so does BackTab;
+    // saying so twice would produce `shift+I`, which reads as a different key
+    // than the one just pressed.
+    if matches!(ev.code, KeyCode::Char(_) | KeyCode::BackTab) {
         mods.remove(KeyModifiers::SHIFT);
     }
     let key = Key {

@@ -539,7 +539,7 @@ const TABLE: &[Row] = &[
         &[Context::Map],
         "map.previous",
         "",
-        "backtab",
+        "shift+tab",
     ),
     (
         Action::MapWikilinks,
@@ -1037,7 +1037,7 @@ mod tests {
             "enter",
             "esc",
             "tab",
-            "backtab",
+            "shift+tab",
             "pageup",
             "pagedown",
             "home",
@@ -1055,6 +1055,22 @@ mod tests {
             let key = Key::parse(spec).unwrap_or_else(|| panic!("{spec} did not parse"));
             assert_eq!(key.to_string(), spec, "round trip");
         }
+    }
+
+    #[test]
+    fn shift_tab_is_the_key_the_terminal_sends_for_it() {
+        // crossterm reports Shift+Tab as BackTab with Shift set, on every
+        // platform; the shipped binding used to want it without.
+        let (map, _) = Keymap::new(&BTreeMap::new(), Keyboard::Standard);
+        assert_eq!(
+            map.resolve(Context::Map, &ev(KeyCode::BackTab, KeyModifiers::SHIFT)),
+            Some(Action::MapPrevious)
+        );
+        assert_eq!(
+            Key::parse("backtab"),
+            Key::parse("shift+tab"),
+            "both spellings"
+        );
     }
 
     #[test]

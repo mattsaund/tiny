@@ -49,8 +49,10 @@ ask() {
 temp_dir() { mktemp -d 2>/dev/null || mktemp -d -t tiny; }
 temp_file() { mktemp 2>/dev/null || mktemp -t tiny; }
 
-# Everything to clean up on the way out, however we leave. One trap, because a
-# second `trap ... EXIT` would silently replace the first.
+# Everything to clean up on the way out, however we leave. One EXIT trap,
+# because a second would silently replace the first. Ctrl+C and a kill exit
+# (which runs it): a handler that only cleaned up would return, and the script
+# would carry on from where it was, using the files it had just deleted.
 SRC=""
 SRC_IS_TEMP=""
 LOG=""
@@ -61,7 +63,9 @@ cleanup() {
     [ -n "$ROOT" ] && rm -rf "$ROOT"
     return 0
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Whether it is worth drawing anything that moves. A log file, a CI job or a
 # pipe gets plain lines instead: a progress bar redrawn with carriage returns
