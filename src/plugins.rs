@@ -129,9 +129,10 @@ pub struct Plugins {
 }
 
 impl Plugins {
-    /// Load every plugin in `dir`. A folder that is not there is no plugins,
-    /// which is the ordinary case and not an error.
-    pub fn load(dir: &Path) -> Self {
+    /// Load every plugin in `dir`, for the project at `root`. A folder that
+    /// is not there is no plugins, which is the ordinary case and not an
+    /// error.
+    pub fn load(dir: &Path, root: &Path) -> Self {
         let mut plugins = Plugins::default();
         let found = Self::find(dir);
         if found.is_empty() {
@@ -142,13 +143,22 @@ impl Plugins {
             plugins.errors.push(format!("plugins: {}", first_line(&e)));
             return plugins;
         }
+        // What a plugin's top level can ask about: the project, and nothing
+        // open yet.
+        plugins.shared.borrow_mut().snapshot = Snapshot {
+            root: root.to_string_lossy().into_owned(),
+            ..Snapshot::default()
+        };
         for (name, file) in found {
             plugins.shared.borrow_mut().loading = name.clone();
             let ran = std::fs::read_to_string(&file)
                 .map_err(|e| e.to_string())
                 .and_then(|source| {
+                    // Notepad on older Windows starts a UTF-8 file with a
+                    // byte order mark, which Lua reads as a syntax error.
+                    let source = source.strip_prefix('\u{feff}').unwrap_or(&source);
                     with_deadline(&plugins.shared, || {
-                        lua.load(source.as_str())
+                        lua.load(source)
                             .set_name(format!("@{}", display(&file, dir)))
                             .exec()
                     })
@@ -162,7 +172,16 @@ impl Plugins {
                     plugins.startup.extend(asked);
                     plugins.loaded.push(name);
                 }
-                Err(e) => plugins.errors.push(format!("{name}: {e}")),
+                Err(e) => {
+                    // A plugin that failed half way through loading takes
+                    // back the half it got through: its commands and hooks
+                    // were registered for a plugin that is not there.
+                    let mut s = plugins.shared.borrow_mut();
+                    s.commands.retain(|_, (owner, _)| *owner != name);
+                    s.hooks.retain(|(_, owner, _)| *owner != name);
+                    drop(s);
+                    plugins.errors.push(format!("{name}: {e}"));
+                }
             }
         }
         plugins.lua = Some(lua);
@@ -394,6 +413,12 @@ impl Plugins {
         }))
     }
 
+    /// Whether any plugin listens for `event`, so tiny can skip putting a
+    /// snapshot together for nobody.
+    pub fn listens(&self, event: &str) -> bool {
+        self.shared.borrow().hooks.iter().any(|(e, ..)| e == event)
+    }
+
     /// Tell every plugin listening for `event` about `path`. Returns what they
     /// asked for, and one line for each that failed.
     pub fn fire(&self, event: &str, path: &Path, snapshot: Snapshot) -> (Vec<Effect>, Vec<String>) {
@@ -501,10 +526,10 @@ mod tests {
     #[test]
     fn a_folder_with_no_plugins_starts_no_lua() {
         let td = folder(&[("notes.txt", "not a plugin")]);
-        let plugins = Plugins::load(td.path());
+        let plugins = Plugins::load(td.path(), td.path());
         assert!(plugins.lua.is_none());
         assert!(plugins.loaded.is_empty() && plugins.errors.is_empty());
-        let missing = Plugins::load(&td.path().join("nope"));
+        let missing = Plugins::load(&td.path().join("nope"), td.path());
         assert!(missing.loaded.is_empty() && missing.errors.is_empty());
     }
 
@@ -520,7 +545,7 @@ mod tests {
             end)
             "#,
         )]);
-        let plugins = Plugins::load(td.path());
+        let plugins = Plugins::load(td.path(), td.path());
         assert_eq!(plugins.loaded, ["words"]);
         assert_eq!(plugins.commands(), ["words"]);
         let effects = plugins
@@ -543,7 +568,7 @@ mod tests {
             end)
             "#,
         )]);
-        let plugins = Plugins::load(td.path());
+        let plugins = Plugins::load(td.path(), td.path());
         let effects = plugins.run("shout", &[], editing("hey")).unwrap().unwrap();
         assert_eq!(
             effects,
@@ -562,7 +587,7 @@ mod tests {
             "log.lua",
             r#"tiny.on("save", function(path) tiny.status("saved " .. path) end)"#,
         )]);
-        let plugins = Plugins::load(td.path());
+        let plugins = Plugins::load(td.path(), td.path());
         let (effects, errors) = plugins.fire("save", Path::new("/p/a.md"), editing(""));
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(effects, [Effect::Status("saved /p/a.md".into())]);
@@ -576,7 +601,7 @@ mod tests {
             ("a_broken.lua", "this is not lua"),
             ("b_fine.lua", r#"tiny.command("fine", function() end)"#),
         ]);
-        let plugins = Plugins::load(td.path());
+        let plugins = Plugins::load(td.path(), td.path());
         assert_eq!(plugins.loaded, ["b_fine"]);
         assert_eq!(plugins.errors.len(), 1);
         assert!(
@@ -588,12 +613,50 @@ mod tests {
     }
 
     #[test]
+    fn a_plugin_that_fails_half_way_through_loading_leaves_nothing_behind() {
+        let td = folder(&[(
+            "half.lua",
+            r#"
+            tiny.command("early", function() end)
+            tiny.on("save", function() tiny.status("saw it") end)
+            error("and then it broke")
+            "#,
+        )]);
+        let plugins = Plugins::load(td.path(), td.path());
+        assert!(plugins.loaded.is_empty());
+        assert!(
+            plugins.commands().is_empty(),
+            "the command it added before the error is gone"
+        );
+        assert!(!plugins.listens("save"), "and so is its hook");
+    }
+
+    #[test]
+    fn a_plugin_saved_with_a_byte_order_mark_still_loads() {
+        let td = folder(&[("bom.lua", "\u{feff}tiny.command(\"bom\", function() end)")]);
+        let plugins = Plugins::load(td.path(), td.path());
+        assert_eq!(plugins.loaded, ["bom"], "{:?}", plugins.errors);
+    }
+
+    #[test]
+    fn a_plugin_can_ask_where_the_project_is_while_it_loads() {
+        let td = folder(&[("where.lua", r#"tiny.status(tiny.root())"#)]);
+        let plugins = Plugins::load(td.path(), Path::new("/projects/notes"));
+        assert_eq!(
+            plugins.startup,
+            [Effect::Status("/projects/notes".into())],
+            "{:?}",
+            plugins.errors
+        );
+    }
+
+    #[test]
     fn an_error_while_running_names_the_plugin_and_asks_for_nothing() {
         let td = folder(&[(
             "oops.lua",
             r#"tiny.command("oops", function() tiny.status("half") error("broke") end)"#,
         )]);
-        let plugins = Plugins::load(td.path());
+        let plugins = Plugins::load(td.path(), td.path());
         let err = plugins.run("oops", &[], editing("")).unwrap().unwrap_err();
         assert!(err.starts_with("oops: "), "{err}");
         assert!(err.contains("broke"), "{err}");
@@ -605,7 +668,7 @@ mod tests {
             "spin.lua",
             r#"tiny.command("spin", function() while true do end end)"#,
         )]);
-        let plugins = Plugins::load(td.path());
+        let plugins = Plugins::load(td.path(), td.path());
         let started = Instant::now();
         let err = plugins.run("spin", &[], editing("")).unwrap().unwrap_err();
         assert!(err.contains("stopped"), "{err}");
@@ -618,7 +681,7 @@ mod tests {
             "edit.lua",
             r#"tiny.command("edit", function() tiny.insert("x") end)"#,
         )]);
-        let plugins = Plugins::load(td.path());
+        let plugins = Plugins::load(td.path(), td.path());
         let browsing = Snapshot {
             root: "/project".into(),
             ..Snapshot::default()
@@ -640,7 +703,7 @@ mod tests {
                 r#"return { greet = function() return "hi" end }"#,
             ),
         ]);
-        let plugins = Plugins::load(td.path());
+        let plugins = Plugins::load(td.path(), td.path());
         assert_eq!(plugins.loaded, ["mine"], "{:?}", plugins.errors);
         let effects = plugins.run("mine", &[], editing("")).unwrap().unwrap();
         assert_eq!(effects, [Effect::Status("hi".into())]);
@@ -649,14 +712,14 @@ mod tests {
     #[test]
     fn an_unknown_event_is_refused_by_name() {
         let td = folder(&[("bad.lua", r#"tiny.on("sav", function() end)"#)]);
-        let plugins = Plugins::load(td.path());
+        let plugins = Plugins::load(td.path(), td.path());
         assert!(plugins.errors[0].contains("`sav`"), "{:?}", plugins.errors);
     }
 
     #[test]
     fn a_command_nobody_added_is_none() {
         let td = folder(&[("x.lua", "")]);
-        let plugins = Plugins::load(td.path());
+        let plugins = Plugins::load(td.path(), td.path());
         assert!(plugins.run("nothing", &[], editing("")).is_none());
         assert_eq!(plugins.command_owner("nothing"), None);
     }

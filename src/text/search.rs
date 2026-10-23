@@ -119,6 +119,11 @@ pub struct Report {
     pub occurrences: usize,
 }
 
+/// Version control's own folders, never walked whatever `ignore` says:
+/// nothing in them is a file of the project, and a replace across the project
+/// must never rewrite a repository's insides.
+const NEVER_WALKED: &[&str] = &[".git", ".hg", ".svn"];
+
 /// Files above this are skipped: a search box should not stall on a dump.
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 /// Long lines are truncated for display, not skipped.
@@ -321,11 +326,15 @@ pub fn is_word_char(c: char) -> bool {
 /// dry-run flag on [`replace_all`]: the two are read by different code paths
 /// and keeping them apart makes it impossible to accidentally write during a
 /// count.
-pub fn count(root: &Path, needle: &Needle, opts: &Opts) -> Report {
+///
+/// Files `skip` names are left out: the caller has a newer copy of them than
+/// the disk does (a buffer with unsaved edits) and counts that instead.
+pub fn count(root: &Path, needle: &Needle, opts: &Opts, skip: &dyn Fn(&Path) -> bool) -> Report {
     if needle.text.is_empty() {
         return Report::default();
     }
-    let files = walk(root, opts);
+    let mut files = walk(root, opts);
+    files.retain(|path| !skip(path));
     let counts = par_map(
         &files,
         || (),
@@ -348,14 +357,24 @@ pub fn count(root: &Path, needle: &Needle, opts: &Opts) -> Report {
 ///
 /// On partial failure it keeps going and returns an error naming every file it
 /// could not write, so the user knows exactly what state the project is in.
-/// `App::do_replace` then drops clean buffers so open files re-read from disk.
-pub fn replace_all(root: &Path, needle: &Needle, replacement: &str, opts: &Opts) -> Result<Report> {
+/// `App::do_replace` then brings clean buffers up to date with what it wrote.
+///
+/// Files `skip` names are not touched: a buffer with unsaved edits is the
+/// newer copy of its file, and writing under it would be undone by its next
+/// save. The caller replaces in those buffers instead.
+pub fn replace_all(
+    root: &Path,
+    needle: &Needle,
+    replacement: &str,
+    opts: &Opts,
+    skip: &dyn Fn(&Path) -> bool,
+) -> Result<Report> {
     if needle.text.is_empty() {
         return Ok(Report::default());
     }
     let mut report = Report::default();
     let mut failures: Vec<String> = Vec::new();
-    for path in walk(root, opts) {
+    for path in walk(root, opts).into_iter().filter(|path| !skip(path)) {
         let Ok(text) = read_text(&path) else { continue };
         let (changed, n) = needle.replace_in(&text, replacement);
         if n == 0 {
@@ -601,7 +620,7 @@ pub fn walk_all(root: &Path, opts: &Opts) -> Walked {
         let mut files = Vec::new();
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if opts.ignore.iter().any(|i| i == &name) {
+            if opts.ignore.iter().any(|i| i == &name) || NEVER_WALKED.contains(&name.as_str()) {
                 continue;
             }
             if !opts.show_hidden && name.starts_with('.') {
@@ -781,7 +800,12 @@ mod tests {
     fn count_reports_files_and_occurrences_without_changing_anything() {
         let td = fixture();
         let before = fs::read_to_string(td.path().join("notes/design.md")).unwrap();
-        let report = count(td.path(), &Needle::new("widget", false), &Opts::default());
+        let report = count(
+            td.path(),
+            &Needle::new("widget", false),
+            &Opts::default(),
+            &|_| false,
+        );
         assert_eq!(report.files, 1, "only the lowercase spelling, in one file");
         assert_eq!(report.occurrences, 1);
         assert_eq!(
@@ -798,6 +822,7 @@ mod tests {
             &Needle::new("widget", false),
             "gadget",
             &Opts::default(),
+            &|_| false,
         )
         .unwrap();
         assert_eq!(report.occurrences, 1);
@@ -817,6 +842,7 @@ mod tests {
             &Needle::new("widget", false),
             "gadget",
             &Opts::default(),
+            &|_| false,
         )
         .unwrap();
         assert_eq!(
@@ -834,14 +860,21 @@ mod tests {
     #[test]
     fn replacing_nothing_is_a_no_op() {
         let td = fixture();
-        let report =
-            replace_all(td.path(), &Needle::new("", false), "x", &Opts::default()).unwrap();
+        let report = replace_all(
+            td.path(),
+            &Needle::new("", false),
+            "x",
+            &Opts::default(),
+            &|_| false,
+        )
+        .unwrap();
         assert_eq!(report, Report::default());
         let report = replace_all(
             td.path(),
             &Needle::new("absent-string", false),
             "x",
             &Opts::default(),
+            &|_| false,
         )
         .unwrap();
         assert_eq!(report.files, 0);
@@ -887,9 +920,9 @@ mod tests {
         let td = fixture();
         fs::write(td.path().join("notes/words.md"), "hi this hi\nhigh hi\n").unwrap();
         let n = Needle::new("hi", true);
-        let report = count(td.path(), &n, &Opts::default());
+        let report = count(td.path(), &n, &Opts::default(), &|_| false);
         assert_eq!((report.files, report.occurrences), (1, 3));
-        replace_all(td.path(), &n, "hey", &Opts::default()).unwrap();
+        replace_all(td.path(), &n, "hey", &Opts::default(), &|_| false).unwrap();
         assert_eq!(
             fs::read_to_string(td.path().join("notes/words.md")).unwrap(),
             "hey this hey\nhigh hey\n"

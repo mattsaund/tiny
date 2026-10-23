@@ -236,13 +236,13 @@ impl App {
         };
     }
 
-    /// Re-read the project from disk. The manual replacement for a file
-    /// watcher (see `tree`'s module docs). Clean buffers are dropped so they
-    /// pick up external changes; dirty ones are kept.
+    /// Re-read the project from disk, for anything the watcher has not
+    /// caught (or with `auto_reload` off). Clean buffers are brought up to
+    /// date in place, so the cursor stays where it was; dirty ones are kept
+    /// as they are.
     pub(super) fn refresh(&mut self) {
         self.tree.refresh_all();
-        // Drop clean buffers so they re-read from disk; keep unsaved work.
-        self.buffers.retain(|_, e| e.dirty);
+        self.reread_clean_buffers();
         self.rebuild_rows();
         self.status = "refreshed".into();
     }

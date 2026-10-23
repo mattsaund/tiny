@@ -16,8 +16,10 @@
 //! # Buffers follow their files
 //!
 //! A rename moves the buffer's entry to the new key, so unsaved edits follow
-//! the file rather than being stranded under a path that no longer exists. A
-//! delete drops the entry and everything under it.
+//! the file rather than being stranded under a path that no longer exists.
+//! Renaming a folder moves every buffer inside it the same way, along with
+//! anything else that points into it: the clipboard, and the pane without
+//! the keyboard. A delete drops the entry and everything under it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,6 +55,17 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Where `path` is once `from` has moved to `to`: `to` itself, or the same
+/// place inside it.
+pub(super) fn moved(path: &Path, from: &Path, to: &Path) -> PathBuf {
+    match path.strip_prefix(from) {
+        // Joining an empty path would add a trailing separator.
+        Ok(rest) if rest.as_os_str().is_empty() => to.to_path_buf(),
+        Ok(rest) => to.join(rest),
+        Err(_) => path.to_path_buf(),
+    }
 }
 
 /// A free path in `dir` for something named after `src`: `notes.md`, then
@@ -209,6 +222,9 @@ impl App {
         match ed.save() {
             Ok(()) => {
                 self.status = format!("saved {name}");
+                // Our own write, stamped as ours, so the disk watcher does not
+                // take it for someone else's.
+                self.note_file(&path);
                 self.plugin_event("save", &path);
             }
             Err(e) => self.status = format!("save failed: {e}"),
@@ -271,6 +287,7 @@ impl App {
             match self.buffers.get_mut(path).map(Editor::save) {
                 Some(Ok(())) => {
                     saved += 1;
+                    self.note_file(path);
                     self.plugin_event("save", path);
                 }
                 Some(Err(e)) => failed.push(format!("{}: {e}", display_name(path))),
@@ -347,11 +364,28 @@ impl App {
         fs::rename(from, target)
             .with_context(|| format!("cannot rename {}", display_name(from)))?;
 
-        // Carry any open buffer, and its unsaved edits, to the new path.
-        if let Some(mut ed) = self.buffers.remove(from) {
-            ed.path = target.to_path_buf();
-            self.buffers.insert(target.to_path_buf(), ed);
-            self.highlight_cache.clear();
+        // Carry every open buffer, and its unsaved edits, to the new path: the
+        // file's own, or every one inside a folder.
+        let moving: Vec<PathBuf> = self
+            .buffers
+            .keys()
+            .filter(|p| p.starts_with(from))
+            .cloned()
+            .collect();
+        for old in moving {
+            if let Some(mut ed) = self.buffers.remove(&old) {
+                let new = moved(&old, from, target);
+                ed.path = new.clone();
+                self.buffers.insert(new, ed);
+            }
+        }
+        if let Some(copied) = &mut self.clipboard
+            && copied.starts_with(from)
+        {
+            *copied = moved(copied, from, target);
+        }
+        if let Some(split) = &mut self.split {
+            split.pinned.preview.moved(from, target);
         }
         self.tree.refresh_all();
         self.reveal(target);

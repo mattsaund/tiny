@@ -326,3 +326,94 @@ fn pasting_with_an_empty_clipboard_says_so() {
     app.on_key(ctrl('v'));
     assert!(app.status.contains("nothing copied"), "{}", app.status);
 }
+
+#[test]
+fn renaming_a_folder_carries_every_open_buffer_inside_it() {
+    // The data loss this guards against: edits in a file inside a renamed
+    // folder used to stay under the old path, where saving them failed.
+    let (td, mut app) = fixture();
+    select(&mut app, "design.md");
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, "UNSAVED ");
+    app.on_key(k(KeyCode::Esc));
+    command(&mut app, "rename notes to journal");
+
+    let moved = td.path().join("journal/design.md");
+    let ed = app
+        .buffers
+        .get(&moved)
+        .expect("the buffer moved with its folder");
+    assert!(
+        ed.dirty && ed.to_text().starts_with("UNSAVED"),
+        "edits and all"
+    );
+    assert_eq!(ed.path, moved, "and saves to where the file is now");
+    assert!(!app.buffers.contains_key(&td.path().join("notes/design.md")));
+
+    select(&mut app, "design.md");
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(ctrl('s'));
+    let on_disk = fs::read_to_string(&moved).unwrap();
+    assert!(on_disk.starts_with("UNSAVED"), "{}", app.status);
+}
+
+#[test]
+fn what_was_copied_follows_its_folder_when_it_is_renamed() {
+    let (td, mut app) = fixture();
+    select(&mut app, "design.md");
+    app.on_key(ctrl('c'));
+    command(&mut app, "rename notes to journal");
+    assert_eq!(
+        app.clipboard.as_deref(),
+        Some(td.path().join("journal/design.md").as_path())
+    );
+}
+
+#[test]
+fn a_replace_across_the_project_changes_an_unsaved_file_in_its_buffer() {
+    let (td, mut app) = fixture();
+    let readme = td.path().join("README.md");
+    select(&mut app, "README.md");
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, "draft ");
+    app.on_key(k(KeyCode::Esc));
+
+    command(&mut app, "replace widget with gadget");
+    app.on_key(ch('y'));
+    let ed = &app.buffers[&readme];
+    assert!(
+        ed.to_text().contains("hello gadget") && ed.to_text().starts_with("draft"),
+        "replaced in the copy on screen, edits kept: {}",
+        ed.to_text()
+    );
+    assert!(ed.dirty, "and still unsaved");
+    assert!(
+        fs::read_to_string(&readme)
+            .unwrap()
+            .contains("hello widget"),
+        "the disk copy is not written under the buffer"
+    );
+    assert!(app.status.contains("not saved yet"), "{}", app.status);
+}
+
+#[test]
+fn reload_keeps_the_cursor_where_it_was_in_a_clean_file() {
+    let (td, mut app) = fixture();
+    let lines: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+    fs::write(td.path().join("long.txt"), &lines).unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "long.txt");
+    app.on_key(k(KeyCode::Enter));
+    for _ in 0..20 {
+        app.on_key(k(KeyCode::Down));
+    }
+    fs::write(
+        td.path().join("long.txt"),
+        lines.replace("line 1\n", "first\n"),
+    )
+    .unwrap();
+    command(&mut app, "reload");
+    let ed = &app.buffers[&td.path().join("long.txt")];
+    assert!(ed.to_text().starts_with("first"), "the new text");
+    assert_eq!(ed.cursor_line, 20, "at the same place in it");
+}

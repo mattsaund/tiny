@@ -245,6 +245,9 @@ impl Editor {
         self.scroll_y = y.min(self.lines.len().saturating_sub(1));
         self.scroll_x = x;
         self.clamp_cursor();
+        // Every line may differ from what was there, so anything saved about
+        // the old text (each pane's highlighting) starts again from the top.
+        self.touched = 0;
     }
 
     /// Write the buffer to `path` and clear `dirty`.

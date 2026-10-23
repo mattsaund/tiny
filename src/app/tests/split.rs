@@ -22,10 +22,11 @@ fn with_long_file() -> (tempfile::TempDir, App) {
 /// The file names in the pane titles, left to right, read off a frame.
 fn titles(app: &mut App) -> Vec<String> {
     let top = screen(app, 120, 30).remove(0);
-    let mut found: Vec<(usize, String)> = ["README.md", "design.md", "long.py", "main.py"]
-        .iter()
-        .flat_map(|name| top.match_indices(name).map(|(at, n)| (at, n.to_string())))
-        .collect();
+    let mut found: Vec<(usize, String)> =
+        ["README.md", "INTRO.md", "design.md", "long.py", "main.py"]
+            .iter()
+            .flat_map(|name| top.match_indices(name).map(|(at, n)| (at, n.to_string())))
+            .collect();
     found.sort();
     found.into_iter().map(|(_, n)| n).collect()
 }
@@ -198,4 +199,75 @@ fn the_wheel_over_the_other_pane_scrolls_that_pane() {
     );
     app.on_key(shift(KeyCode::Left));
     assert_eq!(app.buffers[&path].cursor_line, 5, "the other one did");
+}
+
+#[test]
+fn the_other_pane_follows_its_file_through_a_rename() {
+    let (_td, mut app) = fixture();
+    select(&mut app, "README.md");
+    app.on_key(ctrl('w'));
+    select(&mut app, "design.md");
+    command(&mut app, "rename README.md to INTRO.md");
+    // The browser goes to the renamed file, as a rename always does, and the
+    // left pane went with its file.
+    assert_eq!(
+        titles(&mut app),
+        ["INTRO.md", "INTRO.md"],
+        "the left pane shows the file under its new name"
+    );
+    app.on_key(shift(KeyCode::Left));
+    assert!(
+        app.active_buffer().is_some(),
+        "and taking it up gives the keyboard a file to type into"
+    );
+}
+
+#[test]
+fn the_other_pane_says_when_its_file_is_deleted() {
+    let (_td, mut app) = fixture();
+    select(&mut app, "README.md");
+    app.on_key(ctrl('w'));
+    select(&mut app, "design.md");
+    command(&mut app, "delete README.md");
+    app.on_key(ch('y'));
+    let frame = screen(&mut app, 120, 20).join("\n");
+    assert!(frame.contains("README.md is gone"), "{frame}");
+}
+
+#[test]
+fn the_split_keys_leave_the_panes_alone_from_another_window() {
+    let (_td, mut app) = fixture();
+    select(&mut app, "README.md");
+    app.on_key(ctrl('w'));
+    app.on_key(ctrl('g'));
+    app.on_key(shift(KeyCode::Left));
+    assert!(
+        app.split.as_ref().unwrap().live_right,
+        "the panes are not on screen, so the keyboard stays where it was"
+    );
+    app.on_key(ctrl('w'));
+    assert_eq!(app.window, Window::Main, "Ctrl+W brings you to them");
+    assert!(
+        app.split.is_some(),
+        "rather than closing one you cannot see"
+    );
+}
+
+#[test]
+fn moving_to_the_other_pane_ends_a_run_of_typing() {
+    let (td, mut app) = with_long_file();
+    let path = td.path().join("long.py");
+    select(&mut app, "long.py");
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(ctrl('w'));
+    for _ in 0..30 {
+        app.on_key(k(KeyCode::Down));
+    }
+    type_str(&mut app, "foo");
+    app.on_key(shift(KeyCode::Left));
+    type_str(&mut app, "bar");
+    app.on_key(ctrl('z'));
+    let text = app.buffers[&path].to_text();
+    assert!(!text.contains("bar"), "the second pane's typing is undone");
+    assert!(text.contains("foo"), "and the first pane's is not: {text}");
 }

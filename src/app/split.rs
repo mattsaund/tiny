@@ -33,6 +33,7 @@ use crate::text::highlight::Resume;
 
 use super::App;
 use super::mode::{Focus, Window};
+use super::parts::display_name;
 use super::preview::Preview;
 
 /// The narrowest the two panes may be together. Below this each would be too
@@ -63,9 +64,14 @@ pub struct Pane {
 impl App {
     /// `Ctrl+W`: two panes, or back to one.
     pub(super) fn toggle_split(&mut self) {
-        // Panes belong to the main window, so the key brings you to them.
+        // Panes belong to the main window, so from anywhere else the key
+        // brings you to them: to the two that are there, or to two new ones.
         if self.window != Window::Main {
             self.show_window(Window::Main);
+            if self.split.is_some() {
+                self.status = "two panes".into();
+                return;
+            }
         }
         if self.split.take().is_some() {
             self.status = "one pane".into();
@@ -97,12 +103,16 @@ impl App {
 
     /// `Shift+Left` or `Shift+Right`: the keyboard to that pane.
     ///
-    /// Returns false when there is only one pane, so the key goes on to do
-    /// whatever it did before there were two, like moving the cursor.
+    /// Returns false when there is only one pane, or the panes are not on
+    /// screen, so the key goes on to do whatever it did before there were
+    /// two, like moving the cursor.
     pub(super) fn focus_pane(&mut self, right: bool) -> bool {
         let Some(split) = &self.split else {
             return false;
         };
+        if self.window != Window::Main {
+            return false;
+        }
         if split.live_right != right {
             self.swap_panes();
         }
@@ -166,6 +176,41 @@ impl App {
         self.highlight_cache = pane.highlight;
         if let (Some(view), Some(ed)) = (pane.view, self.active_buffer_mut()) {
             ed.set_view(view);
+            // The cursor has jumped to another pane's place, which ends a run
+            // of typing like any other move: one file open in both panes
+            // must not undo an edit in one along with an edit in the other.
+            ed.break_undo_group();
+        }
+    }
+
+    /// Keep the pane without the keyboard showing something real.
+    ///
+    /// Its file can change under it while it is set aside: `*reload` and a
+    /// replace across the project drop a clean buffer to read it again, and a
+    /// delete or a file that stops being text drops it for good. The pane
+    /// then reads the file again the way the live pane would, or says it is
+    /// gone, rather than drawing an empty box under a name. Called from
+    /// `sync_preview`, which everything that changes the tree goes through.
+    pub(super) fn sync_pinned(&mut self) {
+        let Some(split) = &self.split else {
+            return;
+        };
+        let fresh = match &split.pinned.preview {
+            Preview::Buffer { path, .. } if self.buffers.contains_key(path) => return,
+            Preview::Buffer { path, .. } if path.exists() => {
+                let path = path.clone();
+                self.load_file_preview(&path)
+            }
+            other => match other.path() {
+                Some(path) if !path.exists() => {
+                    Preview::Unreadable(format!("{} is gone", display_name(path)))
+                }
+                _ => return,
+            },
+        };
+        if let Some(split) = &mut self.split {
+            split.pinned.preview = fresh;
+            split.pinned.highlight = Resume::default();
         }
     }
 

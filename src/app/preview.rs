@@ -144,6 +144,18 @@ pub enum Preview {
 /// there is a real ceiling on what can be edited comfortably.
 pub(super) const MAX_EDIT_BYTES: u64 = 8 * 1024 * 1024;
 
+/// A file's text, if the editor would open it: small enough to edit, and
+/// text rather than bytes that happen to decode. What a command that works
+/// on a file reads it with when it is not open, so it agrees with opening it.
+pub(super) fn read_editable(path: &Path) -> Option<String> {
+    if fs::metadata(path).ok()?.len() > MAX_EDIT_BYTES {
+        return None;
+    }
+    String::from_utf8(fs::read(path).ok()?)
+        .ok()
+        .filter(|text| !text.contains('\0'))
+}
+
 /// A human word for a non-text file, so the preview can say "archive" instead
 /// of just "binary". PDFs and sound are not here: they are media, described
 /// and opened by [`media`].
@@ -169,6 +181,19 @@ impl Preview {
             | Preview::Directory { path, .. }
             | Preview::Binary { path, .. } => Some(path),
             Preview::Unreadable(_) | Preview::Empty => None,
+        }
+    }
+
+    /// Follow a rename: what this shows, if it was `from` or inside it, is
+    /// now in the same place under `to`.
+    pub fn moved(&mut self, from: &Path, to: &Path) {
+        if let Preview::Buffer { path, .. }
+        | Preview::Media { path, .. }
+        | Preview::Directory { path, .. }
+        | Preview::Binary { path, .. } = self
+            && path.starts_with(from)
+        {
+            *path = super::fileops::moved(path, from, to);
         }
     }
 }
@@ -294,6 +319,7 @@ impl App {
     pub(super) fn sync_preview(&mut self) {
         self.preview_scroll = 0;
         self.note_size();
+        self.sync_pinned();
         let Some(row) = self.selected_row().cloned() else {
             self.preview = Preview::Empty;
             return;
@@ -323,7 +349,7 @@ impl App {
     ///
     /// The `\0` check catches UTF-16 and similar, which decode as valid UTF-8
     /// often enough to slip past `from_utf8` alone.
-    fn load_file_preview(&mut self, path: &Path) -> Preview {
+    pub(super) fn load_file_preview(&mut self, path: &Path) -> Preview {
         // A buffer already open, possibly with unsaved edits, wins over disk.
         if self.buffers.contains_key(path) {
             return Preview::Buffer {

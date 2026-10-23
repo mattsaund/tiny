@@ -251,6 +251,9 @@ pub struct App {
     /// which builds an `App` directly, never runs or opens anyone's real
     /// plugins folder unless it hands this one of its own.
     pub plugins_dir: Option<PathBuf>,
+    /// Doing what a plugin's event hook asked, during which no further
+    /// events fire, see `App::plugin_event`.
+    in_plugin_event: bool,
     /// Which pane had the keyboard when the tree was folded away, so unfolding
     /// puts it back and the key is a true toggle.
     focus_before_hide: Focus,
@@ -342,6 +345,7 @@ impl App {
             planning_for_preview: false,
             plugins: crate::plugins::Plugins::default(),
             plugins_dir: None,
+            in_plugin_event: false,
             focus_before_hide: Focus::Tree,
             status: warning
                 .or(keys_warning)
