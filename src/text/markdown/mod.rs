@@ -135,14 +135,22 @@ pub(super) fn scan_wikilinks(text: &str) -> Vec<(usize, usize, Option<String>)> 
 /// Deliberately not markdown: a `.txt` file with a `#` at the start of a line
 /// means a hash, not a heading. Each source line wraps on its own, and
 /// continuations keep its indentation, so hand-made lists and tables survive.
-pub fn render_plain(source: &str, width: usize, pal: &Palette) -> Vec<Line<'static>> {
+///
+/// Tabs go to `tab_width`'s stops, the setting the editor draws this same file
+/// with: CommonMark's fixed four is a rule about markdown, and this is not.
+pub fn render_plain(
+    source: &str,
+    width: usize,
+    pal: &Palette,
+    tab_width: usize,
+) -> Vec<Line<'static>> {
     let width = width.max(8);
     let mut out = Vec::new();
     for line in source.lines() {
         // Before anything measures this line: a tab is zero columns wide to
         // `unicode-width` and nothing at all on screen, so the indent a text
         // file was written with would simply vanish.
-        let line = tabs::expand(line, tabs::MARKDOWN, 0);
+        let line = tabs::expand(line, tab_width, 0);
         let line = line.as_str();
         if line.trim().is_empty() {
             out.push(Line::from(""));
@@ -518,7 +526,12 @@ mod tests {
     #[test]
     fn plain_text_picks_out_wikilinks_and_urls() {
         let pal = Palette::default();
-        let lines = render_plain("see [[design]] at https://example.com/spec now", 80, &pal);
+        let lines = render_plain(
+            "see [[design]] at https://example.com/spec now",
+            80,
+            &pal,
+            4,
+        );
         let linked: Vec<&str> = lines[0]
             .spans
             .iter()
@@ -531,7 +544,7 @@ mod tests {
     #[test]
     fn a_url_does_not_swallow_the_punctuation_after_it() {
         let pal = Palette::default();
-        let lines = render_plain("go to https://example.com/x. then stop", 80, &pal);
+        let lines = render_plain("go to https://example.com/x. then stop", 80, &pal, 4);
         let linked: Vec<&str> = lines[0]
             .spans
             .iter()
@@ -549,7 +562,7 @@ mod tests {
     #[test]
     fn the_word_http_alone_is_not_a_link() {
         let pal = Palette::default();
-        let lines = render_plain("we discussed http and https at length", 80, &pal);
+        let lines = render_plain("we discussed http and https at length", 80, &pal, 4);
         assert!(lines[0].spans.iter().all(|s| s.style != pal.link));
     }
 

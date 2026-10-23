@@ -16,8 +16,18 @@
 //! the person chose and the one their file was written against. Markdown
 //! expands to [`MARKDOWN`], because CommonMark fixes a tab at four columns,
 //! and a note should not re-flow because a setting changed.
+//!
+//! # Measured the way the screen draws
+//!
+//! Width is counted per grapheme cluster, which is what ratatui puts in a
+//! cell, not per character. `⚠️` is a sign and a selector that asks for the
+//! picture, two columns where the sign alone is one; `👩‍💻` is three
+//! characters drawn as one two-column picture. Counted a character at a time,
+//! each would put everything after it (a tab stop, the cursor) a cell or two
+//! away from where it is drawn.
 
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 /// The tab stop CommonMark defines, for anything drawn as markdown.
 pub const MARKDOWN: usize = 4;
@@ -42,20 +52,20 @@ pub fn expand(text: &str, tab_width: usize, start: usize) -> String {
     }
     let mut out = String::with_capacity(text.len());
     let mut col = start;
-    for c in text.chars() {
-        match c {
-            '\t' => {
+    for g in text.graphemes(true) {
+        match g {
+            "\t" => {
                 let n = stop(col, tab_width);
                 out.extend(std::iter::repeat_n(' ', n));
                 col += n;
             }
-            '\n' => {
-                out.push(c);
+            "\n" | "\r\n" => {
+                out.push_str(g);
                 col = 0;
             }
             _ => {
-                col += c.width().unwrap_or(0);
-                out.push(c);
+                col += g.width();
+                out.push_str(g);
             }
         }
     }
@@ -67,14 +77,21 @@ pub fn expand(text: &str, tab_width: usize, start: usize) -> String {
 ///
 /// This is what turns a cursor's character index into the cell it belongs in.
 /// Drawing and the cursor have to agree about it, or the cursor blinks
-/// somewhere the text is not.
+/// somewhere the text is not. A cursor that has stopped part way through a
+/// cluster is drawn at the cluster's start, where the picture is.
 pub fn column(line: &str, chars: usize, tab_width: usize) -> usize {
     let mut col = 0;
-    for c in line.chars().take(chars) {
-        match c {
-            '\t' => col += stop(col, tab_width),
-            _ => col += c.width().unwrap_or(0),
+    let mut seen = 0;
+    for g in line.graphemes(true) {
+        seen += g.chars().count();
+        if seen > chars {
+            break;
         }
+        col += if g == "\t" {
+            stop(col, tab_width)
+        } else {
+            g.width()
+        };
     }
     col
 }
@@ -117,6 +134,18 @@ mod tests {
     fn text_with_no_tabs_is_returned_as_it_was() {
         assert_eq!(expand("plain text", 4, 0), "plain text");
         assert_eq!(column("plain", 5, 4), 5);
+    }
+
+    #[test]
+    fn a_picture_made_of_several_characters_is_measured_as_drawn() {
+        // A sign with the selector that makes it a picture, and three
+        // characters joined into one: two columns each, as ratatui draws
+        // them, so the tab after each still lands on the stop.
+        assert_eq!(column("⚠️x", 2, 4), 2, "the sign and its selector");
+        assert_eq!(column("👩‍💻x", 3, 4), 2, "one picture, three characters");
+        assert_eq!(expand("⚠️\tx", 4, 0), "⚠️  x");
+        // Part way through a picture, the cursor is drawn at its start.
+        assert_eq!(column("👩‍💻x", 1, 4), 0);
     }
 
     #[test]

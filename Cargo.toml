@@ -27,6 +27,7 @@ tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-tags = "0.26.13"
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
+unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 
 [dev-dependencies]

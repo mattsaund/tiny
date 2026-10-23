@@ -25,6 +25,7 @@ use super::parts::{FORMAT_LIMIT, label, mark_query, pane, readable_size};
 use crate::app::{App, Focus, Mode, Preview, TextKind};
 use crate::text::markdown;
 use crate::text::search::Matcher;
+use crate::text::tabs;
 
 /// The right-hand pane. Dispatches on `app.preview` to one of the specific
 /// drawing functions, and builds the title that names the file and its state.
@@ -305,6 +306,7 @@ fn draw_reading(
     query: Option<&Matcher>,
 ) {
     let pal = app.palette;
+    let tab_width = app.config.tab_width;
     let Some(ed) = app.buffers.get(path) else {
         return;
     };
@@ -326,7 +328,10 @@ fn draw_reading(
             .iter()
             .skip(scroll)
             .take(height)
-            .map(|l| Line::from(Span::styled(clip_to(l, width), pal.text)))
+            .map(|l| {
+                let l = tabs::expand(l, tab_width, 0);
+                Line::from(Span::styled(clip_to(&l, width), pal.text))
+            })
             .collect();
         (rows, scroll)
     } else {
@@ -336,7 +341,7 @@ fn draw_reading(
         let rows = match kind {
             TextKind::Markdown => markdown::render(&source, width, &pal, &app.highlighter),
             // Prose keeps the author's line structure and wraps what is long.
-            _ => markdown::render_plain(&source, width, &pal),
+            _ => markdown::render_plain(&source, width, &pal, tab_width),
         };
         app.preview_len = rows.len();
         let scroll = app.preview_scroll.min(rows.len().saturating_sub(height));

@@ -26,7 +26,7 @@ pub(crate) fn plain(source: &str, width: usize) -> Vec<String> {
 /// Render as plain text and flatten to strings.
 pub(crate) fn flat(source: &str, width: usize) -> Vec<String> {
     let pal = Palette::default();
-    render_plain(source, width, &pal)
+    render_plain(source, width, &pal, crate::text::tabs::MARKDOWN)
         .iter()
         .map(|l| {
             l.spans

@@ -19,7 +19,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use super::parts::{FORMAT_LIMIT, digits, mark_query};
 
@@ -73,7 +74,11 @@ pub(super) fn draw_editor(
     // per frame, whether or not anything ends up being highlighted.
     let (scroll_y, scroll_x, cur_line, cur_col, touched) = {
         let ed = app.buffers.get_mut(path).expect("checked above");
-        ed.sync_scroll(text_w.saturating_sub(1), if live { 0 } else { height });
+        ed.sync_scroll(
+            text_w.saturating_sub(1),
+            if live { 0 } else { height },
+            tab_width,
+        );
         let touched = ed.take_touched();
         (
             ed.scroll_y,
@@ -183,9 +188,7 @@ pub(super) fn draw_editor(
         // Columns, not characters: a tab was drawn as the spaces that reach
         // its stop, so the cursor has to be counted the same way or it blinks
         // somewhere the text is not.
-        let before = tabs::column(line, cur_col, tab_width);
-        let skipped = tabs::column(line, scroll_x, tab_width);
-        let vis = before.saturating_sub(skipped);
+        let vis = tabs::column(line, cur_col, tab_width).saturating_sub(scroll_x);
         let x = inner.x + gutter as u16 + vis as u16;
         let y = match cursor_row {
             Some(r) => inner.y + r as u16,
@@ -291,64 +294,48 @@ fn live_rows(
     (rows, top)
 }
 
-/// Apply the horizontal scroll to one highlighted line and clip it to width.
+/// One line's styled pieces, as much of them as fits between column
+/// `scroll_x` and `scroll_x + width`.
 ///
-/// Walks the styled pieces twice over: first discarding `scroll_x` characters
-/// from the left, then accumulating until the display width runs out. Both
-/// halves have to respect piece boundaries, since a piece is the unit that
-/// carries a style.
-///
-/// Always returns at least one span, so an empty or fully-scrolled line still
-/// produces a `Line` and the row numbering stays aligned.
-fn clip_pieces<'a>(
+/// Tabs become spaces as they are reached, each from the column the text
+/// before it got to, since a tab's width is where it sits. Everything is
+/// measured in columns, the way `scroll_x` and the cursor are, a grapheme
+/// cluster at a time the way ratatui draws: a wide character cut by the left
+/// edge shows as the spaces of its visible half, so nothing after it shifts,
+/// and one that would cross the right edge is left off.
+pub(super) fn clip_pieces<'a>(
     pieces: &[(Style, String)],
     scroll_x: usize,
     width: usize,
     pal: Palette,
     tab_width: usize,
 ) -> Vec<Span<'a>> {
-    // Tabs become spaces before anything is measured or cut, each piece
-    // expanded from the column the ones before it reached: a tab's width is
-    // where it sits, so a piece cannot be expanded on its own. After this
-    // there are no tabs left, and a character's width is the truth again.
-    let mut col = 0usize;
-    let expanded: Vec<(Style, String)> = pieces
-        .iter()
-        .map(|(style, text)| {
-            let text = tabs::expand(text, tab_width, col);
-            col += text.width();
-            (*style, text)
-        })
-        .collect();
-
+    let end = scroll_x + width;
     let mut out = Vec::new();
-    let mut skipped = 0usize;
-    let mut used = 0usize;
-    for (style, text) in &expanded {
-        let chars: Vec<char> = text.chars().collect();
-        let mut start = 0;
-        if skipped < scroll_x {
-            let skip = (scroll_x - skipped).min(chars.len());
-            skipped += skip;
-            start = skip;
-        }
-        if start >= chars.len() {
-            continue;
-        }
-        let mut piece = String::new();
-        for c in &chars[start..] {
-            let w = c.width().unwrap_or(0);
-            if used + w > width {
-                break;
+    let mut col = 0usize;
+    'pieces: for (style, text) in pieces {
+        let text = tabs::expand(text, tab_width, col);
+        let mut shown = String::new();
+        for g in text.graphemes(true) {
+            let at = col;
+            col += g.width();
+            if col <= scroll_x {
+                continue;
             }
-            used += w;
-            piece.push(*c);
+            if col > end {
+                if !shown.is_empty() {
+                    out.push(Span::styled(shown, *style));
+                }
+                break 'pieces;
+            }
+            if at < scroll_x {
+                shown.extend(std::iter::repeat_n(' ', col - scroll_x));
+            } else {
+                shown.push_str(g);
+            }
         }
-        if !piece.is_empty() {
-            out.push(Span::styled(piece, *style));
-        }
-        if used >= width {
-            break;
+        if !shown.is_empty() {
+            out.push(Span::styled(shown, *style));
         }
     }
     if out.is_empty() {
