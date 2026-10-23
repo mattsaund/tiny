@@ -469,7 +469,7 @@ impl App {
     }
 
     /// The first key bound to an action, written the way someone would say
-    /// it: `Ctrl+G`, `F1`, `/`.
+    /// it: `Ctrl+G`, `F1`, `/`, `r`.
     ///
     /// Read from the live keymap, so a hint or a message names what will
     /// actually work: after a rebinding, and on Windows, where a few keys
@@ -477,6 +477,12 @@ impl App {
     pub fn key_name(&self, action: crate::config::keys::Action) -> String {
         let spec = self.keymap.spec(action);
         let first = spec.split_whitespace().next().unwrap_or_default();
+        // A character on its own is shown as it is typed: `r` is not `R`,
+        // which is Shift and r. In a chord the letter is a capital, the way
+        // keyboards and menus write Ctrl+S.
+        if first.chars().count() == 1 {
+            return first.to_string();
+        }
         first
             .split('+')
             .map(|part| {
