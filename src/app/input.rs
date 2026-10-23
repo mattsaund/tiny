@@ -321,6 +321,11 @@ impl App {
             Action::Bar => self.open_bar(),
             Action::ToggleTreePane => self.toggle_tree_pane(),
             Action::NewWindow => self.open_new_window(),
+            Action::Split => self.toggle_split(),
+            // Only with two panes; otherwise the key carries on to whatever it
+            // did before, like moving the cursor in a file.
+            Action::PaneLeft => return self.focus_pane(false),
+            Action::PaneRight => return self.focus_pane(true),
             Action::Copy => self.copy_selection(),
             Action::Paste => self.paste_clipboard(),
             Action::Help => self.mode = Mode::Help(0),
@@ -461,6 +466,10 @@ impl App {
             // The preview follows the tree cursor, so moving the view on its
             // own would only be undone on the next frame.
             self.move_selection(step);
+            return;
+        }
+        if matches!(self.last_pinned_cols, Some((x0, x1)) if column >= x0 && column < x1) {
+            self.scroll_pinned(down);
             return;
         }
         // A file being edited has a cursor and a view tied to it; anything

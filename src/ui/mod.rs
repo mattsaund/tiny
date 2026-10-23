@@ -78,11 +78,12 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use self::bar::{draw_bar, draw_status};
 use self::help::draw_help;
 use self::map::draw_map;
-use self::preview::draw_preview;
+use self::preview::{draw_pinned, draw_preview};
 use self::settings::{draw_keybinds, draw_settings};
 use self::source::draw_source;
 use self::tree::{draw_results, draw_tree, results_height};
 use self::update::draw_update;
+use crate::app::MIN_SPLIT_WIDTH;
 
 use crate::app::{App, ConfirmKind, Mode, Window};
 use crate::config::Side;
@@ -216,7 +217,34 @@ fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
     if let Some(side_area) = side_area {
         draw_tree(f, app, side_area);
     }
-    draw_preview(f, app, preview_area);
+
+    // Two equal panes while split, the live one on whichever side it is. A
+    // window that has since become too narrow for two shows the live pane
+    // alone, and both come back when it widens again.
+    app.last_panes_width = preview_area.width;
+    let live_right = app.split.as_ref().map(|s| s.live_right);
+    match live_right {
+        Some(live_right) if preview_area.width >= MIN_SPLIT_WIDTH => {
+            let halves = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+                .split(preview_area);
+            let (live, pinned) = if live_right {
+                (halves[1], halves[0])
+            } else {
+                (halves[0], halves[1])
+            };
+            app.last_pinned_cols = Some((pinned.x, pinned.x + pinned.width));
+            // The live pane last, so what it measures (its height, for paging)
+            // is what the keys use.
+            draw_pinned(f, app, pinned);
+            draw_preview(f, app, live);
+        }
+        _ => {
+            app.last_pinned_cols = None;
+            draw_preview(f, app, preview_area);
+        }
+    }
 }
 
 /// A horizontal band of the window, used to build the vertical layout in the

@@ -122,6 +122,7 @@ mod prompt;
 mod sentence;
 mod settings;
 mod source;
+mod split;
 mod update;
 mod watch;
 
@@ -131,6 +132,7 @@ pub use self::mode::{
 };
 pub use self::preview::{Preview, TextKind};
 pub use self::source::{BUTTONS as GIT_BUTTONS, GitFocus, GitPane, Row as GitRow};
+pub use self::split::{MIN_SPLIT_WIDTH, Split};
 use self::watch::Watch;
 
 use self::parts::display_name;
@@ -266,7 +268,16 @@ pub struct App {
     /// a mouse wheel can tell which pane it is over. `None` when the tree was
     /// not drawn at all. Written by `ui` for the same reason the heights are.
     pub last_tree_cols: Option<(u16, u16)>,
-    /// What the files and folders on screen looked like at the last scan —
+    /// The second pane, while the space beside the browser is split in two.
+    /// See [`split`].
+    pub split: Option<Split>,
+    /// How wide the space for the panes was in the last frame, so a split
+    /// that would be too narrow to read is refused before it is drawn.
+    pub last_panes_width: u16,
+    /// The columns the pane without the keyboard covered in the last frame,
+    /// so the wheel can scroll it. `None` with one pane.
+    pub last_pinned_cols: Option<(u16, u16)>,
+    /// What the files and folders on screen looked like at the last scan,
     /// see [`watch`]. Nothing outside that module reads it.
     watch: Watch,
 }
@@ -340,6 +351,11 @@ impl App {
             last_edit_height: 20,
             last_tree_height: 20,
             last_tree_cols: None,
+            split: None,
+            // Until the first frame says otherwise, wide enough: the very
+            // first key cannot arrive before a frame has been drawn.
+            last_panes_width: u16::MAX,
+            last_pinned_cols: None,
             watch: Watch::default(),
         };
         app.note_dirs();

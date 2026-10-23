@@ -40,6 +40,7 @@ mod sentences;
 mod settings;
 mod single_file;
 mod source;
+mod split;
 mod update;
 mod watch;
 

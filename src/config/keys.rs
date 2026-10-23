@@ -217,6 +217,9 @@ pub enum Action {
     WindowMap,
     ToggleTreePane,
     NewWindow,
+    Split,
+    PaneLeft,
+    PaneRight,
     Copy,
     Paste,
     // In every pane that has them. One name for one movement, however many
@@ -326,6 +329,31 @@ const TABLE: &[Row] = &[
         "new_window",
         "another tiny, here",
         "ctrl+n",
+    ),
+    // Ctrl with a letter and Shift with an arrow are the two kinds of chord
+    // every terminal sends the same way, on every system and every keyboard
+    // layout. `Ctrl+\`, the usual split key elsewhere, is neither: it reaches
+    // tiny as `Ctrl+4` on Linux and macOS, and needs AltGr on many layouts.
+    (
+        Action::Split,
+        &[Context::Global],
+        "split",
+        "two panes, and back",
+        "ctrl+w",
+    ),
+    (
+        Action::PaneLeft,
+        &[Context::Global],
+        "pane_left",
+        "with two panes",
+        "shift+left",
+    ),
+    (
+        Action::PaneRight,
+        &[Context::Global],
+        "pane_right",
+        "with two panes",
+        "shift+right",
     ),
     (
         Action::Copy,

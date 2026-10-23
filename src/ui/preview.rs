@@ -35,8 +35,64 @@ use crate::text::search::Matcher;
 /// `EDIT` on markdown is still formatted — see `ui::editor::live_rows` — so the tag says
 /// which keyboard you have, not whether there is any formatting on screen.
 pub(super) fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
-    let pal = app.palette;
     let focused = app.focus == Focus::Editor && matches!(app.mode, Mode::Normal | Mode::Help(_));
+    draw_pane(f, app, area, focused);
+}
+
+/// The pane without the keyboard, while the main window is split.
+///
+/// Drawn by lending it the live pane's state for the length of one draw (the
+/// preview, its scroll, the highlighting, and the buffer's view when it shows
+/// a file) and taking all of it back after. So it is drawn by exactly the code
+/// that draws the live pane, looking as that pane would without the keyboard,
+/// and nothing about the live pane is touched by it. See `app::split`.
+pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, area: Rect) {
+    let Some(mut split) = app.split.take() else {
+        return;
+    };
+    let pane = &mut split.pinned;
+    let same_file = pane.preview.path().is_some() && pane.preview.path() == app.preview.path();
+    std::mem::swap(&mut app.preview, &mut pane.preview);
+    std::mem::swap(&mut app.preview_scroll, &mut pane.preview_scroll);
+    std::mem::swap(&mut app.highlight_cache, &mut pane.highlight);
+    let (len, height) = (app.preview_len, app.last_edit_height);
+
+    // The buffer's own view is what the live pane is using; this pane's view
+    // goes in for the draw, and the live one comes back after.
+    let path = app.preview.path().map(|p| p.to_path_buf());
+    let mut lent = None;
+    let mut mark = None;
+    if let Some(ed) = path.as_ref().and_then(|p| app.buffers.get_mut(p)) {
+        mark = ed.touched();
+        if let Some(view) = pane.view {
+            lent = Some(ed.view());
+            ed.set_view(view);
+        }
+    }
+
+    draw_pane(f, app, area, false);
+
+    if let Some(ed) = path.as_ref().and_then(|p| app.buffers.get_mut(p)) {
+        if let Some(own) = lent {
+            pane.view = Some(ed.view());
+            ed.set_view(own);
+        }
+        // Drawing took the mark of what changed; the live pane draws this
+        // same file next and needs it too.
+        if same_file {
+            ed.retouch(mark);
+        }
+    }
+    std::mem::swap(&mut app.highlight_cache, &mut pane.highlight);
+    std::mem::swap(&mut app.preview_scroll, &mut pane.preview_scroll);
+    std::mem::swap(&mut app.preview, &mut pane.preview);
+    (app.preview_len, app.last_edit_height) = (len, height);
+    app.split = Some(split);
+}
+
+/// One pane, with or without the keyboard.
+pub(super) fn draw_pane(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
+    let pal = app.palette;
 
     let (name, dirty) = match &app.preview {
         Preview::Buffer { path, .. } => (label(path), app.is_dirty(path)),

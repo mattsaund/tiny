@@ -88,6 +88,10 @@ fn every_screen(app: &mut App) -> Vec<(&'static str, String)> {
     app.on_key(k(KeyCode::Esc));
     select(app, "main.py");
     shot("code", app);
+    app.on_key(ctrl('w'));
+    select(app, "note.md");
+    shot("two panes", app);
+    app.on_key(ctrl('w'));
 
     app.on_key(ch('?'));
     shot("help", app);

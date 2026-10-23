@@ -91,6 +91,8 @@ const KEYS: &[KeyRow] = &[
     Bound(&[Action::WindowSource], "git"),
     Bound(&[Action::WindowMap], "map"),
     Bound(&[Action::NewWindow], "new window"),
+    Bound(&[Action::Split], "two panes"),
+    Merged(&[Action::PaneLeft, Action::PaneRight], "between panes"),
     Merged(
         &[Action::ToggleTreePane, Action::Narrower, Action::Wider],
         "browser, width",
