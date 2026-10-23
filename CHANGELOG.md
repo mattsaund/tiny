@@ -3,6 +3,35 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.5.5 - 2026-10-23
+
+- **Any font.** A `glyphs` setting, `unicode` or `ascii`, picks every line,
+  bullet, rule and arrow tiny draws, so it fits whatever font and terminal
+  you use. Plugins can set it with the new `tiny.set`.
+- **Two panes.** `Ctrl+W` splits the space beside the browser in two, on
+  every OS. `Shift+Left` and `Shift+Right` move between them.
+- **Windows on Arm** has its own build, and the installer picks it.
+- **Sizes** read in KiB, MiB and GiB, to two decimal places.
+- **Git:** the change list and the message box scroll, git never stops to
+  ask for a password, and Sync pushes after it pulls.
+- **Notes:** headings fade one step per level. Lists, quotes and code in
+  lists render the way they are written, and wikilinks, footnotes, HTML,
+  front matter and table alignment draw properly. Editing a long note keeps
+  your place.
+- **Map:** sees all of a Rust file, and links land where they point
+  (`[[note#heading]]`, `My%20note.md`, part of a path).
+- **Files:** renaming a folder keeps the unsaved edits inside it, a replace
+  changes open files where you can undo it, and mixed line endings are
+  saved as they were read.
+- **Commands:** a commit message keeps every word, Tab works after every
+  spelling of a verb, and hidden files open by name.
+- **Lighter:** files you only look at are not kept in memory, minified files
+  no longer stall the editor, undo has a memory limit, and idle tiny draws
+  nothing.
+- **Fixes:** Shift+Tab works in the map, tabs and wide characters keep the
+  cursor on its text, Ctrl+C stops the installer, and running the tests no
+  longer resets your `tiny.conf`.
+
 ## 0.5.1 - 2026-10-21
 
 - **Every heading level renders.** `###` and deeper used to show their
