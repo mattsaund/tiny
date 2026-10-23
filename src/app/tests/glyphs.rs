@@ -138,6 +138,25 @@ fn with_ascii_glyphs_nothing_outside_ascii_reaches_the_screen() {
 }
 
 #[test]
+fn with_console_glyphs_only_what_every_console_font_has_reaches_the_screen() {
+    let cfg = Config {
+        glyphs: GlyphSet::Console,
+        ..Config::default()
+    };
+    let (_td, mut app) = project(cfg);
+    let allowed = crate::config::glyphs::CONSOLE_CHARACTERS;
+    for (what, frame) in every_screen(&mut app) {
+        for (n, line) in frame.lines().enumerate() {
+            let odd: String = line
+                .chars()
+                .filter(|c| !c.is_ascii() && !allowed.contains(*c))
+                .collect();
+            assert!(odd.is_empty(), "{what}, row {n}, draws {odd:?}:\n{frame}");
+        }
+    }
+}
+
+#[test]
 fn with_ascii_glyphs_the_structure_is_still_drawn() {
     // Plain is not the same as bare: the borders, markers and markdown are all
     // still there, only drawn from ASCII.

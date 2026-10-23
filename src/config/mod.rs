@@ -262,7 +262,7 @@ impl Config {
             ("tree_side", "left or right"),
             ("tree_width", "0.1 to 0.6"),
             ("line_numbers", ""),
-            ("glyphs", "auto, unicode or ascii"),
+            ("glyphs", "auto, unicode, console or ascii"),
             ("colors", "auto, truecolor, 256, 16 or none"),
             ("borders", ""),
             ("syntax_theme", "colors for code"),
@@ -355,7 +355,7 @@ impl Config {
             // the browser, and is still what some people will type.
             "glyphs" | "markers" => {
                 self.glyphs = GlyphSet::parse(v)
-                    .ok_or_else(|| anyhow!("glyphs must be auto, unicode or ascii"))?
+                    .ok_or_else(|| anyhow!("glyphs must be auto, unicode, console or ascii"))?
             }
             "colors" => {
                 self.colors = Colors::parse(v)

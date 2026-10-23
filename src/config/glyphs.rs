@@ -8,12 +8,21 @@
 //! a box or a question mark exactly where the shape of the screen should be.
 //!
 //! So the font question is really a character question, and it has one
-//! setting: `glyphs`, which is `auto` until it is set, and otherwise
-//! `unicode` or `ascii`. [`Glyphs`] is everything each one draws. ASCII is the
-//! floor every font on every terminal has, so with it tiny looks right in all
-//! of them; `auto` picks it where the terminal tiny is running in might not
-//! have the rest (a Linux console, a `vt100`, Windows' own console), and
-//! Unicode everywhere else, see [`super::host`].
+//! setting: `glyphs`, which is `auto` until it is set. [`Glyphs`] is
+//! everything a set draws, and there are three, from the most a font is
+//! likely to have to the least:
+//!
+//! - `unicode`, for a terminal that can borrow a character its font lacks
+//!   from another font, which every terminal on a desktop does.
+//! - `console`, for one that cannot: Windows' own console and the Linux
+//!   console draw from one font, and a character missing from it is a box.
+//!   Box lines, arrows and bullets still, but only ones every console font
+//!   has, since every console font starts from the same old character set.
+//! - `ascii`, the floor every font on every terminal has, for a terminal that
+//!   is not reading UTF-8 at all.
+//!
+//! `auto` is whichever suits the terminal tiny is running in, see
+//! [`super::host`].
 //!
 //! # Where the set reaches
 //!
@@ -43,6 +52,9 @@ pub enum GlyphSet {
     /// are still read, so an old config keeps its look.
     #[serde(alias = "arrows")]
     Unicode,
+    /// Box drawing, arrows and bullets from the characters every console
+    /// font has, for a console that draws from one font.
+    Console,
     /// Nothing outside ASCII, for a font or a terminal that has none of it.
     Ascii,
 }
@@ -53,6 +65,7 @@ impl GlyphSet {
         match self {
             GlyphSet::Auto => "auto",
             GlyphSet::Unicode => "unicode",
+            GlyphSet::Console => "console",
             GlyphSet::Ascii => "ascii",
         }
     }
@@ -63,17 +76,17 @@ impl GlyphSet {
         match value.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(GlyphSet::Auto),
             "unicode" | "arrows" => Some(GlyphSet::Unicode),
+            "console" => Some(GlyphSet::Console),
             "ascii" => Some(GlyphSet::Ascii),
             _ => None,
         }
     }
 
     /// The setting as this terminal draws it: `auto` is whichever set its
-    /// font can be counted on for.
+    /// fonts can be counted on for.
     pub fn resolve(self, host: &super::host::Host) -> Self {
         match self {
-            GlyphSet::Auto if host.line_drawing => GlyphSet::Unicode,
-            GlyphSet::Auto => GlyphSet::Ascii,
+            GlyphSet::Auto => host.characters,
             fixed => fixed,
         }
     }
@@ -83,6 +96,7 @@ impl GlyphSet {
     pub fn glyphs(self) -> &'static Glyphs {
         match self {
             GlyphSet::Auto | GlyphSet::Unicode => &UNICODE,
+            GlyphSet::Console => &CONSOLE,
             GlyphSet::Ascii => &ASCII,
         }
     }
@@ -152,6 +166,35 @@ pub static UNICODE: Glyphs = Glyphs {
     map_vertical: '│',
 };
 
+/// What a console draws, from one font: only characters in both code page
+/// 437, the IBM PC's, which every console font still starts from, and WGL4,
+/// the set every Windows font is made to cover. So square corners rather
+/// than rounded ones, ► rather than ▸, and a double rule where the Unicode
+/// set has a heavy one; a map box has double edges, which keeps it apart
+/// from a single line turning a corner the way rounded corners do. `...`
+/// and `x`, because neither `…` nor `×` is in code page 437.
+pub static CONSOLE: Glyphs = Glyphs {
+    border: border::PLAIN,
+    folder_open: "▼ ",
+    folder_closed: "► ",
+    bullets: ["• ", "○ ", "∙ "],
+    rule_heavy: "═",
+    rule: "─",
+    gutter: "│ ",
+    column: " │ ",
+    cross: "─┼─",
+    ellipsis: "...",
+    arrow: "→",
+    continued: "└",
+    times: "x",
+    map_lines: [
+        ' ', '│', '│', '│', '─', '┘', '┐', '┤', '─', '└', '┌', '├', '─', '┴', '┬', '┼',
+    ],
+    map_corners: ['╔', '╗', '╚', '╝'],
+    map_horizontal: '═',
+    map_vertical: '║',
+};
+
 pub static ASCII: Glyphs = Glyphs {
     border: border::Set {
         top_left: "+",
@@ -182,6 +225,11 @@ pub static ASCII: Glyphs = Glyphs {
     map_horizontal: '-',
     map_vertical: '|',
 };
+
+/// The characters outside ASCII that are in both code page 437 and WGL4,
+/// of the ones the console set might want: what every console font has.
+#[cfg(test)]
+pub(crate) const CONSOLE_CHARACTERS: &str = "─│┌┐└┘├┤┬┴┼═║╔╗╚╝►▼•○∙→";
 
 #[cfg(test)]
 mod tests {
@@ -227,23 +275,35 @@ mod tests {
     }
 
     #[test]
-    fn the_two_sets_line_up_column_for_column() {
-        // A marker that is two columns in one set and three in the other
+    fn the_console_set_is_what_every_console_font_has() {
+        for c in everything(&CONSOLE).chars().filter(|c| !c.is_ascii()) {
+            assert!(
+                super::CONSOLE_CHARACTERS.contains(c),
+                "{c:?} is not in every console font"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sets_line_up_column_for_column() {
+        // A marker that is two columns in one set and three in another
         // would shift every name in the browser when the setting changed.
         use unicode_width::UnicodeWidthStr;
-        for (u, a) in [
-            (UNICODE.folder_open, ASCII.folder_open),
-            (UNICODE.folder_closed, ASCII.folder_closed),
-            (UNICODE.gutter, ASCII.gutter),
-            (UNICODE.column, ASCII.column),
-            (UNICODE.cross, ASCII.cross),
-            (UNICODE.rule, ASCII.rule),
-            (UNICODE.rule_heavy, ASCII.rule_heavy),
-        ] {
-            assert_eq!(u.width(), a.width(), "{u:?} and {a:?}");
-        }
-        for (u, a) in UNICODE.bullets.iter().zip(ASCII.bullets) {
-            assert_eq!(u.width(), a.width(), "{u:?} and {a:?}");
+        for other in [&CONSOLE, &ASCII] {
+            for (u, a) in [
+                (UNICODE.folder_open, other.folder_open),
+                (UNICODE.folder_closed, other.folder_closed),
+                (UNICODE.gutter, other.gutter),
+                (UNICODE.column, other.column),
+                (UNICODE.cross, other.cross),
+                (UNICODE.rule, other.rule),
+                (UNICODE.rule_heavy, other.rule_heavy),
+            ] {
+                assert_eq!(u.width(), a.width(), "{u:?} and {a:?}");
+            }
+            for (u, a) in UNICODE.bullets.iter().zip(other.bullets) {
+                assert_eq!(u.width(), a.width(), "{u:?} and {a:?}");
+            }
         }
     }
 
@@ -251,6 +311,7 @@ mod tests {
     fn an_old_config_keeps_its_look() {
         assert_eq!(GlyphSet::parse("arrows"), Some(GlyphSet::Unicode));
         assert_eq!(GlyphSet::parse("ascii"), Some(GlyphSet::Ascii));
+        assert_eq!(GlyphSet::parse("console"), Some(GlyphSet::Console));
         assert_eq!(GlyphSet::parse(" Unicode "), Some(GlyphSet::Unicode));
         assert_eq!(GlyphSet::parse("emoji"), None);
     }

@@ -2,20 +2,29 @@
 //!
 //! A terminal does not say what it can draw, but it does say what it is, in
 //! the variables it sets for the programs it starts, and that is enough to
-//! know the rest: a Linux console has sixteen colors and a font without box
-//! lines, a `vt100` has no color at all, kitty and Windows Terminal have
-//! every color there is. [`Host::detect`] reads those variables once, as tiny
-//! starts, and the `glyphs` and `colors` settings follow what it found while
-//! they are left at `auto`. Either can be set by hand where the guess is
-//! wrong.
+//! know the rest: a Linux console draws from one font with a few hundred
+//! characters in it and has sixteen colors, Windows' own console has every
+//! color but no faint text, a `vt100` has no color at all, and kitty and
+//! Windows Terminal have everything. [`Host::detect`] reads those variables
+//! once, as tiny starts, and the `glyphs` and `colors` settings follow what
+//! it found while they are left at `auto`. Either can be set by hand where
+//! the guess is wrong.
+//!
+//! # The best each one can do
+//!
+//! The aim is not the least every terminal has in common but the most each
+//! one can show: every color and every character where they are there, box
+//! lines from the old PC character set on a console, ASCII only where a
+//! terminal is not reading UTF-8 at all. And what a terminal cannot draw is
+//! said another way rather than dropped: faint text is dark gray on a console
+//! with no faint, and dark gray is faint on a terminal asked for no color.
 //!
 //! # Guessing low
 //!
-//! Every rule here errs toward less. A terminal nothing recognizes gets 256
-//! colors rather than all of them, and one whose font might not have a
-//! character gets ASCII. Too few colors looks a little plain. Too many
-//! draws code in colors nobody chose, and a missing glyph turns the frame of
-//! the screen into boxes and question marks, which is worse in every way.
+//! Where a rule has to guess, it errs toward less. A terminal nothing
+//! recognizes gets 256 colors rather than all of them. Too few colors looks a
+//! little plain; too many draws code in colors nobody chose, and a character
+//! missing from the font turns the frame of the screen into boxes.
 //!
 //! # What cannot be seen from here
 //!
@@ -25,6 +34,8 @@
 //! than "256 colors" for any modern terminal, which is right.
 
 use serde::{Deserialize, Serialize};
+
+use super::glyphs::GlyphSet;
 
 /// The `colors` setting: how many colors tiny draws with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -82,10 +93,12 @@ impl Colors {
 /// What the terminal tiny is running in can show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Host {
-    /// Whether its font can be counted on for box lines, arrows and bullets.
-    pub line_drawing: bool,
+    /// The characters its fonts can be counted on for. Never `Auto`.
+    pub characters: GlyphSet,
     /// How many colors it shows. Never `Auto`.
     pub colors: Colors,
+    /// Whether it draws faint text fainter than the rest.
+    pub faint: bool,
 }
 
 impl Default for Host {
@@ -93,14 +106,15 @@ impl Default for Host {
     /// the tests draw in.
     fn default() -> Self {
         Self {
-            line_drawing: true,
+            characters: GlyphSet::Unicode,
             colors: Colors::Truecolor,
+            faint: true,
         }
     }
 }
 
-/// `TERM` names with no color and no line drawing: the hardware terminals
-/// and their descendants, and the name for no terminal at all.
+/// `TERM` names with no color and no characters past ASCII: the hardware
+/// terminals and their descendants, and the name for no terminal at all.
 const PLAIN: &[&str] = &[
     "dumb",
     "vt52",
@@ -111,16 +125,13 @@ const PLAIN: &[&str] = &[
     "xterm-mono",
 ];
 
-/// `TERM` names of the consoles a system draws without a desktop (the Linux
-/// and BSD virtual consoles, plain ANSI): sixteen colors, and a font with
-/// a few hundred characters in it.
-const CONSOLES: &[&str] = &[
-    "linux", "cons25", "cons25-m", "wsvt25", "pcvt25", "ansi", "pcansi",
-];
+/// `TERM` names of sixteen-color terminals with no UTF-8 in them: the BSD
+/// consoles and plain ANSI, which read one byte as one character.
+const SIXTEEN_COLOR_BYTES: &[&str] = &["cons25", "cons25-m", "wsvt25", "pcvt25", "ansi", "pcansi"];
 
-/// Variables that terminals with every color, and a font that has every
-/// line, set to say so: Windows Terminal, kitty, WezTerm, Konsole,
-/// Alacritty, Ghostty and the JetBrains IDEs.
+/// Variables that terminals with every color, and fonts that between them
+/// have every character, set to say so: Windows Terminal, kitty, WezTerm,
+/// Konsole, Alacritty, Ghostty and the JetBrains IDEs.
 const MODERN_VARIABLES: &[&str] = &[
     "WT_SESSION",
     "KITTY_WINDOW_ID",
@@ -170,18 +181,25 @@ impl Host {
         let says_truecolor = env("COLORTERM")
             .is_some_and(|c| matches!(c.to_ascii_lowercase().as_str(), "truecolor" | "24bit"))
             || term.ends_with("-direct");
+        // The console Windows opens on its own, around Command Prompt or
+        // PowerShell when nothing else is: anything else says what it is
+        // (Windows Terminal, VS Code, mintty, ConEmu).
+        let windows_console = windows && term.is_empty() && !modern && env("ConEmuANSI").is_none();
+        let linux_console = term == "linux";
+        let plain = PLAIN.contains(&term.as_str());
+        let bytes = SIXTEEN_COLOR_BYTES.contains(&term.as_str());
 
-        let colors = if env("NO_COLOR").is_some() || PLAIN.contains(&term.as_str()) {
+        let colors = if env("NO_COLOR").is_some() || plain {
             Colors::None
         } else if says_truecolor || modern {
             Colors::Truecolor
-        } else if CONSOLES.contains(&term.as_str()) {
+        } else if linux_console || bytes {
             Colors::Ansi16
         } else if term.contains("256color") || program == "Apple_Terminal" {
             Colors::Ansi256
         } else if windows && term.is_empty() {
-            // The Windows console itself, which has drawn every color since
-            // the Windows 10 that Rust needs to run at all.
+            // Windows' console has drawn every color since the Windows 10
+            // that Rust needs to run at all.
             Colors::Truecolor
         } else if matches!(
             term.as_str(),
@@ -193,9 +211,9 @@ impl Host {
             Colors::Ansi256
         };
 
-        // A locale that is not UTF-8 means the bytes of a box line arrive as
-        // two or three characters of something else. One that is not set
-        // says nothing, which is the usual case on Windows and over ssh.
+        // A locale that is not UTF-8 means each byte of a box line arrives as
+        // a character of something else. One that is not set says nothing,
+        // which is the usual case on Windows and over ssh.
         let utf8 = ["LC_ALL", "LC_CTYPE", "LANG"]
             .iter()
             .find_map(|var| env(var))
@@ -203,19 +221,21 @@ impl Host {
                 let l = locale.to_ascii_lowercase();
                 l.contains("utf-8") || l.contains("utf8")
             });
-        // The console Windows opens on its own draws in Consolas, which has
-        // box lines but not the small arrows, rounded corners or heavy rules
-        // tiny draws with, and finds no other font for them. Anything that
-        // says what it is (Windows Terminal, VS Code, mintty, ConEmu) has them.
-        let bare_console = windows && term.is_empty() && !modern && env("ConEmuANSI").is_none();
-        let line_drawing = utf8
-            && !bare_console
-            && !PLAIN.contains(&term.as_str())
-            && !CONSOLES.contains(&term.as_str());
+        let characters = if !utf8 || plain || bytes {
+            GlyphSet::Ascii
+        } else if windows_console || linux_console {
+            // One font, and no other to borrow from: what every console font
+            // has, which is still box lines, arrows and bullets.
+            GlyphSet::Console
+        } else {
+            GlyphSet::Unicode
+        };
 
         Self {
-            line_drawing,
+            characters,
             colors,
+            // Windows' console draws faint text at full strength.
+            faint: !windows_console,
         }
     }
 }
@@ -236,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn the_terminals_people_use_get_every_color_and_every_line() {
+    fn the_terminals_people_use_get_everything() {
         for vars in [
             &[("TERM", "xterm-kitty"), ("KITTY_WINDOW_ID", "1")][..],
             &[("TERM", "xterm-256color"), ("COLORTERM", "truecolor")],
@@ -246,15 +266,10 @@ mod tests {
             &[("TERM", "xterm-256color"), ("TERM_PROGRAM", "vscode")],
             &[("TERM", "wezterm"), ("WEZTERM_PANE", "0")],
         ] {
-            assert_eq!(
-                host(vars, false),
-                Host {
-                    line_drawing: true,
-                    colors: Colors::Truecolor
-                },
-                "{vars:?}"
-            );
+            assert_eq!(host(vars, false), Host::default(), "{vars:?}");
         }
+        // Windows Terminal, around Command Prompt or anything else.
+        assert_eq!(host(&[("WT_SESSION", "1d3c")], true), Host::default());
     }
 
     #[test]
@@ -267,7 +282,7 @@ mod tests {
             false,
         );
         assert_eq!(mac.colors, Colors::Ansi256);
-        assert!(mac.line_drawing);
+        assert_eq!(mac.characters, GlyphSet::Unicode);
         // Inside tmux, or at the far end of ssh, `TERM` is all there is.
         for term in ["tmux-256color", "screen-256color", "xterm-256color"] {
             assert_eq!(
@@ -281,16 +296,40 @@ mod tests {
     }
 
     #[test]
-    fn a_console_without_a_desktop_gets_sixteen_colors_and_ascii() {
-        let linux = host(&[("TERM", "linux"), ("LANG", "en_US.UTF-8")], false);
+    fn the_linux_console_gets_box_lines_and_sixteen_colors() {
         assert_eq!(
-            linux,
+            host(&[("TERM", "linux"), ("LANG", "en_US.UTF-8")], false),
             Host {
-                line_drawing: false,
-                colors: Colors::Ansi16
+                characters: GlyphSet::Console,
+                colors: Colors::Ansi16,
+                faint: true,
             }
         );
         assert_eq!(host(&[("TERM", "xterm")], false).colors, Colors::Ansi16);
+    }
+
+    #[test]
+    fn windows_own_console_gets_box_lines_every_color_and_no_faint() {
+        // Command Prompt or PowerShell in the window Windows opens for them.
+        assert_eq!(
+            host(&[], true),
+            Host {
+                characters: GlyphSet::Console,
+                colors: Colors::Truecolor,
+                faint: false,
+            }
+        );
+        // Anything that says what it is draws everything.
+        for vars in [
+            &[("WT_SESSION", "1d3c")][..],
+            &[("TERM_PROGRAM", "vscode")],
+            &[("TERM", "xterm-256color"), ("TERM_PROGRAM", "mintty")],
+            &[("ConEmuANSI", "ON")],
+        ] {
+            let h = host(vars, true);
+            assert_eq!(h.characters, GlyphSet::Unicode, "{vars:?}");
+            assert!(h.faint, "{vars:?}");
+        }
     }
 
     #[test]
@@ -298,7 +337,7 @@ mod tests {
         for term in ["vt100", "vt220", "dumb"] {
             let h = host(&[("TERM", term)], false);
             assert_eq!(h.colors, Colors::None, "{term}");
-            assert!(!h.line_drawing, "{term}");
+            assert_eq!(h.characters, GlyphSet::Ascii, "{term}");
         }
         let asked = host(
             &[
@@ -309,18 +348,22 @@ mod tests {
             false,
         );
         assert_eq!(asked.colors, Colors::None);
-        assert!(asked.line_drawing, "only the colors were asked away");
+        assert_eq!(
+            asked.characters,
+            GlyphSet::Unicode,
+            "only the colors were asked away"
+        );
     }
 
     #[test]
-    fn a_locale_that_is_not_utf8_gets_ascii() {
+    fn a_terminal_reading_bytes_rather_than_utf8_gets_ascii() {
         for (var, value) in [
             ("LANG", "C"),
             ("LC_ALL", "POSIX"),
             ("LC_CTYPE", "en_US.ISO-8859-1"),
         ] {
             let h = host(&[("TERM", "xterm-256color"), (var, value)], false);
-            assert!(!h.line_drawing, "{var}={value}");
+            assert_eq!(h.characters, GlyphSet::Ascii, "{var}={value}");
         }
         // LC_ALL wins over LANG, the way the C library reads them.
         let h = host(
@@ -331,26 +374,15 @@ mod tests {
             ],
             false,
         );
-        assert!(h.line_drawing);
-    }
-
-    #[test]
-    fn windows_draws_in_ascii_only_in_the_bare_console() {
-        let bare = host(&[], true);
-        assert_eq!(
-            bare,
-            Host {
-                line_drawing: false,
-                colors: Colors::Truecolor
-            }
-        );
-        for vars in [
-            &[("WT_SESSION", "1d3c")][..],
-            &[("TERM_PROGRAM", "vscode")],
-            &[("TERM", "xterm-256color"), ("TERM_PROGRAM", "mintty")],
-            &[("ConEmuANSI", "ON")],
-        ] {
-            assert!(host(vars, true).line_drawing, "{vars:?}");
+        assert_eq!(h.characters, GlyphSet::Unicode);
+        // The BSD consoles and plain ANSI read one byte as one character.
+        for term in ["cons25", "ansi"] {
+            let h = host(&[("TERM", term), ("LANG", "en_US.UTF-8")], false);
+            assert_eq!(
+                (h.characters, h.colors),
+                (GlyphSet::Ascii, Colors::Ansi16),
+                "{term}"
+            );
         }
     }
 
@@ -359,6 +391,8 @@ mod tests {
         let linux = host(&[("TERM", "linux")], false);
         assert_eq!(Colors::Auto.resolve(&linux), Colors::Ansi16);
         assert_eq!(Colors::Truecolor.resolve(&linux), Colors::Truecolor);
+        assert_eq!(GlyphSet::Auto.resolve(&linux), GlyphSet::Console);
+        assert_eq!(GlyphSet::Unicode.resolve(&linux), GlyphSet::Unicode);
         for value in ["auto", "truecolor", "256", "16", "none"] {
             let c = Colors::parse(value).expect(value);
             assert_eq!(c.name(), value, "round trips");

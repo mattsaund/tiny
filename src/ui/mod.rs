@@ -129,8 +129,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Window::Main => draw_main(f, app, main),
     }
     draw_overlay(f, app, area);
-    // Last, over everything: the frame in as many colors as the terminal has.
-    colors::fit(f.buffer_mut(), app.palette.colors);
+    // Last, over everything: the frame in what the terminal can show.
+    colors::fit(f.buffer_mut(), app.palette.colors, app.host.faint);
 }
 
 /// What is layered over the window: help, settings, keybinds, and the update
