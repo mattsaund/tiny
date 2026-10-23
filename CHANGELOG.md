@@ -3,6 +3,36 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.6.0 - 2026-10-23
+
+- **Select, copy and paste.** Shift with any key that moves selects, and
+  `Ctrl+A` selects everything. `Ctrl+C`, `Ctrl+X` and `Ctrl+V` copy, cut and
+  paste through your system's clipboard (over SSH, the terminal's), or the
+  whole line with nothing selected. A paste from the terminal goes in as it
+  was copied, indents and all.
+- **More cursors.** `Alt+N` selects the word and adds a cursor at each next
+  place it is, and `Alt+Shift+Up` and `Down` add one above or below.
+  Typing, deleting, pasting and moving happen at every cursor; `Esc` lets
+  go.
+- **Any number of panes**, side by side and stacked in any mix: `*split`,
+  `*split down` and `*close`. `Ctrl+W` goes to the next one, and with one,
+  splits it.
+- **A terminal.** `Ctrl+O` runs your shell in the project, under the panes,
+  and `Ctrl+O` comes back.
+- **Patterns.** A search between slashes, `/fn \w+/`, is a regular
+  expression, and so is a `*replace`, whose replacement can use what it
+  captured: `*replace /(\w+)@a/ with $1@b`.
+- **Macros.** `Ctrl+R` records keys and `Ctrl+P` plays them back. `*play 20`
+  plays them twenty times.
+- **The cursor's shape**, with `cursor_shape` (`block`, `bar`, `underline`)
+  and `cursor_blink`.
+- **A manual page.** `man tiny` has every key, and the installer puts it
+  beside tiny.
+- **Keys that moved:** `Ctrl+A` selects all, so `Home` is the start of a
+  line. `Shift+Left` and `Shift+Right` select, so `Ctrl+W` moves between
+  panes. `Ctrl+C` and `Ctrl+V` copy text in a file and files in the browser.
+- Undo puts back what was selected, and each pane keeps its own selection.
+
 ## 0.5.6 - 2026-10-23
 
 - **The best each terminal can do.** Windows' own console (around Command

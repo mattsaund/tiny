@@ -53,6 +53,7 @@
 //! two that touch every file in the project use every core to do it.
 
 mod app;
+mod clipboard;
 mod config;
 mod files;
 mod git;
@@ -60,6 +61,7 @@ mod licenses;
 mod map;
 mod parallel;
 mod plugins;
+mod shell;
 mod terminal;
 mod text;
 mod ui;
@@ -69,14 +71,16 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseEventKind,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyEventKind, MouseEventKind,
 };
 use crossterm::execute;
 
 use app::App;
 use config::keys::Keyboard;
-use config::{CONF_NAME, Config, Host, PLUGINS_NAME};
+use config::{CONF_NAME, Config, CursorShape, Host, PLUGINS_NAME};
 
 /// `--help` output. Kept here as one literal rather than assembled from an
 /// argument parser: there are only six options, and a contributor changing
@@ -87,8 +91,8 @@ tiny: an IDE, text editor, knowledge manager and file browser in the terminal
 USAGE:
     tiny                open the current directory
     tiny <DIR>          open a folder; one that does not exist is created
-    tiny <FILE>         edit one file, with its folder in the tree beside it;
-                        a file that does not exist is created too
+    tiny <FILE>         edit one file, across the window: Esc shows its
+                        folder. A file that does not exist is created too
 
 OPTIONS:
     -h, --help          show this message
@@ -105,7 +109,15 @@ KEYS:
     ?                   every key and command, from inside the app
     /                   the bar: searches, or `*` first for a command
     Ctrl+G  Ctrl+L      source control, the project map
+    Ctrl+W  Ctrl+O      the next pane, the terminal
+
+`man tiny` has every key.
 ";
+
+/// Where the installer puts the manual page, under the folder that holds the
+/// binary's `bin`: `~/.local/share/man/man1` for `~/.local/bin`, which is
+/// where `man` looks, given that `bin` is on the PATH.
+const MAN_PAGE: &str = "share/man/man1/tiny.1";
 
 /// Print to stdout, and do not mind if nobody is listening.
 ///
@@ -214,6 +226,8 @@ fn real_main() -> Result<()> {
     // it is from here, so a test never loads anybody's plugins.
     app.plugins_dir = Config::plugins_dir();
     app.config_path = Config::user_path();
+    // And the real clipboard, which no test may write over.
+    app.text_clipboard = clipboard::Clipboard::new(true);
     app.load_plugins();
     app.tell_plugins_what_is_open();
     // A release build asks, once, whether there is a newer one. A debug build
@@ -233,7 +247,16 @@ fn real_main() -> Result<()> {
     // why scrolling used to jump. Best-effort: a terminal that will not report
     // the mouse is still perfectly usable from the keyboard.
     let mouse = execute!(std::io::stdout(), EnableMouseCapture).is_ok();
+    // A paste from the terminal's own paste key then arrives as one piece,
+    // rather than as keys typed so fast that auto-indent indents each line
+    // a little more than the last.
+    let paste = execute!(std::io::stdout(), EnableBracketedPaste).is_ok();
     let result = run(&mut terminal, &mut app);
+    // The terminal's own cursor back, whatever shape tiny was asked for.
+    let _ = execute!(std::io::stdout(), SetCursorStyle::DefaultUserShape);
+    if paste {
+        let _ = execute!(std::io::stdout(), DisableBracketedPaste);
+    }
     if mouse {
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
     }
@@ -252,10 +275,11 @@ fn real_main() -> Result<()> {
     Ok(())
 }
 
-/// Turn off the mouse reporting tiny asked for, if it panics.
+/// Turn off the mouse reporting and the paste brackets tiny asked for, if it
+/// panics.
 ///
 /// `ratatui::try_init` already leaves a hook that gives back raw mode and the
-/// alternate screen. It cannot know about the request tiny makes on its own
+/// alternate screen. It cannot know about the requests tiny makes on its own
 /// account, so without this a panic drops you back at a shell whose terminal
 /// is still reporting wheel events, with nothing on screen to say why.
 ///
@@ -269,7 +293,12 @@ fn real_main() -> Result<()> {
 fn hand_back_the_terminal_on_panic() {
     let next = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+        let _ = execute!(
+            std::io::stdout(),
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            SetCursorStyle::DefaultUserShape
+        );
         next(info);
     }));
 }
@@ -281,6 +310,10 @@ fn hand_back_the_terminal_on_panic() {
 /// open directory twice a second: microseconds. Shorter would not be
 /// noticeably quicker; much longer starts to feel like the screen is lying.
 const IDLE: Duration = Duration::from_millis(500);
+
+/// How often a running shell is looked at for something new to show: often
+/// enough that output scrolls by smoothly, and only while there is a shell.
+const TICK: Duration = Duration::from_millis(16);
 
 /// The event loop: draw, wait for something to happen, dispatch, repeat.
 ///
@@ -294,14 +327,49 @@ const IDLE: Duration = Duration::from_millis(500);
 ///
 /// `ratatui::restore` in the caller runs whether or not this returns an error,
 /// so a failure in here still gives the terminal back.
+/// The cursor the settings ask for: the terminal's own, or a shape, blinking
+/// or not.
+fn cursor_style(config: &Config) -> SetCursorStyle {
+    match (config.cursor_shape, config.cursor_blink) {
+        (CursorShape::Default, _) => SetCursorStyle::DefaultUserShape,
+        (CursorShape::Block, true) => SetCursorStyle::BlinkingBlock,
+        (CursorShape::Block, false) => SetCursorStyle::SteadyBlock,
+        (CursorShape::Bar, true) => SetCursorStyle::BlinkingBar,
+        (CursorShape::Bar, false) => SetCursorStyle::SteadyBar,
+        (CursorShape::Underline, true) => SetCursorStyle::BlinkingUnderScore,
+        (CursorShape::Underline, false) => SetCursorStyle::SteadyUnderScore,
+    }
+}
+
 fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
+    let mut looked = std::time::Instant::now();
+    // What the cursor was last set to, so it is only said again when a
+    // setting changes it. Nothing yet: the terminal's own is what it has.
+    let mut cursor = (CursorShape::Default, true);
     loop {
+        let wanted = (app.config.cursor_shape, app.config.cursor_blink);
+        if wanted != cursor {
+            cursor = wanted;
+            let _ = execute!(std::io::stdout(), cursor_style(&app.config));
+        }
         terminal.draw(|f| ui::draw(f, app))?;
         if app.should_quit {
             return Ok(());
         }
         loop {
-            if !event::poll(IDLE)? {
+            // A shell writes whenever it likes, and there is no telling the
+            // terminal to wake us when it does, so while there is one it is
+            // looked at every tick.
+            let wait = if app.has_terminal() { TICK } else { IDLE };
+            if !event::poll(wait)? {
+                let shell = app.poll_terminal();
+                if looked.elapsed() < IDLE {
+                    if shell {
+                        break;
+                    }
+                    continue;
+                }
+                looked = std::time::Instant::now();
                 // Nobody typed anything. Has anyone else been writing, has
                 // the push we started come back, is there a newer tiny?
                 // Each is asked every time: one with news must not keep the
@@ -309,7 +377,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                 let git = app.poll_git_job();
                 let disk = app.rescan_disk();
                 let update = app.poll_update();
-                if git || disk || update {
+                if shell || git || disk || update {
                     break;
                 }
                 continue;
@@ -349,15 +417,20 @@ fn dispatch(app: &mut App, event: Event) -> bool {
         // to read.
         Event::Mouse(m) => match m.kind {
             MouseEventKind::ScrollDown => {
-                app.on_scroll(true, m.column);
+                app.on_scroll(true, m.column, m.row);
                 true
             }
             MouseEventKind::ScrollUp => {
-                app.on_scroll(false, m.column);
+                app.on_scroll(false, m.column, m.row);
                 true
             }
             _ => false,
         },
+        // The terminal's own paste, all of it at once.
+        Event::Paste(text) => {
+            app.on_paste(text);
+            true
+        }
         // Nothing to handle, but everything has to be laid out again.
         Event::Resize(..) => true,
         // A key's release, focus coming and going.
@@ -390,6 +463,9 @@ struct Removal {
     /// beside an empty plugins folder at most. A directory someone put their
     /// own files in stays.
     conf_dir: Option<PathBuf>,
+    /// The manual page the installer put beside the binary, in
+    /// `share/man/man1` next to its `bin`.
+    man: Option<PathBuf>,
     /// The `--root` cargo installed into, when its bookkeeping names tiny.
     /// `cargo uninstall` is then the right way to remove the binary, because
     /// it also forgets the entry; unlinking alone leaves cargo believing
@@ -442,11 +518,18 @@ impl Removal {
                     .unwrap_or(false)
             })
             .map(PathBuf::from);
+        let man = bin
+            .as_ref()
+            .filter(|p| p.is_file())
+            .and_then(|p| p.parent()?.parent())
+            .map(|prefix| prefix.join(MAN_PAGE))
+            .filter(|p| p.is_file());
         Self {
             bin: bin.filter(|p| p.is_file()),
             conf,
             plugins_dir,
             conf_dir,
+            man,
             cargo_root,
         }
     }
@@ -462,6 +545,9 @@ impl Removal {
         }
         if let Some(p) = &self.conf_dir {
             out.push(format!("  {}/", p.display()));
+        }
+        if let Some(p) = &self.man {
+            out.push(format!("  {}", p.display()));
         }
         if let Some(p) = &self.bin {
             out.push(format!("  {}", p.display()));
@@ -490,6 +576,11 @@ impl Removal {
         }
         if let Some(p) = &self.conf_dir
             && let Err(e) = std::fs::remove_dir(p)
+        {
+            errors.push(format!("{}: {e}", p.display()));
+        }
+        if let Some(p) = &self.man
+            && let Err(e) = std::fs::remove_file(p)
         {
             errors.push(format!("{}: {e}", p.display()));
         }
@@ -674,6 +765,134 @@ mod tests {
             Removal::plan(Some(bin), None).cargo_root,
             Some(root),
             "a record naming tiny means cargo should do the removing"
+        );
+    }
+
+    #[test]
+    fn the_manual_page_beside_the_binary_goes_too() {
+        let td = tempfile::tempdir().unwrap();
+        let (bin, _) = fake_install(td.path());
+        let man = td.path().join("root").join(MAN_PAGE);
+        fs::create_dir_all(man.parent().unwrap()).unwrap();
+        fs::write(&man, ".TH TINY 1\n").unwrap();
+        let theirs = man.with_file_name("ls.1");
+        fs::write(&theirs, ".TH LS 1\n").unwrap();
+
+        let removal = Removal::plan(Some(bin), None);
+        assert_eq!(removal.man.as_ref(), Some(&man));
+        assert!(removal.perform().is_empty());
+        assert!(!man.exists(), "the page is gone");
+        assert!(theirs.exists(), "another program's page is not ours");
+    }
+
+    /// `docs/tiny.1`, which is written by hand.
+    const MANUAL: &str = include_str!("../docs/tiny.1");
+
+    /// The lines of one `.SH` section of the manual.
+    fn manual_section(name: &str) -> Vec<&'static str> {
+        MANUAL
+            .lines()
+            .skip_while(|l| *l != format!(".SH {name}"))
+            .skip(1)
+            .take_while(|l| !l.starts_with(".SH "))
+            .collect()
+    }
+
+    /// What each `.TP` entry of a section is about: the words on the line
+    /// after it, without the quotes, the escapes and the commas.
+    fn manual_tags(section: &str) -> Vec<String> {
+        let lines = manual_section(section);
+        lines
+            .windows(2)
+            .filter(|w| w[0] == ".TP")
+            .flat_map(|w| {
+                let tag = w[1].split_once(' ').map_or("", |(_, rest)| rest);
+                let tag = tag.replace("\\-", "-").replace('"', "");
+                tag.split(", ")
+                    .map(|k| k.trim().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// A key as the manual writes it: `Ctrl+S`, `Page Up`, `Shift+I`.
+    fn as_written(spec: &str) -> String {
+        let (mods, base) = match spec.rfind('+') {
+            Some(i) if i + 1 < spec.len() => (&spec[..i], &spec[i + 1..]),
+            _ => ("", spec),
+        };
+        let mut out = String::new();
+        for m in mods.split('+').filter(|m| !m.is_empty()) {
+            let mut c = m.chars();
+            out.extend(c.next().map(|f| f.to_ascii_uppercase()));
+            out.push_str(c.as_str());
+            out.push('+');
+        }
+        let base = match base {
+            "pageup" => "Page Up".to_string(),
+            "pagedown" => "Page Down".to_string(),
+            b if b.chars().count() == 1 => {
+                let c = b.chars().next().unwrap();
+                if !mods.is_empty() {
+                    c.to_ascii_uppercase().to_string()
+                } else if c.is_ascii_uppercase() {
+                    format!("Shift+{c}")
+                } else {
+                    c.to_string()
+                }
+            }
+            b => {
+                let mut c = b.chars();
+                c.next()
+                    .map(|f| f.to_ascii_uppercase())
+                    .into_iter()
+                    .chain(c)
+                    .collect()
+            }
+        };
+        out + &base
+    }
+
+    #[test]
+    fn the_manual_names_every_key_and_nothing_else() {
+        use config::keys::{Action, Keymap};
+        let keymap = Keymap::default();
+        let shipped: Vec<String> = Action::all()
+            .flat_map(|a| keymap.keys(a).iter().map(|k| as_written(&k.to_string())))
+            .collect();
+        let written = manual_tags("CONTROLS");
+        for key in &shipped {
+            assert!(
+                written.contains(key),
+                "the manual does not say what {key} does"
+            );
+        }
+        for key in &written {
+            assert!(
+                shipped.contains(key),
+                "the manual names {key}, which does nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn the_manual_names_every_option_and_this_version() {
+        let mut options: Vec<String> = USAGE
+            .lines()
+            .skip_while(|l| *l != "OPTIONS:")
+            .skip(1)
+            .take_while(|l| !l.is_empty())
+            .flat_map(|l| l.split_whitespace().take_while(|w| w.starts_with('-')))
+            .map(|w| w.trim_end_matches(',').to_string())
+            .collect();
+        let mut written = manual_tags("OPTIONS");
+        options.sort();
+        written.sort();
+        assert_eq!(written, options);
+        let title = MANUAL.lines().find(|l| l.starts_with(".TH ")).unwrap();
+        assert!(
+            title.contains(&format!("\"tiny {}\"", env!("CARGO_PKG_VERSION"))),
+            "the manual is for another version: {title}"
         );
     }
 

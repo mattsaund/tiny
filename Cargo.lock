@@ -1758,7 +1758,7 @@ checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
 
 [[package]]
 name = "tiny"
-version = "0.5.6"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -1766,6 +1766,7 @@ dependencies = [
  "portable-pty",
  "pulldown-cmark",
  "ratatui",
+ "regex",
  "serde",
  "serde_json",
  "syntect",
@@ -1779,6 +1780,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "vt100",
+ "windows-sys",
 ]
 
 [[package]]

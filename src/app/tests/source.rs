@@ -884,7 +884,7 @@ fn the_wheel_over_the_change_list_moves_its_cursor() {
     let before = app.git.selected;
 
     for _ in 0..40 {
-        app.on_scroll(true, x0 + 2);
+        app.on_scroll(true, x0 + 2, 5);
     }
     assert_eq!(app.git.selected, before + 40, "one notch, one row");
     let name = current_name(&app);
@@ -901,8 +901,8 @@ fn the_wheel_over_the_diff_scrolls_the_diff() {
     let (_, x1) = app.git.list_cols.unwrap();
     let selected = app.git.selected;
 
-    app.on_scroll(true, x1 + 5);
-    app.on_scroll(true, x1 + 5);
+    app.on_scroll(true, x1 + 5, 5);
+    app.on_scroll(true, x1 + 5, 5);
     assert_eq!(app.git.diff_scroll, 2);
     assert_eq!(app.git.selected, selected, "the list stays where it was");
 }
@@ -917,7 +917,7 @@ fn the_wheel_in_the_git_window_leaves_the_browser_alone() {
     joined(&mut app);
 
     // Where the browser was is where the change list is now.
-    app.on_scroll(true, x0 + 1);
+    app.on_scroll(true, x0 + 1, 5);
     assert_eq!(app.selected, selected, "the browser is not on screen");
 }
 

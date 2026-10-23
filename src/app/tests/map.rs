@@ -421,7 +421,7 @@ fn a_lone_key_is_named_as_it_is_typed() {
     assert_eq!(app.key_name(Action::Refresh), "r");
     assert_eq!(app.key_name(Action::Save), "Ctrl+S");
     assert_eq!(app.key_name(Action::Back), "Esc");
-    assert_eq!(app.key_name(Action::PaneLeft), "Shift+Left");
+    assert_eq!(app.key_name(Action::EditorCursorUp), "Alt+Shift+Up");
 }
 
 #[test]

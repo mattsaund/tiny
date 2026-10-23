@@ -1,6 +1,6 @@
 [package]
 name = "tiny"
-version = "0.5.6"
+version = "0.6.0"
 edition = "2024"
 # Let-chains, which this uses throughout, landed in 1.88.
 rust-version = "1.88"
@@ -17,8 +17,14 @@ crossterm = "0.29.0"
 # Plugins. Lua 5.4 is compiled into the binary from source (`vendored`), so a
 # plugin needs nothing installed to run (see `plugins`).
 mlua = { version = "0.12.1", default-features = false, features = ["lua54", "vendored"] }
+# The terminal in a pane (see `shell`): a pseudo-terminal to run the shell in,
+# a ConPTY on Windows, and a terminal emulator to keep the screen it draws.
+portable-pty = "0.9.0"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 ratatui = "0.30.2"
+# Patterns in search and replace (see `search`). Already in the build for
+# tree-sitter, with these same features.
+regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-themes", "dump-load", "regex-fancy"] }
 toml = "1.1.4"
@@ -29,12 +35,14 @@ tree-sitter-tags = "0.26.13"
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
+vt100 = "0.18.1"
+
+# The clipboard (see `clipboard`). Already in the build for other crates;
+# these features add only the few functions it calls.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole"] }
 
 [dev-dependencies]
-# The terminal tests (`tests/terminals.rs`): a pseudo-terminal to run tiny in,
-# a ConPTY on Windows, and a terminal emulator to read its screen back.
-portable-pty = "0.9.0"
-vt100 = "0.18.1"
 # Reads `cargo metadata` when the third-party notices are written (see
 # `licenses`). Already in the build for other crates; never in the binary.
 serde_json = "1.0.151"

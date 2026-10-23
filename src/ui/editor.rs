@@ -12,11 +12,21 @@
 //! of a heading that has had its `#` taken away and have the arrow keys still
 //! mean anything. Every other line renders. The result is that a document
 //! looks like itself while you work on it, which is what the reading mode this
-//! replaced was for.
+//! replaced was for. Lines with text selected, or another cursor on them,
+//! stay raw too, for the same reason.
+//!
+//! # Selections and the other cursors
+//!
+//! Selected text is drawn in the theme's `selection` style, and every cursor
+//! but the main one as a block, since the terminal has only the one cursor of
+//! its own to place. A selection that runs on past the end of a line takes
+//! one cell after it, for the line break, so a selected empty line shows.
+
+use std::collections::HashMap;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_segmentation::UnicodeSegmentation;
@@ -25,6 +35,7 @@ use super::parts::{FORMAT_LIMIT, digits, mark_query};
 
 use crate::app::{App, TextKind};
 use crate::config::Palette;
+use crate::text::editor::Editor;
 use crate::text::markdown;
 use crate::text::search::Matcher;
 use crate::text::tabs;
@@ -91,7 +102,16 @@ pub(super) fn draw_editor(
 
     let (rows, top) = if live {
         let rows_down = app.buffers[path].scroll_rows;
-        live_rows(app, path, text_w, height, (scroll_y, rows_down), cur_line)
+        let marked = marked_lines(&app.buffers[path]);
+        live_rows(
+            app,
+            path,
+            text_w,
+            height,
+            (scroll_y, rows_down),
+            cur_line,
+            &marked,
+        )
     } else {
         // A screenful: on a hundred-thousand-line log, a row for every line
         // below the top of the pane was megabytes a keystroke for nothing.
@@ -141,6 +161,7 @@ pub(super) fn draw_editor(
         _ => Vec::new(),
     };
     let piece_of = |n: usize| raw.first().and_then(|a| highlighted.get(n - a));
+    let marks = Marks::of(ed, &raw);
 
     let mut lines: Vec<Line> = Vec::with_capacity(height);
     let mut cursor_row = None;
@@ -172,7 +193,8 @@ pub(super) fn draw_editor(
                     cursor_row = Some(i);
                 }
                 if let Some(pieces) = piece_of(*n) {
-                    content.extend(clip_pieces(pieces, scroll_x, text_w, pal, tab_width));
+                    let pieces = marks.apply(*n, pieces, pal);
+                    content.extend(clip_pieces(&pieces, scroll_x, text_w, pal, tab_width));
                 }
             }
             Row::Made { content: made, .. } => content.extend(made.spans.iter().cloned()),
@@ -275,6 +297,7 @@ fn live_rows(
     height: usize,
     (scroll_y, scroll_rows): (usize, usize),
     cur_line: usize,
+    marked: &[(usize, usize)],
 ) -> (Vec<Row>, usize) {
     let ed = &app.buffers[path];
     let mut rows: Vec<Row> = Vec::new();
@@ -283,7 +306,8 @@ fn live_rows(
     let labels = markdown::link_labels(ed.lines());
 
     for b in markdown::blocks(ed.lines()) {
-        if b.contains(cur_line) {
+        let touches = |&(first, last): &(usize, usize)| first < b.end && last >= b.start;
+        if b.contains(cur_line) || marked.iter().any(touches) {
             for n in b.start..b.end {
                 if n == cur_line {
                     cursor_row = rows.len();
@@ -326,6 +350,104 @@ fn live_rows(
         top = cursor_row + 1 - height;
     }
     (rows, top)
+}
+
+/// The runs of lines, first and last, that a selection runs over or another
+/// cursor is on: in a note, the blocks that have to stay raw for the marks
+/// to be drawn on them.
+fn marked_lines(ed: &Editor) -> Vec<(usize, usize)> {
+    if ed.anchor.is_none() && ed.others.is_empty() {
+        return Vec::new();
+    }
+    ed.cursors()
+        .into_iter()
+        .map(|(pos, sel)| sel.map_or((pos.line, pos.line), |(a, b)| (a.line, b.line)))
+        .collect()
+}
+
+/// What is selected on the lines being drawn, and where the cursors other
+/// than the terminal's own are on them, see the module docs.
+struct Marks {
+    lines: HashMap<usize, LineMarks>,
+}
+
+/// The marks on one line.
+#[derive(Default)]
+struct LineMarks {
+    /// The ranges of characters selected, end not included, an end one past
+    /// the line's last character taking in its line break.
+    selected: Vec<(usize, usize)>,
+    /// The columns other cursors are at.
+    carets: Vec<usize>,
+}
+
+impl Marks {
+    /// The marks on `shown`, the raw lines about to be drawn, first to last.
+    fn of(ed: &Editor, shown: &[usize]) -> Self {
+        let mut lines: HashMap<usize, LineMarks> = HashMap::new();
+        let (Some(&first), Some(&last)) = (shown.first(), shown.last()) else {
+            return Self { lines };
+        };
+        if ed.anchor.is_none() && ed.others.is_empty() {
+            return Self { lines };
+        }
+        let main = ed.pos();
+        for (pos, sel) in ed.cursors() {
+            if pos != main && (first..=last).contains(&pos.line) {
+                lines.entry(pos.line).or_default().carets.push(pos.col);
+            }
+            let Some((a, b)) = sel else {
+                continue;
+            };
+            for n in a.line.max(first)..=b.line.min(last) {
+                let from = if n == a.line { a.col } else { 0 };
+                let to = if n == b.line {
+                    b.col
+                } else {
+                    ed.lines()[n].chars().count() + 1
+                };
+                if to > from {
+                    lines.entry(n).or_default().selected.push((from, to));
+                }
+            }
+        }
+        Self { lines }
+    }
+
+    /// Line `n`'s highlighted `pieces`, with its marks drawn on them.
+    fn apply(&self, n: usize, pieces: &[(Style, String)], pal: Palette) -> Vec<(Style, String)> {
+        let Some(LineMarks { selected, carets }) = self.lines.get(&n) else {
+            return pieces.to_vec();
+        };
+        let len: usize = pieces.iter().map(|(_, t)| t.chars().count()).sum();
+        // One cell past the end, when a cursor or a line break needs it.
+        let past = selected.iter().any(|&(_, to)| to > len) || carets.contains(&len);
+        let end = (pal.text, " ".to_string());
+        let mut out: Vec<(Style, String)> = Vec::new();
+        let mut i = 0;
+        for (style, text) in pieces.iter().chain(past.then_some(&end)) {
+            for c in text.chars() {
+                let chosen = selected.iter().any(|&(a, b)| (a..b).contains(&i));
+                let st = match (chosen, carets.contains(&i)) {
+                    (false, false) => *style,
+                    (true, false) => style.patch(pal.selection),
+                    (false, true) => style.add_modifier(Modifier::REVERSED),
+                    // A cursor inside a selection drawn reversed is the gap
+                    // in it; in one drawn some other way, it is reversed.
+                    (true, true) if pal.selection.add_modifier.contains(Modifier::REVERSED) => {
+                        *style
+                    }
+                    (true, true) => style.patch(pal.selection).add_modifier(Modifier::REVERSED),
+                };
+                match out.last_mut() {
+                    Some((last, text)) if *last == st => text.push(c),
+                    _ => out.push((st, c.to_string())),
+                }
+                i += 1;
+            }
+        }
+        out
+    }
 }
 
 /// One block of a note, formatted, from the cache when it has not changed.

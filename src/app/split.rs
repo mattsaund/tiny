@@ -1,31 +1,44 @@
-//! Two editors side by side.
+//! The panes beside the browser: as many as fit, side by side and stacked,
+//! in any mix.
 //!
-//! `Ctrl+W` splits the space beside the browser into two equal panes, and
-//! `Ctrl+W` again goes back to one, keeping the pane that has the keyboard.
-//! `Shift+Left` and `Shift+Right` move the keyboard between them.
+//! `Ctrl+W` moves the keyboard to the next pane, and with only one, splits
+//! it in two. `*split` puts a new pane beside the one you are in, `*split
+//! down` one below it, and `*close` closes it. `*close others` is back to
+//! one.
 //!
-//! # One live pane, and one set aside
+//! # One live pane, and the rest set aside
 //!
 //! Everything tiny knows about showing a file describes one pane: the preview
 //! that follows the browser's cursor, the buffer and its cursor, a rendered
-//! note and its scroll. Rather than teach all of that about two, a split keeps
-//! exactly one pane live: the one with the keyboard, which is also the one the
-//! browser opens files into. The other is a [`Pane`], what that pane showed
-//! and where, set aside. It is drawn by lending it the live state for one draw
-//! (see `ui::draw_pinned`), and moving between panes swaps the two.
+//! note and its scroll. Rather than teach all of that about many, a split
+//! keeps exactly one pane live: the one with the keyboard, which is also the
+//! one the browser opens files into. Each of the others is a [`Pane`], what
+//! that pane showed and where, set aside. It is drawn by lending it the live
+//! state for one draw (see `ui::draw_pinned`), and moving to another pane
+//! swaps the two.
 //!
-//! So both panes behave exactly as the single one always did, because there
+//! So every pane behaves exactly as the single one always did, because there
 //! is only ever one of each thing doing the behaving. It is also what lets one
-//! file sit in both panes, each with its own place in it: a buffer's cursor
-//! and scroll are a [`View`], and each pane keeps its own.
+//! file sit in several panes, each with its own place in it: a buffer's
+//! cursor, scroll and selection are a [`View`], and each pane keeps its own.
+//!
+//! # The layout
+//!
+//! A tree, [`Layout`]: each pane a leaf, and each split a row of panes side
+//! by side or a column of them stacked, sharing the space equally. Splitting
+//! a pane the same way as the row or column it is in adds one to that row or
+//! column, so three panes side by side are thirds rather than a half and two
+//! quarters; splitting it the other way makes it a row or column of its own.
 //!
 //! # Opening and closing
 //!
-//! A new split shows the file you are in, twice: the right pane takes the
-//! keyboard and the left keeps your place, so the first thing you do in the
-//! new pane, whether that is scrolling or opening another file from the
-//! browser, leaves the old view where it was. Closing keeps the pane with
-//! the keyboard, because the one you are working in is the one you meant.
+//! A new pane shows the file you are in, twice: the new one takes the
+//! keyboard and the old one keeps your place, so the first thing you do in
+//! the new pane, whether that is scrolling or opening another file from the
+//! browser, leaves the old view where it was. Closing a pane hands the
+//! keyboard to the one before it.
+
+use ratatui::layout::{Constraint, Direction, Layout as Areas, Rect};
 
 use crate::config::keys::Action;
 use crate::text::editor::View;
@@ -36,16 +49,114 @@ use super::mode::{Focus, Window};
 use super::parts::display_name;
 use super::preview::Preview;
 
-/// The narrowest the two panes may be together. Below this each would be too
-/// narrow to read a line of code in, so a split is refused rather than drawn.
-pub const MIN_SPLIT_WIDTH: u16 = 48;
+/// The narrowest a pane may be split into. Below this a pane is too narrow
+/// to read a line of code in, so a split is refused rather than drawn.
+pub const MIN_PANE_WIDTH: u16 = 24;
 
-/// The main window, split in two.
+/// The shortest a pane may be split into: a border, and a few lines of text.
+pub const MIN_PANE_HEIGHT: u16 = 6;
+
+/// The main window, split.
 pub struct Split {
-    /// Whether the live pane, the one with the keyboard, is the right one.
-    pub live_right: bool,
-    /// The other pane, as it was left.
-    pub pinned: Pane,
+    /// How the panes are arranged.
+    pub layout: Layout,
+    /// Which pane is live: the one with the keyboard.
+    pub live: usize,
+    /// Every other pane, as it was left, by its number in the layout.
+    pub pinned: Vec<(usize, Pane)>,
+    /// The number the next new pane gets.
+    next: usize,
+}
+
+/// How the panes are arranged, see the module docs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Layout {
+    /// One pane, by number.
+    Pane(usize),
+    /// Panes side by side, or with `stacked`, one above another.
+    Split { stacked: bool, parts: Vec<Layout> },
+}
+
+impl Layout {
+    /// Every pane, in reading order: across, then down.
+    pub fn panes(&self) -> Vec<usize> {
+        match self {
+            Layout::Pane(id) => vec![*id],
+            Layout::Split { parts, .. } => parts.iter().flat_map(Layout::panes).collect(),
+        }
+    }
+
+    /// Put pane `new` after pane `id`, beside it or below it.
+    fn split(&mut self, id: usize, new: usize, stacked: bool) {
+        match self {
+            Layout::Pane(here) if *here == id => {
+                *self = Layout::Split {
+                    stacked,
+                    parts: vec![Layout::Pane(id), Layout::Pane(new)],
+                };
+            }
+            Layout::Pane(_) => {}
+            Layout::Split {
+                stacked: way,
+                parts,
+            } => {
+                let at = parts.iter().position(|p| *p == Layout::Pane(id));
+                match at {
+                    Some(i) if *way == stacked => parts.insert(i + 1, Layout::Pane(new)),
+                    _ => parts.iter_mut().for_each(|p| p.split(id, new, stacked)),
+                }
+            }
+        }
+    }
+
+    /// Take pane `id` out, and any row or column it leaves with one pane in
+    /// it, or inside another going the same way.
+    fn remove(&mut self, id: usize) {
+        let Layout::Split { stacked, parts } = self else {
+            return;
+        };
+        parts.retain(|p| *p != Layout::Pane(id));
+        for part in parts.iter_mut() {
+            part.remove(id);
+        }
+        // A row inside a row is one row: three panes across are thirds.
+        let way = *stacked;
+        let flat: Vec<Layout> = std::mem::take(parts)
+            .into_iter()
+            .flat_map(|p| match p {
+                Layout::Split { stacked, parts } if stacked == way => parts,
+                other => vec![other],
+            })
+            .collect();
+        *parts = flat;
+        if parts.len() == 1 {
+            *self = parts.remove(0);
+        }
+    }
+
+    /// Where each pane goes in `area`, sharing it out equally.
+    pub fn areas(&self, area: Rect) -> Vec<(usize, Rect)> {
+        match self {
+            Layout::Pane(id) => vec![(*id, area)],
+            Layout::Split { stacked, parts } => {
+                let n = parts.len() as u32;
+                let direction = if *stacked {
+                    Direction::Vertical
+                } else {
+                    Direction::Horizontal
+                };
+                let cells = Areas::default()
+                    .direction(direction)
+                    .constraints(parts.iter().map(|_| Constraint::Ratio(1, n)))
+                    .split(area);
+                parts
+                    .iter()
+                    .zip(cells.iter())
+                    .flat_map(|(part, cell)| part.areas(*cell))
+                    .collect()
+            }
+        }
+    }
 }
 
 /// A pane without the keyboard: what it showed, and where.
@@ -55,95 +166,149 @@ pub struct Pane {
     pub preview_scroll: usize,
     /// Where in the file the pane was, when it shows a file with a buffer.
     pub view: Option<View>,
-    /// Its own saved highlighting, so two files drawn every frame do not throw
+    /// Its own saved highlighting, so files drawn every frame do not throw
     /// each other's away and each start again from the top.
     pub highlight: Resume,
 }
 
 impl App {
-    /// `Ctrl+W`: two panes, or back to one.
-    pub(super) fn toggle_split(&mut self) {
-        // Panes belong to the main window, so from anywhere else the key
-        // brings you to them: to the two that are there, or to two new ones.
+    /// `Ctrl+W`: the keyboard to the next pane, or with one, a second.
+    ///
+    /// Panes belong to the main window, so from anywhere else the key brings
+    /// you to them: to the ones that are there, or to two new ones.
+    pub(super) fn next_pane(&mut self) {
         if self.window != Window::Main {
             self.show_window(Window::Main);
             if self.split.is_some() {
-                self.status = "two panes".into();
+                self.status = format!("{} panes", self.pane_count());
                 return;
             }
         }
-        if self.split.take().is_some() {
-            self.status = "one pane".into();
-            return;
+        let Some(split) = &self.split else {
+            return self.split_pane(false);
+        };
+        let order = split.layout.panes();
+        let at = order.iter().position(|id| *id == split.live).unwrap_or(0);
+        let next = order[(at + 1) % order.len()];
+        self.focus_pane(next);
+    }
+
+    /// How many panes there are.
+    pub fn pane_count(&self) -> usize {
+        self.split.as_ref().map_or(1, |s| s.pinned.len() + 1)
+    }
+
+    /// `*split`, or `*split down`: a new pane beside the one you are in, or
+    /// below it, showing the same thing. It takes the keyboard.
+    pub(super) fn split_pane(&mut self, stacked: bool) {
+        if self.window != Window::Main {
+            self.show_window(Window::Main);
         }
-        if self.last_panes_width < MIN_SPLIT_WIDTH {
-            self.status = "too narrow for two panes".into();
+        let room = self.last_live_area;
+        let too_small = if stacked {
+            room.height / 2 < MIN_PANE_HEIGHT
+        } else {
+            room.width / 2 < MIN_PANE_WIDTH
+        };
+        if too_small {
+            let way = if stacked { "short" } else { "narrow" };
+            self.status = format!("this pane is too {way} to split");
             return;
         }
         // Set aside a copy of where you are; the live pane carries on from
-        // the same place on the right.
-        let pinned = Pane {
+        // the same place in the new one.
+        let copy = Pane {
             preview: self.preview.clone(),
             preview_scroll: self.preview_scroll,
             view: self.active_buffer().map(|ed| ed.view()),
             highlight: Resume::default(),
         };
-        self.split = Some(Split {
-            live_right: true,
-            pinned,
+        let split = self.split.get_or_insert_with(|| Split {
+            layout: Layout::Pane(0),
+            live: 0,
+            pinned: Vec::new(),
+            next: 1,
         });
+        let new = split.next;
+        split.next += 1;
+        split.layout.split(split.live, new, stacked);
+        split.pinned.push((split.live, copy));
+        split.live = new;
         self.status = format!(
-            "two panes: {} and {} move between them, {} closes one",
-            self.key_name(Action::PaneLeft),
-            self.key_name(Action::PaneRight),
-            self.key_name(Action::Split),
+            "{} panes, {} moves between them",
+            self.pane_count(),
+            self.key_name(Action::NextPane),
         );
     }
 
-    /// `Shift+Left` or `Shift+Right`: the keyboard to that pane.
-    ///
-    /// Returns false when there is only one pane, or the panes are not on
-    /// screen, so the key goes on to do whatever it did before there were
-    /// two, like moving the cursor.
-    pub(super) fn focus_pane(&mut self, right: bool) -> bool {
-        let Some(split) = &self.split else {
-            return false;
+    /// `*close`: the pane with the keyboard goes, and the one before it takes
+    /// the keyboard.
+    pub(super) fn close_pane(&mut self) {
+        let Some(split) = &mut self.split else {
+            self.status = "only one pane".into();
+            return;
         };
-        if self.window != Window::Main {
-            return false;
+        let order = split.layout.panes();
+        let at = order.iter().position(|id| *id == split.live).unwrap_or(0);
+        let heir = if at == 0 { order[1] } else { order[at - 1] };
+        let closing = split.live;
+        split.layout.remove(closing);
+        let Some(i) = split.pinned.iter().position(|(id, _)| *id == heir) else {
+            return;
+        };
+        let (_, pane) = split.pinned.remove(i);
+        split.live = heir;
+        if split.pinned.is_empty() {
+            self.split = None;
         }
-        if split.live_right != right {
-            self.swap_panes();
+        self.take_up(pane);
+        self.status = format!("closed a pane, {} left", self.pane_count());
+    }
+
+    /// `*close others`: back to one pane, the one you are in.
+    pub(super) fn close_other_panes(&mut self) {
+        if self.split.take().is_none() {
+            self.status = "only one pane".into();
+            return;
+        }
+        self.status = "one pane".into();
+    }
+
+    /// The keyboard to pane `id`.
+    pub(super) fn focus_pane(&mut self, id: usize) {
+        let Some(split) = &mut self.split else {
+            return;
+        };
+        if split.live != id {
+            let Some(i) = split.pinned.iter().position(|(p, _)| *p == id) else {
+                return;
+            };
+            let (_, arriving) = split.pinned.remove(i);
+            let leaving_id = split.live;
+            split.live = id;
+            // The view comes from the buffer the live pane was showing, so it
+            // is the first field: fields are worked out in the order written,
+            // and the next one takes the preview that says which buffer that
+            // is.
+            let leaving = Pane {
+                view: self.active_buffer().map(|ed| ed.view()),
+                preview: std::mem::take(&mut self.preview),
+                preview_scroll: self.preview_scroll,
+                highlight: std::mem::take(&mut self.highlight_cache),
+            };
+            if let Some(split) = &mut self.split {
+                split.pinned.push((leaving_id, leaving));
+            }
+            self.take_up(arriving);
         }
         // Straight to the pane, not through `focus_editor`: on a picture that
         // would open it in another program, and moving between panes is not
         // asking to open anything.
         self.focus = Focus::Editor;
         self.status = match self.preview.path() {
-            Some(path) => super::parts::display_name(path),
+            Some(path) => display_name(path),
             None => "an empty pane".into(),
         };
-        true
-    }
-
-    /// Set the live pane aside and take up the other one.
-    fn swap_panes(&mut self) {
-        let Some(mut split) = self.split.take() else {
-            return;
-        };
-        // The view comes from the buffer the live pane was showing, so it is
-        // the first field: fields are worked out in the order written, and
-        // the next one takes the preview that says which buffer that is.
-        let leaving = Pane {
-            view: self.active_buffer().map(|ed| ed.view()),
-            preview: std::mem::take(&mut self.preview),
-            preview_scroll: self.preview_scroll,
-            highlight: std::mem::take(&mut self.highlight_cache),
-        };
-        let arriving = std::mem::replace(&mut split.pinned, leaving);
-        split.live_right = !split.live_right;
-        self.split = Some(split);
-        self.take_up(arriving);
     }
 
     /// Make a pane set aside the live one again: the browser's cursor goes to
@@ -166,52 +331,75 @@ impl App {
         if let (Some(view), Some(ed)) = (pane.view, self.active_buffer_mut()) {
             ed.set_view(view);
             // The cursor has jumped to another pane's place, which ends a run
-            // of typing like any other move: one file open in both panes
-            // must not undo an edit in one along with an edit in the other.
+            // of typing like any other move: one file open in two panes must
+            // not undo an edit in one along with an edit in the other.
             ed.break_undo_group();
         }
     }
 
-    /// Keep the pane without the keyboard showing something real.
+    /// Keep the panes without the keyboard showing something real.
     ///
-    /// Its file can change under it while it is set aside: a delete, or a
-    /// file that stops being text, drops its buffer. The pane then reads the
-    /// file again the way the live pane would, or says it is gone, rather
+    /// A pane's file can change under it while it is set aside: a delete, or
+    /// a file that stops being text, drops its buffer. The pane then reads
+    /// the file again the way the live pane would, or says it is gone, rather
     /// than drawing an empty box under a name. Called from `sync_preview`,
     /// which everything that changes the tree goes through.
     pub(super) fn sync_pinned(&mut self) {
         let Some(split) = &self.split else {
             return;
         };
-        let fresh = match &split.pinned.preview {
-            Preview::Buffer { path, .. } if self.buffers.contains_key(path) => return,
-            Preview::Buffer { path, .. } if path.exists() => {
-                let path = path.clone();
-                self.load_file_preview(&path)
-            }
-            other => match other.path() {
-                Some(path) if !path.exists() => {
-                    Preview::Unreadable(format!("{} is gone", display_name(path)))
+        // Which panes need their file read again, and which are showing
+        // one that has gone, worked out before any reading is done.
+        let mut read_again = Vec::new();
+        let mut gone = Vec::new();
+        for (id, pane) in &split.pinned {
+            match &pane.preview {
+                Preview::Buffer { path, .. } if self.buffers.contains_key(path) => {}
+                Preview::Buffer { path, .. } if path.exists() => {
+                    read_again.push((*id, path.clone()));
                 }
-                _ => return,
-            },
-        };
-        if let Some(split) = &mut self.split {
-            split.pinned.preview = fresh;
-            split.pinned.highlight = Resume::default();
+                other => {
+                    if let Some(path) = other.path().filter(|p| !p.exists()) {
+                        gone.push((*id, format!("{} is gone", display_name(path))));
+                    }
+                }
+            }
+        }
+        let fresh = read_again
+            .into_iter()
+            .map(|(id, path)| (id, self.load_file_preview(&path)))
+            .collect::<Vec<_>>();
+        let gone = gone
+            .into_iter()
+            .map(|(id, why)| (id, Preview::Unreadable(why)));
+        for (id, preview) in fresh.into_iter().chain(gone) {
+            if let Some(pane) = self.pinned_mut(id) {
+                pane.preview = preview;
+                pane.highlight = Resume::default();
+            }
         }
     }
 
-    /// One notch of the wheel over the pane without the keyboard.
+    /// The pane set aside as number `id`.
+    pub(super) fn pinned_mut(&mut self, id: usize) -> Option<&mut Pane> {
+        self.split
+            .as_mut()?
+            .pinned
+            .iter_mut()
+            .find(|(p, _)| *p == id)
+            .map(|(_, pane)| pane)
+    }
+
+    /// One notch of the wheel over pane `id`, which does not have the
+    /// keyboard.
     ///
     /// Moves that pane and nothing else. A file with a buffer moves by its
     /// cursor, the way the live editor does, so the view cannot be left
     /// somewhere the cursor would snap it back from; anything else scrolls.
-    pub(super) fn scroll_pinned(&mut self, down: bool) {
-        let Some(split) = &mut self.split else {
+    pub(super) fn scroll_pinned(&mut self, id: usize, down: bool) {
+        let Some(pane) = self.pinned_mut(id) else {
             return;
         };
-        let pane = &mut split.pinned;
         // A note set aside is drawn rendered, which scrolls by its own count
         // and has no cursor to move. Drawing clamps both.
         let rendered = matches!(&pane.preview, Preview::Buffer { kind, .. } if kind.reads_first());
@@ -231,5 +419,80 @@ impl App {
                 };
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(parts: Vec<Layout>) -> Layout {
+        Layout::Split {
+            stacked: false,
+            parts,
+        }
+    }
+
+    fn column(parts: Vec<Layout>) -> Layout {
+        Layout::Split {
+            stacked: true,
+            parts,
+        }
+    }
+
+    #[test]
+    fn splitting_the_same_way_adds_to_the_row() {
+        let mut layout = Layout::Pane(0);
+        layout.split(0, 1, false);
+        layout.split(1, 2, false);
+        assert_eq!(
+            layout,
+            row(vec![Layout::Pane(0), Layout::Pane(1), Layout::Pane(2)])
+        );
+        let widths: Vec<u16> = layout
+            .areas(Rect::new(0, 0, 90, 10))
+            .iter()
+            .map(|(_, r)| r.width)
+            .collect();
+        assert_eq!(widths, [30, 30, 30], "thirds");
+    }
+
+    #[test]
+    fn splitting_the_other_way_makes_a_column_in_the_row() {
+        let mut layout = Layout::Pane(0);
+        layout.split(0, 1, false);
+        layout.split(1, 2, true);
+        assert_eq!(
+            layout,
+            row(vec![
+                Layout::Pane(0),
+                column(vec![Layout::Pane(1), Layout::Pane(2)])
+            ])
+        );
+        assert_eq!(layout.panes(), [0, 1, 2], "reading order");
+        let areas = layout.areas(Rect::new(0, 0, 80, 20));
+        assert_eq!(areas[0].1, Rect::new(0, 0, 40, 20));
+        assert_eq!(areas[1].1, Rect::new(40, 0, 40, 10));
+        assert_eq!(areas[2].1, Rect::new(40, 10, 40, 10));
+    }
+
+    #[test]
+    fn closing_a_pane_tidies_what_it_leaves() {
+        let mut layout = row(vec![
+            Layout::Pane(0),
+            column(vec![
+                Layout::Pane(1),
+                row(vec![Layout::Pane(2), Layout::Pane(3)]),
+            ]),
+        ]);
+        layout.remove(1);
+        assert_eq!(
+            layout,
+            row(vec![Layout::Pane(0), Layout::Pane(2), Layout::Pane(3)]),
+            "a column of one is its pane, and a row in a row is the row"
+        );
+        layout.remove(2);
+        layout.remove(3);
+        assert_eq!(layout, Layout::Pane(0));
     }
 }

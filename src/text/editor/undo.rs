@@ -64,6 +64,8 @@ impl Editor {
             lines: self.lines.clone(),
             cursor_line: self.cursor_line,
             cursor_col: self.cursor_col,
+            anchor: self.anchor,
+            others: self.others.clone(),
         });
         // Every snapshot of a file is about the size of the file, so the
         // budget comes down to a number of them.
@@ -98,9 +100,12 @@ impl Editor {
             lines: std::mem::replace(&mut self.lines, prev.lines),
             cursor_line: self.cursor_line,
             cursor_col: self.cursor_col,
+            anchor: self.anchor,
+            others: std::mem::replace(&mut self.others, prev.others),
         });
         self.cursor_line = prev.cursor_line;
         self.cursor_col = prev.cursor_col;
+        self.anchor = prev.anchor;
         self.dirty = true;
         self.last_edit = None;
         // A snapshot replaces every line at once, so nothing above is safe.
@@ -119,9 +124,12 @@ impl Editor {
             lines: std::mem::replace(&mut self.lines, next.lines),
             cursor_line: self.cursor_line,
             cursor_col: self.cursor_col,
+            anchor: self.anchor,
+            others: std::mem::replace(&mut self.others, next.others),
         });
         self.cursor_line = next.cursor_line;
         self.cursor_col = next.cursor_col;
+        self.anchor = next.anchor;
         self.dirty = true;
         self.last_edit = None;
         self.touched = 0;

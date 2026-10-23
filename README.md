@@ -1,8 +1,8 @@
 # tiny
 
 Tiny is an IDE, text editor, personal knowledge management system, and file
-browser that lives in the terminal. Search, git, a project map and plugins are
-built in. Plain files in plain folders; nothing proprietary.
+browser that lives in the terminal. Search, git, a project map, a terminal and
+plugins are built in. Plain files in plain folders; nothing proprietary.
 
 **Full installation size:**\
 8.48 MB Linux (x86_64), 7.92 MB Linux (arm64)\
@@ -45,15 +45,24 @@ tiny ~/code/main.py  # that file
 
 ![searching the project](docs/search.png)
 
-`/` searches names and contents as you type. Start with `*` for a command.
+`/` searches names and contents as you type. `/fn \w+/` is a regex. `*` starts
+a command.
 
-## Two panes
+## Editing
+
+Shift selects. `Ctrl+C` `Ctrl+X` `Ctrl+V` use your system's clipboard.
+`Alt+N` and `Alt+Shift+Up`/`Down` add cursors. `Ctrl+R` records keys, `Ctrl+P`
+plays them.
+
+## Panes
 
 ![two files side by side](docs/split.png)
 
-`Ctrl+W` splits the editor in two, and again goes back to one.
-`Shift+Left` and `Shift+Right` move between them. Each pane keeps its own
-place, even in the same file.
+`Ctrl+W` next pane. `*split`, `*split down`, `*close`.
+
+## Terminal
+
+`Ctrl+O` opens your shell under the panes, and comes back.
 
 ## Git
 
@@ -78,7 +87,7 @@ audio and PDFs open in your own viewer.
 
 ## Keys
 
-`?` shows every key.
+`?` shows every key, and so does `man tiny`.
 
 | key | does |
 |---|---|
@@ -86,9 +95,12 @@ audio and PDFs open in your own viewer.
 | `Enter`, `Esc` | open, back |
 | `Ctrl+S` | save (on a folder, all of it) |
 | `/`, `Ctrl+F` | search |
+| `Shift` and a move, `Ctrl+A` | select, select all |
+| `Ctrl+C`, `Ctrl+X`, `Ctrl+V` | copy, cut, paste |
+| `Alt+N`, `Alt+Shift+Up`/`Down` | more cursors |
+| `Ctrl+R`, `Ctrl+P` | record keys, play them |
 | `Ctrl+G`, `Ctrl+L` | git, map |
-| `Ctrl+W` | two panes, and back to one |
-| `Shift+Left`, `Shift+Right` | the other pane |
+| `Ctrl+W`, `Ctrl+O` | next pane, terminal |
 | `Ctrl+T`, `<` `>` | hide the browser, its width |
 | `Ctrl+N` | another tiny window |
 | `Ctrl+Q` | quit |
@@ -104,6 +116,8 @@ Say it in words. The line under the bar says what Enter will do.
 *goto file notes.md           *new notes/today.md
 *replace hi with hello        *delete old.md
 *replace hi with hey in a.md  *set tab_width to 2
+*replace /(\w+)@a/ with $1@b  *split down
+*play 20                      *close
 ```
 
 Names are found anywhere in the project. No `in` means everywhere. `go to`,
@@ -132,8 +146,9 @@ end)
 `*config` opens the settings; `tiny --config` prints where `tiny.conf` is.
 tiny uses your terminal's font and colors, and picks its characters and
 colors to suit the terminal it is in. `glyphs` (`unicode`, `console`,
-`ascii`) and `colors` (`truecolor`, `256`, `16`, `none`) override that. Keys
-go in `[keys]`:
+`ascii`) and `colors` (`truecolor`, `256`, `16`, `none`) override that.
+`cursor_shape` (`block`, `bar`, `underline`) and `cursor_blink` set the
+cursor. Keys go in `[keys]`:
 
 ```toml
 glyphs = "ascii"

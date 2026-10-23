@@ -24,11 +24,14 @@
 //! | [`plan`] | what a command would do, and doing it |
 //! | [`command`] | what each `*command` does |
 //! | [`fileops`] | new, rename, delete, copy, paste, save |
+//! | [`clip`] | copying and pasting text |
+//! | [`macros`] | recording keys, and playing them back |
 //! | [`actions`] | the plain navigation keys and the view toggles |
 //! | [`settings`] | the settings area and the keybinds window |
 //! | [`prompt`] | answering a confirmation |
 //! | [`parts`] | small helpers more than one of the above needs |
-//! | [`split`] | two editors side by side |
+//! | [`split`] | the panes, side by side and stacked |
+//! | [`term`] | the terminal under the panes |
 //! | [`source`] | the git window: what has changed, and what to do about it |
 //! | [`watch`] | noticing files another program changed |
 //! | [`update`] | asking whether to install a newer tiny |
@@ -118,9 +121,11 @@ mod tests;
 
 mod actions;
 mod bar;
+mod clip;
 mod command;
 mod fileops;
 mod input;
+mod macros;
 mod mode;
 mod parts;
 mod plan;
@@ -131,6 +136,7 @@ mod sentence;
 mod settings;
 mod source;
 mod split;
+mod term;
 mod update;
 mod watch;
 
@@ -140,7 +146,7 @@ pub use self::mode::{
 };
 pub use self::preview::{Preview, TextKind};
 pub use self::source::{BUTTONS as GIT_BUTTONS, GitFocus, GitPane, Row as GitRow};
-pub use self::split::{MIN_SPLIT_WIDTH, Split};
+pub use self::split::Split;
 use self::watch::Watch;
 
 use self::parts::display_name;
@@ -232,6 +238,17 @@ pub struct App {
     /// the bytes: the file is read at paste time, so editing it in between
     /// pastes what is there now rather than a stale snapshot.
     pub clipboard: Option<PathBuf>,
+    /// Text copied in a file, see [`clip`]. Tiny's own until `main` hands it
+    /// the system's, so a test never touches the real clipboard.
+    pub text_clipboard: crate::clipboard::Clipboard,
+    /// The keys typed since recording started, while it goes on, see
+    /// [`macros`].
+    recording: Option<Vec<macros::Recorded>>,
+    /// What was recorded last, which `Ctrl+P` plays.
+    recorded: Vec<macros::Recorded>,
+    /// A recording is playing, so it cannot be asked to play again from
+    /// inside itself.
+    playing: bool,
     /// `Ctrl+T` folds the tree away to give the whole window to the file.
     /// Purely a view state; nothing about the tree itself changes, so
     /// bringing it back costs no reading.
@@ -297,15 +314,23 @@ pub struct App {
     /// a mouse wheel can tell which pane it is over. `None` when the tree was
     /// not drawn at all. Written by `ui` for the same reason the heights are.
     pub last_tree_cols: Option<(u16, u16)>,
-    /// The second pane, while the space beside the browser is split in two.
-    /// See [`split`].
+    /// The panes, while the space beside the browser is split. See
+    /// [`split`].
     pub split: Option<Split>,
-    /// How wide the space for the panes was in the last frame, so a split
-    /// that would be too narrow to read is refused before it is drawn.
-    pub last_panes_width: u16,
-    /// The columns the pane without the keyboard covered in the last frame,
-    /// so the wheel can scroll it. `None` with one pane.
-    pub last_pinned_cols: Option<(u16, u16)>,
+    /// Where the pane with the keyboard was in the last frame, so a split
+    /// that would leave a pane too small to read is refused before it is
+    /// drawn.
+    pub last_live_area: ratatui::layout::Rect,
+    /// Where each pane without the keyboard was in the last frame, so the
+    /// wheel can scroll the one it is over. Empty with one pane.
+    pub last_pinned: Vec<(usize, ratatui::layout::Rect)>,
+    /// The shell in the terminal pane, while there is one. See [`term`].
+    pub term: Option<crate::shell::Shell>,
+    /// Where the keyboard was before the terminal took it, so the key that
+    /// leaves can give it back.
+    focus_before_term: Focus,
+    /// Where the terminal was in the last frame, so the wheel can scroll it.
+    pub last_term_area: Option<ratatui::layout::Rect>,
     /// What the files and folders on screen looked like at the last scan,
     /// see [`watch`]. Nothing outside that module reads it.
     watch: Watch,
@@ -371,6 +396,10 @@ impl App {
             git: GitPane::default(),
             project_map: None,
             clipboard: None,
+            text_clipboard: crate::clipboard::Clipboard::new(false),
+            recording: None,
+            recorded: Vec::new(),
+            playing: false,
             tree_hidden: false,
             update_check: None,
             update_found: None,
@@ -395,10 +424,13 @@ impl App {
             last_tree_height: 20,
             last_tree_cols: None,
             split: None,
-            // Until the first frame says otherwise, wide enough: the very
+            // Until the first frame says otherwise, big enough: the very
             // first key cannot arrive before a frame has been drawn.
-            last_panes_width: u16::MAX,
-            last_pinned_cols: None,
+            last_live_area: ratatui::layout::Rect::new(0, 0, 1000, 1000),
+            last_pinned: Vec::new(),
+            term: None,
+            focus_before_term: Focus::Tree,
+            last_term_area: None,
             watch: Watch::default(),
         };
         app.note_dirs();

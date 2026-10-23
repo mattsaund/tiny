@@ -456,6 +456,38 @@ fn typing_editing_and_saving_reach_the_file() {
 }
 
 #[test]
+fn the_terminal_runs_a_shell_in_the_project() {
+    let mut tiny = Tiny::start("xterm-256color", 100, 30);
+    tiny.wait_for("README.md");
+    tiny.send("\x0f");
+    tiny.wait_for("comes back");
+    // A word the shell has to put together, so what shows is its answer and
+    // not only what was typed: every shell tiny starts joins quotes the same.
+    tiny.send("echo ti\"\"ny\"\"shell\r");
+    tiny.wait_for("tinyshell");
+    // Ctrl+O hands the keyboard back, and the shell stays.
+    tiny.send("\x0f");
+    tiny.wait_for("still running");
+    tiny.send("\x0f");
+    tiny.wait_for("comes back");
+    tiny.send("exit\r");
+    tiny.wait_for("the shell exited");
+    tiny.quit();
+}
+
+#[test]
+fn quitting_with_the_shell_still_running_takes_it_along() {
+    let mut tiny = Tiny::start("xterm-256color", 100, 30);
+    tiny.wait_for("README.md");
+    tiny.send("\x0f");
+    tiny.wait_for("comes back");
+    tiny.send("\x0f");
+    tiny.wait_for("still running");
+    // Ctrl+Q, and tiny has to be gone, shell and all, within the patience.
+    tiny.quit();
+}
+
+#[test]
 fn the_function_and_control_keys_open_what_they_should() {
     let mut tiny = Tiny::start("xterm-256color", 100, 30);
     tiny.wait_for("README.md");

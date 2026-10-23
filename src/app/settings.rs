@@ -104,7 +104,9 @@ impl App {
     fn forget_highlighting(&mut self) {
         self.highlight_cache.clear();
         if let Some(split) = &mut self.split {
-            split.pinned.highlight.clear();
+            for (_, pane) in &mut split.pinned {
+                pane.highlight.clear();
+            }
         }
         self.git.diff_highlight = Default::default();
     }

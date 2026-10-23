@@ -15,9 +15,10 @@
 //!  ├─ draw_map            the whole screen     map.rs   → ink.rs
 //!  ├─ draw_source         the whole screen     source.rs
 //!  ├─ draw_results       dropped down from the top     tree.rs
-//!  └─ the browser, and one pane or two beside it
+//!  └─ the browser, and the panes beside it
 //!      ├─ draw_tree                             tree.rs
-//!      ├─ draw_pinned     the pane without the keyboard   preview.rs
+//!      ├─ draw_pinned     each pane without the keyboard  preview.rs
+//!      ├─ draw_terminal   the shell, under the panes        term.rs
 //!      └─ draw_preview                         preview.rs
 //!           ├─ draw_reading   rendered, no cursor in it
 //!           ├─ draw_editor    the file with the real cursor   editor.rs
@@ -76,11 +77,12 @@ mod parts;
 mod preview;
 mod settings;
 mod source;
+mod term;
 mod tree;
 mod update;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 use self::bar::{draw_bar, draw_status};
 use self::help::draw_help;
@@ -88,9 +90,9 @@ use self::map::draw_map;
 use self::preview::{draw_pinned, draw_preview};
 use self::settings::{draw_keybinds, draw_settings};
 use self::source::draw_source;
+use self::term::draw_terminal;
 use self::tree::{draw_results, draw_tree, results_height};
 use self::update::draw_update;
-use crate::app::MIN_SPLIT_WIDTH;
 
 use crate::app::{App, ConfirmKind, Mode, Window};
 use crate::config::Side;
@@ -203,31 +205,64 @@ fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
         draw_tree(f, app, side_area);
     }
 
-    // Two equal panes while split, the live one on whichever side it is. A
-    // window that has since become too narrow for two shows the live pane
-    // alone, and both come back when it widens again.
-    app.last_panes_width = preview_area.width;
-    let live_right = app.split.as_ref().map(|s| s.live_right);
-    match live_right {
-        Some(live_right) if preview_area.width >= MIN_SPLIT_WIDTH => {
-            let halves = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-                .split(preview_area);
-            let (live, pinned) = if live_right {
-                (halves[1], halves[0])
-            } else {
-                (halves[0], halves[1])
-            };
-            app.last_pinned_cols = Some((pinned.x, pinned.x + pinned.width));
-            // The live pane last, so what it measures (its height, for paging)
-            // is what the keys use.
-            draw_pinned(f, app, pinned);
-            draw_preview(f, app, live);
-        }
-        _ => {
-            app.last_pinned_cols = None;
-            draw_preview(f, app, preview_area);
-        }
+    // The terminal, under the panes, when there is one.
+    app.last_term_area = None;
+    let preview_area = if app.term.is_some() && preview_area.height >= 12 {
+        let share = ((f32::from(preview_area.height) * 0.4) as u16).max(6);
+        let [panes, term] =
+            Layout::vertical([Constraint::Min(6), Constraint::Length(share)]).areas(preview_area);
+        draw_terminal(f, app, term);
+        panes
+    } else {
+        preview_area
+    };
+
+    // The panes, laid out as they were split. A window that has since become
+    // too small for all of them shows the live pane alone, and the rest come
+    // back when it grows again.
+    let areas = app
+        .split
+        .as_ref()
+        .map(|s| (s.live, s.layout.areas(preview_area)))
+        .filter(|(_, areas)| {
+            areas
+                .iter()
+                .all(|(_, r)| r.width >= MIN_DRAWN_WIDTH && r.height >= MIN_DRAWN_HEIGHT)
+        });
+    app.last_pinned.clear();
+    let Some((live, areas)) = areas else {
+        app.last_live_area = preview_area;
+        return draw_preview(f, app, preview_area);
+    };
+    let live_area = areas
+        .iter()
+        .find(|(id, _)| *id == live)
+        .map_or(preview_area, |(_, area)| *area);
+    let pinned: Vec<(usize, Rect)> = areas.into_iter().filter(|(id, _)| *id != live).collect();
+    // What each pane shows, so a pane can tell whether its file is drawn
+    // again after it: drawing takes the mark of what was edited, and every
+    // pane showing that file needs it.
+    let shows: Vec<Option<std::path::PathBuf>> = pinned
+        .iter()
+        .map(|(id, _)| {
+            let split = app.split.as_ref()?;
+            let (_, pane) = split.pinned.iter().find(|(p, _)| p == id)?;
+            pane.preview.path().map(std::path::Path::to_path_buf)
+        })
+        .collect();
+    for (k, (id, area)) in pinned.iter().enumerate() {
+        let again = shows[k].is_some()
+            && (app.preview.path() == shows[k].as_deref() || shows[k + 1..].contains(&shows[k]));
+        app.last_pinned.push((*id, *area));
+        draw_pinned(f, app, *id, *area, again);
     }
+    // The live pane last, so what it measures (its height, for paging) is
+    // what the keys use.
+    app.last_live_area = live_area;
+    draw_preview(f, app, live_area);
 }
+
+/// The smallest a pane is drawn: below this, the window has become too small
+/// for the panes it has, and only the one with the keyboard is drawn.
+const MIN_DRAWN_WIDTH: u16 = 12;
+const MIN_DRAWN_HEIGHT: u16 = 3;

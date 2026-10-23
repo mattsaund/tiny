@@ -86,6 +86,16 @@ put_in_place() {
         || { rm -f "$PREFIX/.tiny.new"; return 1; }
 }
 
+# Put the manual page at $1 where `man tiny` finds it: share/man/man1 beside
+# the folder the binary is in, so ~/.local/share/man for ~/.local/bin. man
+# looks there by itself, for every bin on the PATH. A page that cannot be put
+# in place costs only `man tiny`, so it is never a reason to stop.
+put_man() {
+    [ -f "$1" ] || return 0
+    man_dir="$(dirname "$PREFIX")/share/man/man1"
+    { mkdir -p "$man_dir" && cp "$1" "$man_dir/tiny.1"; } 2>/dev/null || true
+}
+
 # --- the system's package manager ---------------------------------------------
 
 # The package manager this system has, by the name of its command: the
@@ -292,6 +302,10 @@ prebuilt() {
     if ! put_in_place "$dir/tiny"; then
         rm -rf "$dir"
         die "could not put tiny in $PREFIX"
+    fi
+    # Releases before 0.6.0 carry no manual page.
+    if tar -xzf "$dir/tiny.tar.gz" -C "$dir" tiny.1 2>/dev/null; then
+        put_man "$dir/tiny.1"
     fi
     rm -rf "$dir"
     say "done"
@@ -528,4 +542,5 @@ fi
 
 [ -x "$ROOT/bin/tiny" ] || die "the build finished without leaving a binary"
 put_in_place "$ROOT/bin/tiny" || die "could not put tiny in $PREFIX"
+put_man "$SRC/docs/tiny.1"
 finish

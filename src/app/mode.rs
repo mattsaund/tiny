@@ -20,6 +20,8 @@ use crate::text::search::Hit;
 pub enum Focus {
     Tree,
     Editor,
+    /// The terminal under the panes, see `term`.
+    Terminal,
 }
 
 /// Which window is on screen.

@@ -536,10 +536,13 @@ impl App {
         }
         let page = self.git.diff_height.saturating_sub(1).max(1);
         let tab_width = self.config.tab_width;
+        let (action, select) = super::input::editing_action(&self.keymap, &key);
         let Some(editor) = &mut self.git.message else {
             return;
         };
-        if let Some(complaint) = super::input::edit_with_key(editor, action, key, page, tab_width) {
+        if let Some(complaint) =
+            super::input::edit_with_key(editor, action, select, key, page, tab_width)
+        {
             self.status = complaint.into();
         }
     }

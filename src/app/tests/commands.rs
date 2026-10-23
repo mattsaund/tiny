@@ -295,7 +295,7 @@ fn an_unbound_action_leaves_the_help_row_empty_rather_than_lying() {
     let (_td, mut app) = fixture();
     // Ctrl+S is taken off `save` by giving it to another action in the same
     // context: `save` is what the help row for saving reads.
-    keybinds_on(&mut app, Action::Copy);
+    keybinds_on(&mut app, Action::NewWindow);
     app.on_key(k(KeyCode::Enter));
     app.on_key(ctrl('s'));
     app.on_key(k(KeyCode::Esc));
@@ -305,7 +305,7 @@ fn an_unbound_action_leaves_the_help_row_empty_rather_than_lying() {
     let out = screen(&mut app, 90, 70).join("\n");
     let row = out
         .lines()
-        .find(|l| l.contains("save") && !l.contains("copy"))
+        .find(|l| l.contains("save") && !l.contains("new window"))
         .unwrap_or_else(|| panic!("{out}"));
     assert!(
         !row.contains("ctrl+s"),
@@ -318,10 +318,11 @@ fn a_wide_window_puts_keys_and_commands_side_by_side() {
     let (_td, mut app) = fixture();
     app.on_key(ch('?'));
     let rows = screen(&mut app, 130, 46);
-    // Whichever command happens to line up with it: the point is that a
-    // key and a command share a row.
+    // Whichever line of the other half happens to line up with it: the
+    // point is that a key and a way of searching share a row.
     assert!(
-        rows.iter().any(|r| r.contains("ends") && r.contains('*')),
+        rows.iter()
+            .any(|r| r.contains("ends") && r.contains("a pattern")),
         "two columns on one row:\n{}",
         rows.join("\n")
     );

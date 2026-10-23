@@ -412,12 +412,12 @@ fn tab_in_the_browser_is_not_a_second_enter() {
 
 #[test]
 fn renaming_files_is_a_command_and_no_longer_a_key() {
+    // Ctrl+R renamed, once. It records keys now.
     let (_td, mut app) = fixture();
     editing(&mut app);
-    let before = app.status.clone();
     app.on_key(ctrl('r'));
-    assert_eq!(app.status, before, "ctrl+r did something");
     assert!(matches!(app.mode, Mode::Normal), "ctrl+r opened something");
+    assert!(app.is_recording(), "{}", app.status);
 }
 
 #[test]
@@ -655,9 +655,9 @@ fn home_and_end_reach_the_ends_of_a_line() {
 }
 
 #[test]
-fn ctrl_a_and_ctrl_e_reach_the_ends_of_a_line_where_there_is_no_home_key() {
+fn ctrl_e_reaches_the_end_of_a_line_where_there_is_no_end_key() {
     // A MacBook has no Home or End, and Terminal keeps Fn with an arrow for
-    // scrolling its own history. These two are what every Mac text field and
+    // scrolling its own history. Ctrl+E is what every Mac text field and
     // every shell already answers to.
     let (_td, mut app) = fixture();
     select(&mut app, "main.py");
@@ -665,8 +665,17 @@ fn ctrl_a_and_ctrl_e_reach_the_ends_of_a_line_where_there_is_no_home_key() {
     app.on_key(ctrl('e'));
     let line = app.active_buffer().unwrap().lines()[0].chars().count();
     assert_eq!(app.active_buffer().unwrap().cursor_col, line, "the end");
+}
+
+#[test]
+fn ctrl_a_selects_everything_as_in_every_other_editor() {
+    let (_td, mut app) = fixture();
+    select(&mut app, "main.py");
+    app.on_key(k(KeyCode::Enter));
     app.on_key(ctrl('a'));
-    assert_eq!(app.active_buffer().unwrap().cursor_col, 0, "and back");
+    let ed = app.active_buffer().unwrap();
+    let whole = ed.lines().join("\n");
+    assert_eq!(ed.selected_text(), Some(whole));
 }
 
 #[test]
@@ -740,14 +749,23 @@ fn home_and_end_reach_the_ends_of_the_browser_list() {
 }
 
 #[test]
-fn the_only_alt_keys_are_option_and_an_arrow() {
+fn the_only_alt_keys_are_option_and_an_arrow_and_micros_cursors() {
     // On macOS Terminal, Option with a letter types a symbol rather than
     // arriving as Alt, so an `alt+` binding on a letter never arrives at all.
     // Option with an arrow does arrive (as one spelling or the other, see
     // `keyspec::from_terminal`) and those two are a word in the editor.
+    //
+    // The keys for more cursors are the exception, and the only one: they
+    // are micro's, every Ctrl and letter is taken, and on a Mac they need
+    // Option set to send Meta, which the help says.
     use crate::config::keys::{Action, Keymap};
     let keymap = Keymap::default();
-    for action in Action::all() {
+    let cursors = [
+        Action::EditorNextMatch,
+        Action::EditorCursorUp,
+        Action::EditorCursorDown,
+    ];
+    for action in Action::all().filter(|a| !cursors.contains(a)) {
         for key in keymap.spec(action).split_whitespace() {
             if key.starts_with("alt+") {
                 assert!(

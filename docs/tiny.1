@@ -1,0 +1,282 @@
+.\" The manual page: how to start tiny, its options, and its keys.
+.\"
+.\" From a checkout, `man ./docs/tiny.1` shows it. The installer puts it in
+.\" share/man/man1 beside the binary's folder, where `man tiny` finds it.
+.\"
+.\" A test in src/main.rs reads this against the keymap and the options, so a
+.\" key or an option that changes without changing here fails the build.
+.TH TINY 1 2026-10-23 "tiny 0.6.0" "User Commands"
+.SH NAME
+tiny \- an IDE, text editor, knowledge manager and file browser in the \%terminal
+.SH SYNOPSIS
+.B tiny
+.br
+.B tiny
+.I file
+.br
+.B tiny
+.I path
+.br
+.B tiny
+.I option
+.SH DESCRIPTION
+This manual serves to be a quick guide on the controls.
+Inside tiny,
+.B ?
+shows every key and command, with any you have changed.
+.SH STARTING
+.TP
+.B tiny
+Opens the folder you are in.
+.TP
+.BI tiny " file"
+Edits
+.IR file ,
+across the whole window.
+Esc brings the browser back, with the file's folder in it.
+A name with an extension that does not exist yet is made as an empty file.
+.TP
+.BI tiny " path"
+Opens the folder at
+.IR path .
+A folder that does not exist yet is made.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Shows how to start tiny.
+.TP
+.BR \-V ", " \-\-version
+Shows the version.
+.TP
+.B \-\-update
+Installs the newest release, if there is one.
+.TP
+.B \-\-config
+Prints where the config file is.
+.TP
+.B \-\-licenses
+Prints the licenses of everything built into tiny.
+.TP
+.B \-\-uninstall
+Removes tiny and its config file.
+Your own files are not touched.
+.SH CONTROLS
+.SS Anywhere
+These work from every pane, the file you are typing in included.
+In a file,
+.B /
+and
+.B ?
+are typed like any other character, so use Ctrl+F and F1 there.
+.TP
+.B Ctrl+S
+Save. With a folder selected in the browser, save every file in it.
+.TP
+.B Ctrl+Q
+Quit. tiny asks first if anything is unsaved.
+.TP
+.B "Ctrl+F, /"
+Search the project.
+Between slashes, like
+.BR "/fn \(rsw+/" ,
+the search is a regular expression.
+Type
+.B *
+first for a command, like
+.BR "*goto main" .
+.TP
+.B "F1, ?"
+Every key and command.
+.TP
+.B Ctrl+G
+The git window, and back.
+.TP
+.B Ctrl+L
+The project map, and back.
+.TP
+.B Ctrl+T
+Hide or show the browser.
+.TP
+.B Ctrl+N
+Another tiny on the same folder, in a new window.
+.TP
+.B Ctrl+W
+The next pane.
+With one, it splits in two.
+.B *split
+and
+.B "*split down"
+add a pane beside or below the one you are in, and
+.B *close
+closes it.
+.TP
+.B Ctrl+O
+The terminal, and back.
+It runs your shell in the project's folder, under the panes, and every key
+but Ctrl+O goes to it.
+.B exit
+closes it.
+.SS The browser
+.TP
+.B "Up, i"
+Up a row.
+.TP
+.B "Down, k"
+Down a row.
+.TP
+.B "Right, l"
+Open a folder, or go into the file.
+.TP
+.B "Left, j"
+Close a folder, or go to the one it is in.
+.TP
+.B Enter
+Edit a file, or open or close a folder.
+Pictures, videos, PDFs and sounds open in your own viewer.
+.TP
+.B "Home, Shift+I"
+The first row.
+.TP
+.B "End, Shift+K"
+The last row.
+.TP
+.B "Page Up, Ctrl+U"
+A screen up.
+.TP
+.B "Page Down, Ctrl+D"
+A screen down.
+.TP
+.B Ctrl+C
+Copy the file or folder under the cursor.
+.TP
+.B Ctrl+V
+Paste it into the folder the cursor is in.
+In Windows Terminal, which keeps Ctrl+V for itself, this is Ctrl+P.
+.TP
+.B .
+Show or hide hidden files.
+.TP
+.B "<, >"
+Narrower or wider.
+.TP
+.B Esc
+Quit, asking first if anything is unsaved.
+.SS Editing a file
+Letters, Enter, Tab, Backspace and Delete type as they do anywhere.
+Enter keeps the indent.
+Shift with any key that moves the cursor selects as it moves.
+.TP
+.B "Up, Down, Left, Right"
+Move the cursor.
+.TP
+.B "Ctrl+Left, Ctrl+Right, Alt+Left, Alt+Right"
+A word at a time.
+.TP
+.B Home
+The start of the line: the indent first, then the margin.
+.TP
+.B "End, Ctrl+E"
+The end of the line.
+.TP
+.B "Page Up, Ctrl+U"
+A screen up.
+.TP
+.B "Page Down, Ctrl+D"
+A screen down.
+.TP
+.B "Ctrl+Home, Ctrl+End"
+The first and the last line.
+.TP
+.B "Tab, Shift+Tab"
+Spaces up to the next tab stop, or with lines selected, indent them.
+Shift+Tab takes the indent off.
+.TP
+.B Ctrl+A
+Select everything.
+.TP
+.B Ctrl+C
+Copy what is selected, or with nothing selected, the line.
+.TP
+.B Ctrl+X
+Cut what is selected, or the line.
+.TP
+.B Ctrl+V
+Paste.
+.TP
+.B Ctrl+Z
+Undo.
+.TP
+.B Ctrl+Y
+Redo.
+.TP
+.B Ctrl+K
+Delete the line.
+.TP
+.B Alt+N
+Select the word under the cursor, then each next place it is, with a
+cursor of its own.
+Whatever is typed then goes in at every cursor.
+.TP
+.B "Alt+Shift+Up, Alt+Shift+Down"
+Another cursor on the line above or below.
+On a Mac these and Alt+N need Option set to send Meta, in the terminal's
+settings.
+.TP
+.B Ctrl+R
+Start recording keys, or stop.
+.TP
+.B Ctrl+P
+Play back what was recorded.
+.B "*play 20"
+plays it twenty times.
+.TP
+.B Esc
+Let go of the selection and the other cursors, or with none, back to the
+browser.
+.SS The project map
+.TP
+.B "Up, Down, Left, Right, i, k, j, l"
+Move to the nearest file that way.
+.TP
+.B "Tab, Shift+Tab"
+The next and the previous file.
+.TP
+.B Enter
+Edit the file.
+.TP
+.B "1, 2, 3"
+Show or hide wikilinks, links and calls.
+.TP
+.B r
+Read the project again.
+.TP
+.B Esc
+Back to the browser.
+.SS The git window
+.TP
+.B "Up, Down, i, k"
+Move through the changes.
+.TP
+.B "Home, End, Shift+I, Shift+K"
+The first and the last row.
+.TP
+.B "Left, Right, j, l"
+Move between the buttons.
+.TP
+.B Enter
+Stage or unstage a file, or a whole list from its heading, or press a button.
+.TP
+.B Tab
+Edit the file.
+.TP
+.B "Page Up, Page Down, Ctrl+U, Ctrl+D"
+Scroll the diff.
+.TP
+.B r
+Ask git again.
+.TP
+.B "<, >"
+Narrower or wider.
+.TP
+.B Esc
+Back to the browser.

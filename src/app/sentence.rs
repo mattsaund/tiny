@@ -179,12 +179,35 @@ pub enum Sentence {
     Commit(String),
     Reload,
     Update,
+    /// `split`, or `split down`: a new pane beside this one, or below it.
+    Split {
+        stacked: bool,
+    },
+    /// `close`, `close others`, `close terminal`.
+    Close(Closing),
+    /// `terminal`: the terminal, shown and given the keyboard.
+    Terminal,
+    /// `record`: start recording keys, or stop.
+    Record,
+    /// `play`, `play 20 times`: play what was recorded.
+    Play(usize),
     /// A word tiny has no verb for: a plugin's command, perhaps, or a name to
     /// go to. Kept whole so either can be tried.
     Other {
         name: String,
         args: Vec<String>,
     },
+}
+
+/// What `close` closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closing {
+    /// The pane with the keyboard.
+    Pane,
+    /// Every pane but that one.
+    Others,
+    /// The terminal, and what is running in it.
+    Terminal,
 }
 
 // ---- the words ------------------------------------------------------------
@@ -202,6 +225,18 @@ pub(super) const DELETE: &[&str] = &["delete", "del", "remove", "rm", "trash", "
 pub(super) const NEW_FILE: &[&str] = &["new", "create", "make", "add", "touch"];
 pub(super) const NEW_FOLDER: &[&str] = &["mkdir", "md"];
 pub(super) const REPLACE: &[&str] = &["replace", "sub", "substitute", "swap", "change", "switch"];
+pub(super) const TERMINAL: &[&str] = &["terminal", "term", "shell", "console"];
+
+/// Ways of saying a new pane goes below rather than beside.
+const BELOW: &[&str] = &[
+    "down",
+    "below",
+    "under",
+    "underneath",
+    "stacked",
+    "horizontal",
+    "horizontally",
+];
 
 const LINE: &[&str] = &["line", "ln", "row"];
 const FUNCTION: &[&str] = &[
@@ -307,6 +342,13 @@ pub fn parse(line: &str) -> Sentence {
         "commit" => Sentence::Commit(after_words(line, polite + 1).to_string()),
         "reload" | "refresh" | "rescan" => Sentence::Reload,
         "update" | "upgrade" => Sentence::Update,
+        "split" | "vsplit" | "hsplit" => Sentence::Split {
+            stacked: v == "hsplit" || rest.iter().any(|w| w.is(BELOW)),
+        },
+        "close" | "unsplit" => close(rest),
+        _ if TERMINAL.contains(&v) => Sentence::Terminal,
+        "record" => Sentence::Record,
+        "play" | "replay" | "repeat" => play(rest),
         "config" | "settings" | "preferences" | "prefs" | "options" => Sentence::Goto {
             target: Target::Window(Window::Settings),
             within: None,
@@ -319,6 +361,29 @@ pub fn parse(line: &str) -> Sentence {
             name: first.text.clone(),
             args: rest.iter().map(|w| w.text.clone()).collect(),
         },
+    }
+}
+
+/// `close`, and what to.
+fn close(w: &[Word]) -> Sentence {
+    let w = without_articles(w);
+    if w.iter().any(|x| x.is(&["others", "other", "rest", "all"])) {
+        Sentence::Close(Closing::Others)
+    } else if w.iter().any(|x| x.is(TERMINAL)) {
+        Sentence::Close(Closing::Terminal)
+    } else {
+        Sentence::Close(Closing::Pane)
+    }
+}
+
+/// `play`, `play 20`, `play it 20 times`.
+fn play(w: &[Word]) -> Sentence {
+    let times = w.iter().find_map(|x| x.text.parse::<usize>().ok());
+    match times {
+        Some(0) => Sentence::Incomplete("play it how many times? play 20".into()),
+        Some(n) => Sentence::Play(n),
+        None if w.iter().any(|x| x.is(&["twice"])) => Sentence::Play(2),
+        None => Sentence::Play(1),
     }
 }
 
@@ -711,6 +776,11 @@ pub const VERBS: &[&str] = &[
     "reload",
     "settings",
     "update",
+    "split",
+    "close",
+    "terminal",
+    "record",
+    "play",
     "help",
     "line",
     "open",
@@ -746,6 +816,37 @@ mod tests {
 
     fn goes(target: Target, within: Option<Place>) -> Sentence {
         Sentence::Goto { target, within }
+    }
+
+    #[test]
+    fn panes_are_split_and_closed_in_words() {
+        assert_eq!(parse("split"), Sentence::Split { stacked: false });
+        assert_eq!(parse("split right"), Sentence::Split { stacked: false });
+        assert_eq!(parse("split down"), Sentence::Split { stacked: true });
+        assert_eq!(
+            parse("split below please"),
+            Sentence::Split { stacked: true }
+        );
+        assert_eq!(parse("close"), Sentence::Close(Closing::Pane));
+        assert_eq!(parse("close this pane"), Sentence::Close(Closing::Pane));
+        assert_eq!(parse("close the others"), Sentence::Close(Closing::Others));
+        assert_eq!(
+            parse("close all other panes"),
+            Sentence::Close(Closing::Others)
+        );
+        assert_eq!(parse("close terminal"), Sentence::Close(Closing::Terminal));
+        assert_eq!(parse("terminal"), Sentence::Terminal);
+        assert_eq!(parse("shell"), Sentence::Terminal);
+    }
+
+    #[test]
+    fn a_recording_is_played_as_many_times_as_said() {
+        assert_eq!(parse("record"), Sentence::Record);
+        assert_eq!(parse("play"), Sentence::Play(1));
+        assert_eq!(parse("play 20"), Sentence::Play(20));
+        assert_eq!(parse("play it 3 times"), Sentence::Play(3));
+        assert_eq!(parse("repeat twice"), Sentence::Play(2));
+        assert!(matches!(parse("play 0"), Sentence::Incomplete(_)));
     }
 
     #[test]
