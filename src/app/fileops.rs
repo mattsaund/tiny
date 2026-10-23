@@ -31,7 +31,7 @@ use crate::text::editor::Editor;
 
 use super::App;
 use super::mode::{Confirm, ConfirmKind, Focus, Mode};
-use super::parts::{display_name, safe_join};
+use super::parts::{display_name, plural, safe_join};
 use super::preview::Preview;
 
 /// Copy a directory and everything under it. Returns how many links were
@@ -85,6 +85,34 @@ pub(super) fn same_file(a: &Path, b: &Path) -> bool {
     {
         a.exists() && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
     }
+}
+
+/// How far a delete question counts the files under a folder before it says
+/// "this many and more": a `node_modules` is not worth walking to the end of
+/// just to ask a question.
+const DELETE_COUNT_LIMIT: usize = 10_000;
+
+/// How many files are under `dir`, however deep, up to `limit`, and whether
+/// there were more. Links are counted, not followed, which is how a delete
+/// treats them too.
+fn count_files(dir: &Path, limit: usize) -> (usize, bool) {
+    let mut n = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if n >= limit {
+                return (n, true);
+            }
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => stack.push(entry.path()),
+                _ => n += 1,
+            }
+        }
+    }
+    (n, false)
 }
 
 /// Where `path` is once `from` has moved to `to`: `to` itself, or the same
@@ -219,6 +247,7 @@ impl App {
         })?;
 
         self.tree.refresh_all();
+        self.size_cache.clear();
         self.reveal(&dst);
         let links = match left_out {
             0 => String::new(),
@@ -358,6 +387,7 @@ impl App {
                 .with_context(|| format!("cannot create {}", target.display()))?;
         }
         self.tree.refresh_all();
+        self.size_cache.clear();
         if is_dir {
             self.tree.expand(&target);
         }
@@ -415,6 +445,7 @@ impl App {
             split.pinned.preview.moved(from, target);
         }
         self.tree.refresh_all();
+        self.size_cache.clear();
         self.reveal(target);
         Ok(format!(
             "renamed {} to {}",
@@ -445,15 +476,24 @@ impl App {
             .with_context(|| format!("cannot delete {}", display_name(path)))?;
         let name = display_name(path);
         // Say how much is at stake before asking: deleting a folder takes
-        // everything under it.
+        // everything under it, however deep, and unsaved edits go with their
+        // files, since there will be nothing to save them to.
+        let unsaved = self
+            .buffers
+            .values()
+            .filter(|ed| ed.dirty && ed.path.starts_with(path))
+            .count();
         let message = if meta.is_dir() {
-            let n = fs::read_dir(path).map(|d| d.count()).unwrap_or(0);
-            format!(
-                "Delete folder {} and its {} entr{}?  (y/n)",
-                name,
-                n,
-                if n == 1 { "y" } else { "ies" }
-            )
+            let (n, more) = count_files(path, DELETE_COUNT_LIMIT);
+            let files = format!("{n}{} file{}", if more { "+" } else { "" }, plural(n));
+            let edits = match unsaved {
+                0 => String::new(),
+                1 => ", one with unsaved edits".into(),
+                n => format!(", {n} with unsaved edits"),
+            };
+            format!("Delete folder {name} and the {files} in it{edits}?  (y/n)")
+        } else if unsaved > 0 {
+            format!("Delete {name} and its unsaved edits?  (y/n)")
         } else {
             format!("Delete {name}?  (y/n)")
         };
@@ -486,13 +526,13 @@ impl App {
                 self.buffers.retain(|p, _| !p.starts_with(path));
                 let parent = path.parent().map(Path::to_path_buf);
                 self.tree.refresh_all();
-                self.rows = self.tree.flatten();
+                // Through `rebuild_rows`, so a folder's remembered size and the
+                // watcher's picture of the tree are both brought up to date.
+                self.rebuild_rows();
                 if let Some(i) = parent.and_then(|p| self.rows.iter().position(|r| r.path == p)) {
                     self.selected = i;
-                } else {
-                    self.selected = self.selected.min(self.rows.len().saturating_sub(1));
+                    self.sync_preview();
                 }
-                self.sync_preview();
                 // `*delete` can be run from the editor. If the pane holding the
                 // keyboard just lost its file, the tree is the only place left
                 // with something to point at.

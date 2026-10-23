@@ -50,9 +50,12 @@ pub(super) fn list_move(key: KeyEvent, at: usize, last: usize, page: usize) -> O
         KeyCode::Char('I') | KeyCode::Home => 0,
         KeyCode::Char('K') | KeyCode::End => last,
         KeyCode::Up | KeyCode::Char('i') => at.saturating_sub(1),
-        KeyCode::Down | KeyCode::Char('k') => (at + 1).min(last),
+        // Saturating: the help stores "the end" as the largest number there
+        // is, for the frame to bring back into range, and a key can arrive
+        // before that frame does.
+        KeyCode::Down | KeyCode::Char('k') => at.saturating_add(1).min(last),
         KeyCode::PageUp => at.saturating_sub(page),
-        KeyCode::PageDown => (at + page).min(last),
+        KeyCode::PageDown => at.saturating_add(page).min(last),
         _ => return None,
     })
 }

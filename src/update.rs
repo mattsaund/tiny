@@ -54,9 +54,21 @@ fn raw() -> String {
     )
 }
 
+/// What the release check found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// A newer tiny, by its version.
+    Newer(String),
+    /// The one running is the newest.
+    Newest,
+    /// GitHub could not be asked: offline, no `curl`, or no release yet.
+    /// Not the same as "nothing newer", and not to be reported as it.
+    Unknown,
+}
+
 /// The release check, running somewhere else with its answer still to come.
 pub struct Check {
-    answer: Receiver<Option<String>>,
+    answer: Receiver<Answer>,
 }
 
 impl Check {
@@ -64,22 +76,25 @@ impl Check {
     pub fn start() -> Self {
         let (tx, answer) = channel();
         std::thread::spawn(move || {
-            let newer = latest().filter(|v| is_newer(v, running()));
+            let found = match latest() {
+                Some(v) if is_newer(&v, running()) => Answer::Newer(v),
+                Some(_) => Answer::Newest,
+                None => Answer::Unknown,
+            };
             // The receiver is gone only if tiny has already quit, and then
             // nobody is left to tell.
-            let _ = tx.send(newer);
+            let _ = tx.send(found);
         });
         Self { answer }
     }
 
-    /// The answer, once there is one: `Some(Some(version))` for a newer tiny,
-    /// `Some(None)` for nothing newer, and `None` while it is still asking.
-    pub fn finished(&self) -> Option<Option<String>> {
+    /// The answer, once there is one, and `None` while it is still asking.
+    pub fn finished(&self) -> Option<Answer> {
         match self.answer.try_recv() {
-            Ok(newer) => Some(newer),
+            Ok(found) => Some(found),
             Err(TryRecvError::Empty) => None,
             // A thread that panicked has nothing to report either.
-            Err(TryRecvError::Disconnected) => Some(None),
+            Err(TryRecvError::Disconnected) => Some(Answer::Unknown),
         }
     }
 }

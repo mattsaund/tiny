@@ -473,7 +473,7 @@ impl App {
         match &mut self.mode {
             Mode::Help(scroll) => {
                 *scroll = if down {
-                    *scroll + 1
+                    scroll.saturating_add(1)
                 } else {
                     scroll.saturating_sub(1)
                 };
