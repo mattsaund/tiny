@@ -88,6 +88,21 @@ pub(super) struct Snapshot {
 
 /// One open file. `App` keeps a map of these keyed by path, so a buffer with
 /// unsaved edits survives arrowing away from it and back.
+/// Where one view of a file is: the cursor, the column it is trying to get
+/// back to, and the scroll.
+///
+/// A buffer keeps one of these as its own fields, which is all a file needs
+/// until it is open in two panes at once. Then each pane keeps a view, and
+/// the pane with the keyboard lends its view to the buffer while it types.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct View {
+    pub cursor_line: usize,
+    pub cursor_col: usize,
+    goal_col: usize,
+    pub scroll_y: usize,
+    pub scroll_x: usize,
+}
+
 #[derive(Debug)]
 pub struct Editor {
     /// Where `save` writes. Updated in place by a rename, so unsaved edits
@@ -260,12 +275,50 @@ impl Editor {
         (self.touched != usize::MAX).then(|| std::mem::replace(&mut self.touched, usize::MAX))
     }
 
+    /// The lowest line touched, without clearing it.
+    pub fn touched(&self) -> Option<usize> {
+        (self.touched != usize::MAX).then_some(self.touched)
+    }
+
+    /// Put back a mark that was taken, for a second reader.
+    ///
+    /// A file open in two panes is drawn twice a frame, and each pane keeps
+    /// its own highlighting state; the first draw takes the mark, and this is
+    /// how the second still learns about the edit.
+    pub fn retouch(&mut self, from: Option<usize>) {
+        if let Some(line) = from {
+            self.touched = self.touched.min(line);
+        }
+    }
+
     pub fn line_count(&self) -> usize {
         self.lines.len()
     }
 
     fn line_chars(&self, i: usize) -> usize {
         self.lines.get(i).map_or(0, |l| l.chars().count())
+    }
+
+    /// Where this view of the file is.
+    pub fn view(&self) -> View {
+        View {
+            cursor_line: self.cursor_line,
+            cursor_col: self.cursor_col,
+            goal_col: self.goal_col,
+            scroll_y: self.scroll_y,
+            scroll_x: self.scroll_x,
+        }
+    }
+
+    /// Take up `view`, kept inside the file as it is now: another pane may
+    /// have deleted the very lines it was on.
+    pub fn set_view(&mut self, view: View) {
+        self.cursor_line = view.cursor_line;
+        self.cursor_col = view.cursor_col;
+        self.goal_col = view.goal_col;
+        self.scroll_x = view.scroll_x;
+        self.clamp_cursor();
+        self.scroll_y = view.scroll_y.min(self.lines.len().saturating_sub(1));
     }
 
     /// Clamp the cursor into the buffer. Called after every mutation so no

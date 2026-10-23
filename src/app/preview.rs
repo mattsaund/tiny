@@ -109,7 +109,7 @@ pub(super) fn text_kind(path: &Path, prose_exts: &[String]) -> TextKind {
 }
 
 /// What the preview pane is showing for the current selection.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum Preview {
     /// A text file with an open buffer. Notes and prose render when the tree
     /// has focus and show raw source while being edited.
@@ -135,6 +135,7 @@ pub enum Preview {
         kind: String,
     },
     Unreadable(String),
+    #[default]
     Empty,
 }
 
@@ -156,6 +157,19 @@ pub(super) fn binary_kind(path: &Path) -> &'static str {
         Some("zip" | "gz" | "tar" | "xz" | "zst" | "7z") => "archive",
         Some("so" | "dll" | "dylib" | "o" | "a") => "object file",
         _ => "binary",
+    }
+}
+
+impl Preview {
+    /// The file or folder this shows, if it shows one.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Preview::Buffer { path, .. }
+            | Preview::Media { path, .. }
+            | Preview::Directory { path, .. }
+            | Preview::Binary { path, .. } => Some(path),
+            Preview::Unreadable(_) | Preview::Empty => None,
+        }
     }
 }
 
