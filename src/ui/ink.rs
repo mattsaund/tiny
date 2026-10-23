@@ -20,6 +20,7 @@
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthChar;
 
 use crate::config::{Glyphs, Palette};
 use crate::map::layout::{Channels, Placed};
@@ -48,12 +49,17 @@ const DOWN: u8 = 2;
 const LEFT: u8 = 4;
 const RIGHT: u8 = 8;
 
+/// The second cell of a character two columns wide: covered, and drawn as
+/// nothing, so the row stays as wide as the grid.
+const COVERED: char = '\0';
+
 /// The character grid the graph is composed on before it becomes a widget.
 ///
 /// Two layers: lines, held as direction bits so crossings merge themselves,
-/// and text, which is the boxes and always wins. Composing into a grid rather
-/// than emitting spans as we go is what lets an edge be drawn without knowing
-/// what else has already been drawn where it lands.
+/// and text, which is the boxes and wins over any line, and the folder
+/// headings, which any line wins over. Composing into a grid rather than
+/// emitting spans as we go is what lets an edge be drawn without knowing what
+/// else has already been drawn where it lands.
 pub(super) struct Ink {
     w: usize,
     h: usize,
@@ -136,15 +142,26 @@ impl Ink {
         }
         self.put(x0, y0 + 1, g.map_vertical, style);
         self.put(x1, y0 + 1, g.map_vertical, style);
-        for (i, c) in name.chars().enumerate() {
-            self.put(x0 + 1 + i as i32, y0 + 1, c, style);
-        }
+        self.write(x0 + 1, y0 + 1, name, style);
     }
 
-    /// Write a run of text starting at a cell, clipped at the right edge.
+    /// Write a run of text starting at a cell, clipped at the right edge, a
+    /// cell per column: a wide character takes two, the second covered.
     pub(super) fn write(&mut self, x: i32, y: i32, text: &str, style: InkStyle) {
-        for (i, c) in text.chars().enumerate() {
-            self.put(x + i as i32, y, c, style);
+        let mut x = x;
+        for c in text.chars() {
+            match c.width().unwrap_or(0) {
+                // A combining mark has no cell of its own to go in.
+                0 => continue,
+                1 => self.put(x, y, c, style),
+                _ if self.at(x + 1, y).is_some() => {
+                    self.put(x, y, c, style);
+                    self.put(x + 1, y, COVERED, style);
+                }
+                // Half of it would hang off the grid.
+                _ => self.put(x, y, ' ', style),
+            }
+            x += c.width().unwrap_or(0).max(1) as i32;
         }
     }
 
@@ -170,11 +187,20 @@ impl Ink {
             let mut run_style: Option<Style> = None;
             for x in 0..self.w {
                 let i = y * self.w + x;
+                let line = self.bits[i] != 0;
                 let (ch, style) = match self.text[i] {
+                    // A heading names the boxes under it; a line crossing it
+                    // keeps its cells, or the line would read as two.
+                    Some((_, InkStyle::Folder)) if line => {
+                        (g.map_lines[self.bits[i] as usize], pal.text)
+                    }
                     Some((ch, s)) => (ch, style_of(s)),
-                    None if self.bits[i] != 0 => (g.map_lines[self.bits[i] as usize], pal.text),
+                    None if line => (g.map_lines[self.bits[i] as usize], pal.text),
                     None => (' ', pal.dim),
                 };
+                if ch == COVERED {
+                    continue;
+                }
                 if run_style != Some(style) {
                     if !run.is_empty() {
                         spans.push(Span::styled(
@@ -312,7 +338,7 @@ mod tests {
     }
 
     /// Assert the drawn route has no dangling end: wherever a line points, it
-    /// must reach a line pointing back, an arrowhead, or a box.
+    /// must reach a line pointing back, or a box.
     ///
     /// This is the property the whole router exists to satisfy. A route that
     /// stops in empty space is one that went behind a box and came out the far

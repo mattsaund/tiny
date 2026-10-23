@@ -69,9 +69,8 @@ fn the_map_joins_linked_files_with_a_line() {
     open_map(&mut app);
     let out = screen(&mut app, 100, 34).join("\n");
     assert!(out.contains('─') || out.contains('│'), "lines:\n{out}");
-    // Only the arrow glyphs: the ascii set is `< > ^ v`, which are letters
-    // anywhere else on the screen. That the routing writes no glyph at all,
-    // in either set, is `ink`'s own test.
+    // No arrowheads: which way a connection runs is the strip's to say, in
+    // words. That the routing writes nothing but lines is `ink`'s own test.
     assert!(
         !['◂', '▸', '▴', '▾'].iter().any(|a| out.contains(*a)),
         "a connection is a plain line; which way it runs is in the strip below:\n{out}"
@@ -419,4 +418,44 @@ fn a_rebinding_survives_the_terminal_being_asked() {
         Window::Map,
         "what the user asked for still wins"
     );
+}
+
+#[test]
+fn r_reads_the_project_again_and_keeps_how_it_was_being_looked_at() {
+    let (_td, mut app) = linked_fixture();
+    open_map(&mut app);
+    app.on_key(ch('3'));
+    app.on_key(ch('/'));
+    type_str(&mut app, "notes");
+    app.on_key(k(KeyCode::Enter));
+    let before = app.project_map.as_ref().unwrap();
+    let (kinds, filter) = (before.kinds, before.filter().to_string());
+    let on = before.selected_node().map(|n| n.rel.clone());
+
+    app.on_key(ch('r'));
+    let after = app.project_map.as_ref().unwrap();
+    assert_eq!(after.kinds, kinds, "the kinds switched off stay off");
+    assert_eq!(after.filter(), filter, "the filter stays");
+    assert_eq!(
+        after.selected_node().map(|n| n.rel.clone()),
+        on,
+        "and the cursor"
+    );
+}
+
+#[test]
+fn files_that_share_a_name_are_told_apart_in_the_detail_strip() {
+    let (td, mut app) = fixture();
+    for dir in ["app", "ui"] {
+        fs::create_dir_all(td.path().join(dir)).unwrap();
+        fs::write(td.path().join(dir).join("mod.md"), "back to [[README]]\n").unwrap();
+    }
+    command(&mut app, "reload");
+    open_map(&mut app);
+    let view = app.project_map.as_ref().unwrap();
+    let names: Vec<&str> = (0..view.graph.nodes.len())
+        .filter(|i| view.graph.nodes[*i].name == "mod.md")
+        .map(|i| view.short_name(i))
+        .collect();
+    assert_eq!(names, ["app/mod.md", "ui/mod.md"]);
 }

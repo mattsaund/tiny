@@ -292,9 +292,14 @@ impl App {
                 return;
             }
             Intent::Rebuild => {
-                // Same path as opening it, so a rebuilt map is indistinguishable
-                // from a freshly opened one.
+                // Read the project again, and keep looking at it the way it
+                // was being looked at.
+                let old = self.project_map.take();
                 self.open_map();
+                if let (Some(old), Some(view)) = (old, &mut self.project_map) {
+                    view.carry_over(&old);
+                    self.status = format!("project map: {}", view.summary());
+                }
                 return;
             }
         }

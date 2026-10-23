@@ -34,8 +34,8 @@ use crate::map::view::ProjectMap;
 /// without either of them having to know the other was there.
 ///
 /// What is drawn is decided in three steps: `place` works out which boxes fit
-/// and where, `route` draws the line between each pair of them, and then the
-/// boxes are stamped over the top.
+/// and where, `route` draws the lines from the file under the cursor to each
+/// file it connects to, and then the boxes are stamped over the top.
 pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     if app.project_map.is_none() {
         return;
@@ -65,7 +65,9 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
             .border_set(pal.glyphs.border)
     };
     let inner = bordered().inner(rows[0]);
-    if inner.width < 8 || inner.height < 3 {
+    // A heading, the blank under it, and a box three rows tall: anything
+    // shorter shows no file at all, and would say the rest are offscreen.
+    if inner.width < 8 || inner.height < 5 {
         f.render_widget(bordered().border_style(pal.border_focus), rows[0]);
         return;
     }
@@ -240,13 +242,10 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
         .enumerate()
         .flat_map(|(i, k)| {
             let on = view.kinds[crate::map::view::kind_index(*k)];
-            [
-                Span::styled(
-                    format!("{}:{} ", i + 1, kind_word(*k)),
-                    if on { pal.text } else { pal.dim },
-                ),
-                Span::raw(""),
-            ]
+            [Span::styled(
+                format!("{}:{} ", i + 1, kind_word(*k)),
+                if on { pal.text } else { pal.dim },
+            )]
         })
         .collect();
 
@@ -269,9 +268,9 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
         let mut shown = 0;
         for e in edges {
             let other = if outgoing { e.to } else { e.from };
-            let name = view.graph.nodes[other].name.clone();
-            // The symbol is the point of a call edge. For an import or a link
-            // the label just repeats the file name, so it is left out.
+            let name = view.short_name(other).to_string();
+            // The symbol is the point of a call edge. For a link the label
+            // just repeats the file name, so it is left out.
             let detail = match (e.kind, e.count) {
                 (EdgeKind::Call, 1) => format!(":{}", e.label),
                 (EdgeKind::Call, n) => format!(":{} x{n}", e.label),

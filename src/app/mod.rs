@@ -486,12 +486,7 @@ impl App {
     /// Settings the link graph is built with, derived from the live config so
     /// `*set show_hidden true` changes the map too.
     pub fn graph_options(&self) -> graph::Options {
-        graph::Options {
-            ignore: self.config.search_ignore.clone(),
-            show_hidden: self.config.show_hidden,
-            prose_extensions: self.config.prose_extensions.clone(),
-            max_ambiguity: graph::MAX_AMBIGUITY,
-        }
+        graph::Options::from_config(&self.config)
     }
 
     /// Switch windows.
@@ -531,8 +526,7 @@ impl App {
     fn open_map(&mut self) {
         let root = self.root().to_path_buf();
         let options = self.graph_options();
-        let mut view = ProjectMap::build(&root, &options);
-        view.label_with(self.palette.glyphs.ellipsis);
+        let view = ProjectMap::build(&root, &options, self.palette.glyphs.ellipsis);
         self.status = if view.graph.nodes.is_empty() {
             "nothing on the map yet".into()
         } else {

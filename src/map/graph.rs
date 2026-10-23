@@ -73,7 +73,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use super::scan::{Facts, facts_of, node_kind, resolve_link};
+use super::scan::{Facts, Index, facts_of, node_kind, resolve_link};
 use tree_sitter_tags::TagsContext;
 
 use crate::parallel::par_map;
@@ -127,7 +127,7 @@ pub struct Edge {
     /// Index into `Graph::nodes`.
     pub to: usize,
     pub kind: EdgeKind,
-    /// What connects them: the link target, the module, or the symbol.
+    /// What connects them: the link target as written, or the symbol called.
     pub label: String,
     /// How many times, so a heavily-used call reads as a stronger line.
     pub count: usize,
@@ -141,6 +141,9 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     /// Merged and counted connections.
     pub edges: Vec<Edge>,
+    /// Whether the project had more files than [`MAX_FILES`], and the map
+    /// is of the first of them.
+    pub truncated: bool,
 }
 
 /// How many files may define a name before a call to it links to nothing.
@@ -151,6 +154,11 @@ pub struct Graph {
 /// places is not evidence about any of them.
 pub const MAX_AMBIGUITY: usize = 3;
 
+/// The most files the map reads. A project that big is a picture nobody can
+/// read either, and the map is built while you wait: opened on a home folder
+/// it would read everything in it first.
+pub const MAX_FILES: usize = 10_000;
+
 /// Build settings, derived from the live config by `App::graph_options` so a
 /// `*set` is reflected the next time the map is opened.
 #[derive(Debug, Clone)]
@@ -160,24 +168,34 @@ pub struct Options {
     pub show_hidden: bool,
     /// Extensions treated as [`NodeKind::Prose`].
     pub prose_extensions: Vec<String>,
-    /// A symbol defined in more files than this is too ambiguous to link.
-    pub max_ambiguity: usize,
 }
 
+impl Options {
+    /// The settings a config asks for.
+    ///
+    /// Logs are left out of prose here, though they read as prose: one is
+    /// rarely where a link is, and often the biggest file in a folder, read
+    /// whole on every open of the map for a `[[` it does not have.
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        Self {
+            ignore: config.search_ignore.clone(),
+            show_hidden: config.show_hidden,
+            prose_extensions: config
+                .prose_extensions
+                .iter()
+                .filter(|ext| !ext.eq_ignore_ascii_case("log"))
+                .cloned()
+                .collect(),
+        }
+    }
+}
+
+/// What the tests build with: the shipped config's settings, so a test map
+/// is the one a user gets.
+#[cfg(test)]
 impl Default for Options {
     fn default() -> Self {
-        Self {
-            ignore: [".git", "target", "node_modules", ".venv", "__pycache__"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
-            show_hidden: false,
-            prose_extensions: ["md", "txt", "rst", "org"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
-            max_ambiguity: MAX_AMBIGUITY,
-        }
+        Self::from_config(&crate::config::Config::default())
     }
 }
 
@@ -187,7 +205,8 @@ impl Default for Options {
 /// Cost is one read and one parse per file that has anything to find in it,
 /// so this is the single most expensive thing tiny does. It runs
 /// synchronously when the map is opened, which is why it is spread over
-/// every core, and why `scan::MAX_PARSE_BYTES` and the `ignore` list exist.
+/// every core, and why `scan::MAX_PARSE_BYTES`, [`MAX_FILES`] and the
+/// `ignore` list exist.
 ///
 /// Edges accumulate into a `BTreeMap` keyed by `(from, to, kind, label)` so
 /// repeats merge into a count rather than stacking up as duplicate lines,
@@ -199,38 +218,47 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
         ignore: opts.ignore.clone(),
         show_hidden: opts.show_hidden,
     };
-    let files = search::walk(root, &walk_opts);
+    let walked = search::walk_up_to(root, &walk_opts, MAX_FILES);
+    let files = walked.files;
+    let rels: Vec<String> = files
+        .iter()
+        .map(|path| {
+            path.strip_prefix(root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
 
     let kinds: Vec<NodeKind> = files
         .iter()
         .map(|path| node_kind(path, &opts.prose_extensions))
         .collect();
-    let facts: Vec<Facts> = par_map(&files, TagsContext::new, |ctx, i, path| {
-        facts_of(ctx, path, kinds[i])
+    let mut facts: Vec<Facts> = par_map(&files, TagsContext::new, |ctx, i, path| {
+        facts_of(ctx, path, &rels[i], kinds[i])
     });
+    forget_test_modules(&rels, &mut facts);
 
     let mut nodes: Vec<Node> = Vec::with_capacity(files.len());
-    let mut by_rel: HashMap<String, usize> = HashMap::with_capacity(files.len());
-    // Several files can share a stem (`mod.rs`, `index.js`), so this is a list.
-    let mut by_stem: HashMap<String, Vec<usize>> = HashMap::new();
-    for ((path, kind), f) in files.into_iter().zip(kinds).zip(&facts) {
-        let rel = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
+    let mut index = Index {
+        by_rel: HashMap::with_capacity(files.len()),
+        by_name: HashMap::new(),
+        rels: rels.iter().map(|r| r.to_lowercase()).collect(),
+    };
+    for (((path, rel), kind), f) in files.into_iter().zip(rels).zip(kinds).zip(&facts) {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| rel.clone());
         let id = nodes.len();
-        by_rel.insert(rel.clone(), id);
-        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-            by_stem
-                .entry(stem.to_ascii_lowercase())
-                .or_default()
-                .push(id);
-        }
+        index.by_rel.insert(rel.clone(), id);
+        // Several files can share a name (`mod.rs`, `index.md`), so this is
+        // a list.
+        index
+            .by_name
+            .entry(name.to_lowercase())
+            .or_default()
+            .push(id);
         nodes.push(Node {
             rel,
             name,
@@ -257,27 +285,32 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
             let from_dir = nodes[from].path.parent();
 
             for (target, kind) in &f.links {
-                if let Some(to) = resolve_link(target, root, from_dir, &by_rel, &by_stem)
+                if let Some(to) = resolve_link(target, *kind, root, from_dir, &index)
                     && to != from
                 {
                     out.push((*kind, to, target.clone(), 1));
                 }
             }
 
-            for (sym, count) in &f.calls {
+            for (sym, call) in &f.calls {
+                // A bare call to a name the file defines itself is a call to
+                // its own; only one that says where it goes can mean another.
+                if !call.qualified && f.defines.contains(sym) {
+                    continue;
+                }
                 let Some(defs) = definers.get(sym.as_str()) else {
                     continue;
                 };
                 // Too many definitions means the name says nothing about which
                 // file was meant, so it produces no edge at all.
-                if defs.len() > opts.max_ambiguity {
+                if defs.len() > MAX_AMBIGUITY {
                     continue;
                 }
                 for &to in defs {
                     if to == from {
                         continue; // calling your own function is not a link
                     }
-                    out.push((EdgeKind::Call, to, sym.clone(), *count));
+                    out.push((EdgeKind::Call, to, sym.clone(), call.count));
                 }
             }
             out
@@ -302,7 +335,53 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
         })
         .collect();
 
-    Graph { nodes, edges }
+    Graph {
+        nodes,
+        edges,
+        truncated: walked.truncated,
+    }
+}
+
+/// Take what the test modules a file declares in files of their own say out
+/// of the picture: `#[cfg(test)] mod testing;` in `map/mod.rs` makes
+/// `map/testing.rs` a test, and `#[cfg(test)] mod tests;` in `app/mod.rs`
+/// makes every file under `app/tests/` one.
+fn forget_test_modules(rels: &[String], facts: &mut [Facts]) {
+    let mut tests: Vec<String> = Vec::new();
+    for (rel, f) in rels.iter().zip(facts.iter()) {
+        // A module's children live beside `mod.rs`, `lib.rs` and `main.rs`,
+        // and in a folder named after any other file.
+        let (dir, file) = rel.rsplit_once('/').unwrap_or(("", rel));
+        let stem = file.strip_suffix(".rs").unwrap_or(file);
+        let parent = match (dir, stem) {
+            (_, "mod" | "lib" | "main") => dir.to_string(),
+            ("", stem) => stem.to_string(),
+            (dir, stem) => format!("{dir}/{stem}"),
+        };
+        for name in &f.test_modules {
+            let at = if parent.is_empty() {
+                name.clone()
+            } else {
+                format!("{parent}/{name}")
+            };
+            tests.push(at);
+        }
+    }
+    if tests.is_empty() {
+        return;
+    }
+    for (rel, f) in rels.iter().zip(facts.iter_mut()) {
+        let rel = rel.strip_suffix(".rs").unwrap_or(rel);
+        let is_test = tests.iter().any(|t| {
+            rel == t
+                || rel
+                    .strip_prefix(t.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+        });
+        if is_test {
+            *f = Facts::default();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -515,7 +594,7 @@ mod tests {
     // ---- rust and javascript ---------------------------------------------
 
     #[test]
-    fn rust_mod_declarations_and_calls_become_edges() {
+    fn a_rust_call_through_a_module_path_is_an_edge() {
         let td = tempfile::tempdir().unwrap();
         write(
             td.path(),
@@ -627,7 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn rust_use_statements_are_import_edges_too() {
+    fn a_use_statement_is_not_an_edge_but_the_call_through_it_is() {
         let td = tempfile::tempdir().unwrap();
         write(
             td.path(),
@@ -681,6 +760,191 @@ mod tests {
     }
 
     // ---- shape ------------------------------------------------------------
+
+    #[test]
+    fn a_test_module_declared_near_the_top_does_not_take_the_file_with_it() {
+        // `#[cfg(test)] mod tests;` sat above everything in the file, and
+        // the file was cut there, so none of its calls were seen.
+        let td = tempfile::tempdir().unwrap();
+        write(
+            td.path(),
+            "src/app.rs",
+            "//! The app.\n#[cfg(test)]\nmod tests;\n\npub fn run() {\n    let _ = helpers::compute();\n}\n",
+        );
+        write(
+            td.path(),
+            "src/helpers.rs",
+            "pub fn compute() -> i32 {\n    1\n}\n",
+        );
+        let g = graph(&td);
+        assert!(
+            has(&g, "src/app.rs", "src/helpers.rs", EdgeKind::Call),
+            "{:?}",
+            edges(&g)
+        );
+    }
+
+    #[test]
+    fn only_the_test_item_is_taken_out_wherever_it_is() {
+        let text = "fn a() {}\n#[cfg(test)]\nfn helper() { let s = \"}\"; let c = '{'; }\nfn b() { real(); }\n// #[cfg(test)] in a comment\n";
+        let (body, modules) = super::super::scan::strip_tests(super::super::scan::Lang::Rust, text);
+        assert!(
+            body.contains("fn a()") && body.contains("fn b() { real(); }"),
+            "{body}"
+        );
+        assert!(!body.contains("helper"), "{body}");
+        assert!(modules.is_empty());
+        assert_eq!(
+            body.lines().count(),
+            text.lines().count(),
+            "lines keep their numbers"
+        );
+    }
+
+    #[test]
+    fn a_test_module_in_a_file_of_its_own_is_a_test() {
+        let td = tempfile::tempdir().unwrap();
+        write(
+            td.path(),
+            "src/map/mod.rs",
+            "#[cfg(test)]\nmod testing;\npub fn draw() {}\n",
+        );
+        write(td.path(), "src/map/testing.rs", "pub fn write() {}\n");
+        write(
+            td.path(),
+            "src/app.rs",
+            "fn go() {\n    write();\n}\npub fn write() {}\n",
+        );
+        let g = graph(&td);
+        assert!(
+            !has(&g, "src/app.rs", "src/map/testing.rs", EdgeKind::Call),
+            "a test helper is not where a real call goes: {:?}",
+            edges(&g)
+        );
+    }
+
+    #[test]
+    fn a_project_inside_a_folder_called_tests_is_not_all_tests() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("tests").join("app");
+        write(&root, "lib.py", "def compute():\n    return 1\n");
+        write(&root, "main.py", "compute()\n");
+        let g = build(&root, &Options::default());
+        assert!(
+            has(&g, "main.py", "lib.py", EdgeKind::Call),
+            "{:?}",
+            edges(&g)
+        );
+    }
+
+    #[test]
+    fn a_wikilink_to_a_heading_links_the_note() {
+        let td = tempfile::tempdir().unwrap();
+        write(
+            td.path(),
+            "a.md",
+            "[[design#Goals|the goals]] and [[design#^block]]\n",
+        );
+        write(td.path(), "design.md", "# Goals\n");
+        let g = graph(&td);
+        assert!(
+            has(&g, "a.md", "design.md", EdgeKind::Wikilink),
+            "{:?}",
+            edges(&g)
+        );
+    }
+
+    #[test]
+    fn a_link_to_a_name_with_spaces_finds_it_either_way_it_is_written() {
+        let td = tempfile::tempdir().unwrap();
+        write(td.path(), "a.md", "[one](My%20note.md)\n");
+        write(td.path(), "b.md", "[two](<My note.md>)\n");
+        write(td.path(), "My note.md", "hi\n");
+        let g = graph(&td);
+        assert!(
+            has(&g, "a.md", "My note.md", EdgeKind::Link),
+            "{:?}",
+            edges(&g)
+        );
+        assert!(
+            has(&g, "b.md", "My note.md", EdgeKind::Link),
+            "{:?}",
+            edges(&g)
+        );
+    }
+
+    #[test]
+    fn a_name_is_found_the_way_it_was_meant() {
+        let td = tempfile::tempdir().unwrap();
+        write(
+            td.path(),
+            "start.md",
+            "[[v1.2 notes]] [[diagram]] [[a/index]] [[Über]]\n[gone](../../other/design.md)\n",
+        );
+        write(td.path(), "v1.2 notes.md", "a dot is not an extension\n");
+        write(td.path(), "notes/diagram.md", "the note, not the picture\n");
+        std::fs::write(td.path().join("diagram.png"), [0x89u8, b'P', b'N', b'G']).unwrap();
+        write(td.path(), "a/index.md", "a\n");
+        write(td.path(), "b/index.md", "b\n");
+        write(td.path(), "über.md", "case folds past ASCII\n");
+        write(td.path(), "design.md", "not where that path goes\n");
+        let g = graph(&td);
+        for to in ["v1.2 notes.md", "notes/diagram.md", "a/index.md", "über.md"] {
+            assert!(
+                has(&g, "start.md", to, EdgeKind::Wikilink),
+                "{to}: {:?}",
+                edges(&g)
+            );
+        }
+        assert!(
+            !has(&g, "start.md", "design.md", EdgeKind::Link),
+            "a path that leads nowhere links nowhere: {:?}",
+            edges(&g)
+        );
+    }
+
+    #[test]
+    fn building_something_is_calling_it() {
+        let td = tempfile::tempdir().unwrap();
+        write(td.path(), "parser.js", "export class Parser {}\n");
+        write(td.path(), "app.js", "const p = new Parser();\n");
+        write(td.path(), "config.rs", "pub struct Config;\n");
+        write(
+            td.path(),
+            "main.rs",
+            "fn main() {\n    let _ = Config::new();\n    let _ = helpers::parse::<u8>();\n}\n",
+        );
+        write(
+            td.path(),
+            "helpers.rs",
+            "pub fn parse<T>() -> T { todo!() }\n",
+        );
+        let g = graph(&td);
+        assert!(
+            has(&g, "app.js", "parser.js", EdgeKind::Call),
+            "{:?}",
+            edges(&g)
+        );
+        assert!(
+            has(&g, "main.rs", "config.rs", EdgeKind::Call),
+            "{:?}",
+            edges(&g)
+        );
+        assert!(
+            has(&g, "main.rs", "helpers.rs", EdgeKind::Call),
+            "the turbofish: {:?}",
+            edges(&g)
+        );
+    }
+
+    #[test]
+    fn a_bare_call_to_a_files_own_function_stays_its_own() {
+        let td = tempfile::tempdir().unwrap();
+        write(td.path(), "a.py", "def load():\n    pass\n\nload()\n");
+        write(td.path(), "b.py", "def load():\n    pass\n");
+        let g = graph(&td);
+        assert!(!has(&g, "a.py", "b.py", EdgeKind::Call), "{:?}", edges(&g));
+    }
 
     #[test]
     fn every_file_becomes_a_node() {

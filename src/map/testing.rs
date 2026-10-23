@@ -32,7 +32,7 @@ pub(crate) fn fixture() -> (tempfile::TempDir, ProjectMap) {
     write(td.path(), "src/utils.py", "def load():\n    return 1\n");
     write(td.path(), "src/main.py", "import utils\nutils.load()\n");
     write(td.path(), "notes/alone.md", "nothing points here\n");
-    let view = ProjectMap::build(td.path(), &graph::Options::default());
+    let view = ProjectMap::build(td.path(), &graph::Options::default(), "…");
     (td, view)
 }
 
