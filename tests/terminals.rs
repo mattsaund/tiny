@@ -36,7 +36,9 @@ const PATIENCE: Duration = Duration::from_secs(30);
 struct Tiny {
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
-    keys: Box<dyn Write + Send>,
+    /// Shared with the reader, which answers what the program asks the
+    /// terminal, as a terminal does.
+    keys: Arc<Mutex<Box<dyn Write + Send>>>,
     screen: Arc<Mutex<vt100::Parser>>,
     reader: Option<JoinHandle<()>>,
     project: tempfile::TempDir,
@@ -146,18 +148,30 @@ impl Tiny {
         drop(pty.slave);
 
         let screen = Arc::new(Mutex::new(vt100::Parser::new(nz(rows), nz(cols), 0)));
+        let keys = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
         let mut from_tiny = pty.master.try_clone_reader().unwrap();
         let into = Arc::clone(&screen);
+        let answer = Arc::clone(&keys);
         let reader = std::thread::spawn(move || {
             let mut buf = [0u8; 16 * 1024];
             loop {
-                match from_tiny.read(&mut buf) {
+                let n = match from_tiny.read(&mut buf) {
                     Ok(0) | Err(_) => break,
-                    Ok(n) => into.lock().unwrap().process(&buf[..n]),
+                    Ok(n) => n,
+                };
+                let mut parser = into.lock().unwrap();
+                parser.process(&buf[..n]);
+                // Where the cursor is, when asked. Windows' ConPTY asks
+                // before it shows anything at all, and waits for the answer.
+                if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
+                    let (row, col) = parser.screen().cursor_position();
+                    let reply = format!("\x1b[{};{}R", row + 1, col + 1);
+                    let mut keys = answer.lock().unwrap();
+                    let _ = keys.write_all(reply.as_bytes());
+                    let _ = keys.flush();
                 }
             }
         });
-        let keys = pty.master.take_writer().unwrap();
         Self {
             master: pty.master,
             child,
@@ -171,8 +185,9 @@ impl Tiny {
 
     /// Type `bytes` the way a terminal would send them.
     fn send(&mut self, bytes: &str) {
-        self.keys.write_all(bytes.as_bytes()).unwrap();
-        self.keys.flush().unwrap();
+        let mut keys = self.keys.lock().unwrap();
+        keys.write_all(bytes.as_bytes()).unwrap();
+        keys.flush().unwrap();
     }
 
     /// The screen as text, a line per row.
@@ -610,8 +625,10 @@ fn it_works_inside_tmux_and_screen() {
     // not installed; the CI workflow installs both.
     let socket = format!("tiny-tests-{}", std::process::id());
     // Without one, screen opens on a page of its own that waits for a key.
+    // And Ctrl+S and Ctrl+Q go to the program, not to flow control, the way
+    // anyone who uses them inside screen has it set up.
     let rc = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(rc.path(), "startup_message off\n").unwrap();
+    std::fs::write(rc.path(), "startup_message off\ndefflow off\n").unwrap();
     let rc = rc.path().to_string_lossy().into_owned();
     let multiplexers: [(&str, Vec<&str>); 2] = [
         // UTF-8 whatever the locale, no config, a server of its own.
@@ -627,10 +644,22 @@ fn it_works_inside_tmux_and_screen() {
                 "new-session",
             ],
         ),
-        // UTF-8, no flow control to take Ctrl+S and Ctrl+Q, a session of its own.
+        // UTF-8, a session of its own, and a terminal that leaves Ctrl+S and
+        // Ctrl+Q alone too (`stty -ixon`), or it stops at the first Ctrl+S.
         (
             "screen",
-            vec!["screen", "-U", "-fn", "-c", &rc, "-S", &socket],
+            vec![
+                "sh",
+                "-c",
+                "stty -ixon; exec \"$0\" \"$@\"",
+                "screen",
+                "-U",
+                "-fn",
+                "-c",
+                &rc,
+                "-S",
+                &socket,
+            ],
         ),
     ];
     for (name, through) in multiplexers {
