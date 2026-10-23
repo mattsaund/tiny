@@ -1084,3 +1084,49 @@ fn a_gap_cut_off_by_the_top_of_the_pane_still_says_how_long_it_is() {
         "the left column says what the gap is, even though it began above:\n{out}"
     );
 }
+
+#[test]
+fn a_click_picks_a_change_and_a_second_stages_it() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (_td, mut app) = repo();
+    source(&mut app);
+    let rows = screen(&mut app, 120, 30);
+    let (x, y) = rows
+        .iter()
+        .enumerate()
+        .find_map(|(y, r)| {
+            r.find("scratch.txt")
+                .map(|i| (r[..i].chars().count() as u16, y as u16))
+        })
+        .expect("scratch.txt in the list");
+    let click = |app: &mut App| {
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            app.on_mouse(MouseEvent {
+                kind,
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+    };
+    click(&mut app);
+    assert!(
+        app.git
+            .current()
+            .is_some_and(|(c, staged)| c.path == "scratch.txt" && !staged),
+        "picked, not staged"
+    );
+    click(&mut app);
+    assert!(
+        app.git
+            .status
+            .staged
+            .iter()
+            .any(|c| c.path == "scratch.txt"),
+        "the second click stages it: {}",
+        app.status
+    );
+}

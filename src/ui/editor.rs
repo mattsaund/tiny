@@ -33,7 +33,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::parts::{FORMAT_LIMIT, digits, mark_query};
 
-use crate::app::{App, TextKind};
+use crate::app::{App, TextHits, TextKind};
 use crate::config::Palette;
 use crate::text::editor::Editor;
 use crate::text::markdown;
@@ -51,6 +51,8 @@ use crate::text::tabs;
 /// reversed span. That means converting the character-indexed cursor column
 /// into a *display width* offset, accounting for the horizontal scroll, which
 /// is what the `before` / `skipped` width subtraction is doing.
+///
+/// Returns where each line was drawn, for the mouse.
 pub(super) fn draw_editor(
     f: &mut Frame,
     app: &mut App,
@@ -59,10 +61,10 @@ pub(super) fn draw_editor(
     kind: TextKind,
     focused: bool,
     query: Option<&Matcher>,
-) {
+) -> Option<TextHits> {
     let pal = app.palette;
     if !app.buffers.contains_key(path) {
-        return;
+        return None;
     }
     let height = inner.height as usize;
     app.last_edit_height = height;
@@ -206,6 +208,27 @@ pub(super) fn draw_editor(
         lines.push(Line::from(spans));
     }
     f.render_widget(Paragraph::new(lines).style(pal.text), inner);
+    let hits = TextHits {
+        area: Rect {
+            x: inner.x + gutter as u16,
+            width: inner.width.saturating_sub(gutter as u16),
+            ..inner
+        },
+        scroll_x,
+        rows: rows
+            .iter()
+            .skip(top)
+            .take(height)
+            .map(|row| match row {
+                Row::Raw(n) => (*n, true),
+                // As near as a formatted row can say: the line as far down
+                // its block as the row is.
+                Row::Made {
+                    block, nth, end, ..
+                } => ((block + nth).min(end - 1), false),
+            })
+            .collect(),
+    };
 
     if focused {
         // Place the real terminal cursor, so it blinks where the user expects.
@@ -220,13 +243,14 @@ pub(super) fn draw_editor(
         let x = inner.x + gutter as u16 + vis as u16;
         let y = match cursor_row {
             Some(r) => inner.y + r as u16,
-            None if live => return,
+            None if live => return Some(hits),
             None => inner.y + (cur_line.saturating_sub(scroll_y)) as u16,
         };
         if x < inner.x + inner.width && y < inner.y + inner.height {
             f.set_cursor_position((x, y));
         }
     }
+    Some(hits)
 }
 
 /// One drawn row of a markdown buffer being edited.
@@ -239,6 +263,8 @@ enum Row {
     Made {
         line: Option<usize>,
         block: usize,
+        /// Where the block ends, the line after its last.
+        end: usize,
         nth: usize,
         content: Line<'static>,
     },
@@ -335,6 +361,7 @@ fn live_rows(
             rows.push(Row::Made {
                 line: (i == 0).then_some(b.start),
                 block: b.start,
+                end: b.end,
                 nth: i,
                 content,
             });

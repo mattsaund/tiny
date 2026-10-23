@@ -317,6 +317,49 @@ fn tab_stops_where_the_candidates_stop_agreeing() {
 }
 
 #[test]
+fn tab_again_goes_round_what_the_candidates_could_be() {
+    let (td, mut app) = fixture();
+    fs::write(td.path().join("report-one.md"), "").unwrap();
+    fs::write(td.path().join("report-two.md"), "").unwrap();
+    command(&mut app, "reload");
+    command_bar(&mut app);
+    type_str(&mut app, "copy rep");
+    let line = |app: &App| match &app.mode {
+        Mode::Bar(b) => b.input.clone(),
+        _ => panic!("the bar closed"),
+    };
+    app.on_key(k(KeyCode::Tab));
+    assert_eq!(line(&app), "*copy report-", "first what they share");
+    app.on_key(k(KeyCode::Tab));
+    assert_eq!(line(&app), "*copy report-one.md");
+    assert!(app.status.starts_with("1 of 2"), "{}", app.status);
+    app.on_key(k(KeyCode::Tab));
+    assert_eq!(line(&app), "*copy report-two.md");
+    app.on_key(k(KeyCode::Tab));
+    assert_eq!(line(&app), "*copy report-", "and back to what was typed");
+}
+
+#[test]
+fn tab_knows_the_newer_verbs_and_the_values_of_a_setting() {
+    let (_td, mut app) = fixture();
+    assert_eq!(completed(&mut app, "split d"), "split down");
+    assert_eq!(completed(&mut app, "close o"), "close others");
+    assert_eq!(completed(&mut app, "close t"), "close terminal");
+    assert_eq!(completed(&mut app, "set glyphs as"), "set glyphs ascii");
+    // `block` and `bar` share no more than the `b`: the first of them.
+    assert_eq!(
+        completed(&mut app, "set cursor_shape to b"),
+        "set cursor_shape to block"
+    );
+    assert_eq!(
+        completed(&mut app, "set cursor_shape to ba"),
+        "set cursor_shape to bar"
+    );
+    assert_eq!(completed(&mut app, "set borders f"), "set borders false");
+    assert_eq!(completed(&mut app, "ter"), "terminal");
+}
+
+#[test]
 fn tab_reads_the_same_verbs_the_command_does() {
     let (_td, mut app) = fixture();
     // Spellings the reading knows, which Tab once did not.

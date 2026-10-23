@@ -27,7 +27,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use anyhow::{Context, Result};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 /// How far back the screen is kept, in lines, for the wheel to scroll to.
@@ -227,6 +227,31 @@ impl Shell {
         }
     }
 
+    /// Hand the program in the terminal a mouse event at `column` and `row`
+    /// of its screen, counted from 0, when it asked for the mouse, spelled
+    /// the way it asked. Returns whether it asked: one that did not gets
+    /// nothing, and the wheel scrolls back through it instead.
+    pub fn mouse(
+        &mut self,
+        kind: MouseEventKind,
+        column: u16,
+        row: u16,
+        mods: KeyModifiers,
+    ) -> bool {
+        let screen = self.parser.screen();
+        let (mode, encoding) = (
+            screen.mouse_protocol_mode(),
+            screen.mouse_protocol_encoding(),
+        );
+        if mode == vt100::MouseProtocolMode::None {
+            return false;
+        }
+        if let Some(bytes) = mouse_bytes(mode, encoding, kind, column, row, mods) {
+            self.write(&bytes);
+        }
+        true
+    }
+
     /// Send pasted text, bracketed when the program reading it asked for
     /// that, so it knows a paste from typing.
     pub fn paste(&mut self, text: &str) {
@@ -398,6 +423,74 @@ pub fn bytes_for(key: KeyEvent, app_cursor: bool) -> Vec<u8> {
     out
 }
 
+/// What a terminal sends for a mouse event, in the `mode` and `encoding`
+/// the program reading it asked for, or nothing when the mode does not
+/// report that kind of event.
+fn mouse_bytes(
+    mode: vt100::MouseProtocolMode,
+    encoding: vt100::MouseProtocolEncoding,
+    kind: MouseEventKind,
+    column: u16,
+    row: u16,
+    mods: KeyModifiers,
+) -> Option<Vec<u8>> {
+    use vt100::{MouseProtocolEncoding, MouseProtocolMode};
+    let button = |b: MouseButton| match b {
+        MouseButton::Left => 0u8,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+    };
+    // Which button (a motion is 32 more), and whether it went down.
+    let (code, down) = match kind {
+        MouseEventKind::Down(b) if mode != MouseProtocolMode::None => (button(b), true),
+        MouseEventKind::Up(b) if mode != MouseProtocolMode::Press => (button(b), false),
+        MouseEventKind::Drag(b)
+            if matches!(
+                mode,
+                MouseProtocolMode::ButtonMotion | MouseProtocolMode::AnyMotion
+            ) =>
+        {
+            (button(b) + 32, true)
+        }
+        MouseEventKind::Moved if mode == MouseProtocolMode::AnyMotion => (35, true),
+        MouseEventKind::ScrollUp => (64, true),
+        MouseEventKind::ScrollDown => (65, true),
+        _ => return None,
+    };
+    let code =
+        code + if mods.contains(KeyModifiers::SHIFT) {
+            4
+        } else {
+            0
+        } + if mods.contains(KeyModifiers::ALT) {
+            8
+        } else {
+            0
+        } + if mods.contains(KeyModifiers::CONTROL) {
+            16
+        } else {
+            0
+        };
+    let (x, y) = (u32::from(column) + 1, u32::from(row) + 1);
+    if encoding == MouseProtocolEncoding::Sgr {
+        let end = if down { 'M' } else { 'm' };
+        return Some(format!("\x1b[<{code};{x};{y}{end}").into_bytes());
+    }
+    // The older spellings have no release of a button by name: a release
+    // is button 3.
+    let code = if down { code } else { (code & !3) | 3 };
+    let mut out = b"\x1b[M".to_vec();
+    for n in [u32::from(code) + 32, x + 32, y + 32] {
+        if encoding == MouseProtocolEncoding::Utf8 {
+            let c = char::from_u32(n).unwrap_or(' ');
+            out.extend_from_slice(c.to_string().as_bytes());
+        } else {
+            out.push(n.min(255) as u8);
+        }
+    }
+    Some(out)
+}
+
 /// The control character Ctrl and `c` make, when it makes one.
 fn control(c: char) -> Option<u8> {
     match c {
@@ -448,6 +541,44 @@ mod tests {
             bytes_for(key(KeyCode::Up, none), true),
             b"\x1bOA",
             "what a full-screen program asks for"
+        );
+    }
+
+    #[test]
+    fn the_mouse_is_spelled_the_way_the_program_asked() {
+        use vt100::{MouseProtocolEncoding as E, MouseProtocolMode as M};
+        let none = KeyModifiers::NONE;
+        let left = MouseButton::Left;
+        let spell = |m, e, kind| mouse_bytes(m, e, kind, 4, 2, none);
+        assert_eq!(
+            spell(M::PressRelease, E::Sgr, MouseEventKind::Down(left)).unwrap(),
+            b"\x1b[<0;5;3M"
+        );
+        assert_eq!(
+            spell(M::PressRelease, E::Sgr, MouseEventKind::Up(left)).unwrap(),
+            b"\x1b[<0;5;3m"
+        );
+        assert_eq!(
+            spell(M::Press, E::Default, MouseEventKind::Down(left)).unwrap(),
+            b"\x1b[M\x20\x25\x23"
+        );
+        assert_eq!(
+            spell(M::PressRelease, E::Default, MouseEventKind::Up(left)).unwrap(),
+            b"\x1b[M\x23\x25\x23",
+            "a release is button 3"
+        );
+        assert_eq!(
+            spell(M::Press, E::Sgr, MouseEventKind::ScrollDown).unwrap(),
+            b"\x1b[<65;5;3M"
+        );
+        assert_eq!(spell(M::Press, E::Sgr, MouseEventKind::Up(left)), None);
+        assert_eq!(
+            spell(M::PressRelease, E::Sgr, MouseEventKind::Drag(left)),
+            None
+        );
+        assert_eq!(
+            spell(M::ButtonMotion, E::Sgr, MouseEventKind::Drag(left)).unwrap(),
+            b"\x1b[<32;5;3M"
         );
     }
 

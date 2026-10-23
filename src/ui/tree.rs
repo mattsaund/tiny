@@ -43,6 +43,7 @@ pub(super) fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         Span::raw(" "),
     ];
     let inner = pane(f, area, title, focused, app);
+    app.last_tree_inner = Some(inner);
 
     let height = inner.height as usize;
     app.last_tree_height = height;
@@ -141,7 +142,10 @@ pub(super) fn results_height(area: Rect, hits: usize) -> u16 {
 /// Note that scrolling is computed into a local, not written back to `b`: the
 /// bar is borrowed immutably here, and the offset is cheap to recompute each
 /// frame.
-pub(super) fn draw_results(f: &mut Frame, app: &App, area: Rect, b: &Bar) {
+///
+/// Returns where the results were drawn, and how far down the list the first
+/// one shown is, for the mouse.
+pub(super) fn draw_results(f: &mut Frame, app: &App, area: Rect, b: &Bar) -> Option<(Rect, usize)> {
     let pal = app.palette;
     let tab_width = app.config.tab_width;
     let title = vec![
@@ -159,7 +163,7 @@ pub(super) fn draw_results(f: &mut Frame, app: &App, area: Rect, b: &Bar) {
     let inner = pane(f, area, title, true, app);
     let height = inner.height as usize;
     if height == 0 || inner.width == 0 {
-        return;
+        return None;
     }
 
     if b.results.is_empty() {
@@ -174,7 +178,7 @@ pub(super) fn draw_results(f: &mut Frame, app: &App, area: Rect, b: &Bar) {
             Paragraph::new(Line::from(Span::styled(msg, pal.dim))),
             inner,
         );
-        return;
+        return None;
     }
 
     // Keep the highlighted result on screen, from the top until it has to
@@ -221,4 +225,5 @@ pub(super) fn draw_results(f: &mut Frame, app: &App, area: Rect, b: &Bar) {
         lines.push(Line::from(spans));
     }
     f.render_widget(Paragraph::new(lines), inner);
+    Some((inner, scroll))
 }

@@ -58,6 +58,16 @@ pub(super) fn editing_action(keymap: &Keymap, key: &KeyEvent) -> (Option<Action>
     }
 }
 
+/// What the status line says about a word Tab finished: which of how many,
+/// or that it is back to the word as typed.
+fn finished(word: &str, which: usize, of: usize) -> String {
+    match (which, of) {
+        (0, _) => format!("back to {word}, Tab goes round again"),
+        (_, 1) => word.to_string(),
+        _ => format!("{word}, {which} of {of}, Tab for the next"),
+    }
+}
+
 /// The cursor movements a key can be bound to, each with the version that
 /// selects as it goes.
 fn movement(action: Action) -> Option<[fn(&mut Editor); 2]> {
@@ -96,7 +106,7 @@ pub(super) fn edit_with_key(
     key: KeyEvent,
     page: usize,
     tab_width: usize,
-) -> Option<&'static str> {
+) -> Option<String> {
     if let Some(action) = action {
         if let Some([plain, selecting]) = movement(action) {
             if select {
@@ -107,8 +117,8 @@ pub(super) fn edit_with_key(
             return None;
         }
         match action {
-            Action::EditorUndo => return (!ed.undo()).then_some("nothing to undo"),
-            Action::EditorRedo => return (!ed.redo()).then_some("nothing to redo"),
+            Action::EditorUndo => return (!ed.undo()).then(|| "nothing to undo".into()),
+            Action::EditorRedo => return (!ed.redo()).then(|| "nothing to redo".into()),
             Action::EditorDeleteLine => ed.delete_line(),
             Action::EditorSelectAll => ed.select_all(),
             Action::EditorNextMatch => ed.add_cursor_at_next_match(),
@@ -138,7 +148,12 @@ pub(super) fn edit_with_key(
         KeyCode::Enter => ed.insert_newline(),
         KeyCode::Backspace => ed.backspace(),
         KeyCode::Delete => ed.delete_forward(),
-        KeyCode::Tab => ed.insert_tab(tab_width),
+        // At the end of a word, Tab finishes it, see `editor::complete`;
+        // anywhere else it is spaces to the next tab stop, or an indent.
+        KeyCode::Tab => match ed.complete() {
+            Some((word, which, of)) => return Some(finished(&word, which, of)),
+            None => ed.insert_tab(tab_width),
+        },
         KeyCode::BackTab => ed.outdent(tab_width),
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => ed.insert_char(c),
         _ => {}
@@ -497,7 +512,7 @@ impl App {
             return;
         };
         if let Some(complaint) = edit_with_key(ed, action, select, key, page, tab_width) {
-            self.status = complaint.into();
+            self.status = complaint;
         }
     }
 
@@ -585,7 +600,7 @@ impl App {
     /// False whenever the tree is not on screen, which covers both a tree
     /// folded away with `Ctrl+T` and the very first frame, before `ui` has
     /// said where anything is.
-    fn over_tree(&self, column: u16) -> bool {
+    pub(super) fn over_tree(&self, column: u16) -> bool {
         matches!(self.last_tree_cols, Some((x0, x1)) if column >= x0 && column < x1)
     }
 }

@@ -47,13 +47,17 @@
 //! - here: the buffer, the cursor, and reading and writing the file.
 //! - [`edit`]: everything that changes the text.
 //! - [`motion`]: everything that moves the cursor.
-//! - [`select`]: selections, and the cursors beyond the first.
+//! - [`select`]: selections, the cursors beyond the first, and the mouse.
+//! - [`complete`]: finishing a word with Tab.
 //! - [`undo`]: the history, and the grouping that makes it usable.
 
+mod complete;
 mod edit;
 mod motion;
 mod select;
 mod undo;
+
+pub use self::select::Unit;
 
 use std::fs;
 use std::path::PathBuf;
@@ -198,6 +202,9 @@ pub struct Editor {
     pub anchor: Option<Pos>,
     /// Every cursor but the main one, see the module docs.
     pub others: Vec<Cursor>,
+    /// A word Tab is finishing, while Tab is still being pressed, see
+    /// [`complete`].
+    completing: Option<complete::Completing>,
 }
 
 impl Editor {
@@ -261,6 +268,7 @@ impl Editor {
             touched: usize::MAX,
             anchor: None,
             others: Vec::new(),
+            completing: None,
         }
     }
 
@@ -407,6 +415,7 @@ impl Editor {
     /// Take up `view`, kept inside the file as it is now: another pane may
     /// have deleted the very lines it was on.
     pub fn set_view(&mut self, view: View) {
+        self.completing = None;
         self.anchor = view.anchor;
         self.others = view.others;
         self.cursor_line = view.cursor_line;

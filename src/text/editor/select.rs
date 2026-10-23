@@ -15,6 +15,15 @@
 
 use super::{Cursor, Editor, Pos};
 
+/// What a drag with the mouse selects by: characters, or after a double or a
+/// triple click, whole words or whole lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unit {
+    Char,
+    Word,
+    Line,
+}
+
 impl Editor {
     /// Where the main cursor's selection runs, start first, when it has one.
     pub fn selection(&self) -> Option<(Pos, Pos)> {
@@ -179,6 +188,70 @@ impl Editor {
         };
         let to = Pos::new(found.line, found.col + needle.len());
         self.add_cursor(to, Some(found), to.col);
+    }
+
+    // ---- the mouse ----------------------------------------------------------
+
+    /// A click: one cursor, at `p`, nothing selected.
+    pub fn click(&mut self, p: Pos) {
+        self.break_undo_group();
+        self.collapse();
+        let p = self.clamped(p);
+        self.set_pos(p);
+        self.goal_col = p.col;
+    }
+
+    /// Alt and a click: another cursor at `p`, the main one from now on.
+    pub fn click_another(&mut self, p: Pos) {
+        self.break_undo_group();
+        let p = self.clamped(p);
+        self.add_cursor(p, None, p.col);
+    }
+
+    /// What a press at `p` selects by `unit`, start and end: nothing, the
+    /// word under it (or the one character, when it is not on a word), or
+    /// the whole line, its line break included.
+    pub fn unit_at(&self, p: Pos, unit: Unit) -> (Pos, Pos) {
+        let p = self.clamped(p);
+        match unit {
+            Unit::Char => (p, p),
+            Unit::Word => self.word_at(p).unwrap_or_else(|| {
+                let end = Pos::new(p.line, (p.col + 1).min(self.line_chars(p.line)));
+                (p, end)
+            }),
+            Unit::Line if p.line + 1 < self.lines.len() => {
+                (Pos::new(p.line, 0), Pos::new(p.line + 1, 0))
+            }
+            Unit::Line => (
+                Pos::new(p.line, 0),
+                Pos::new(p.line, self.line_chars(p.line)),
+            ),
+        }
+    }
+
+    /// A drag that began on `origin` (what the press selected) and is now at
+    /// `to`: everything between, by whole `unit`s, with the cursor at the end
+    /// the mouse is at. One cursor, as a drag always means.
+    pub fn drag(&mut self, origin: (Pos, Pos), to: Pos, unit: Unit) {
+        self.break_undo_group();
+        self.others.clear();
+        let (here_start, here_end) = self.unit_at(to, unit);
+        let (anchor, pos) = if here_start < origin.0 {
+            (origin.1, here_start)
+        } else {
+            (origin.0, here_end.max(origin.1))
+        };
+        self.anchor = Some(self.clamped(anchor));
+        let pos = self.clamped(pos);
+        self.set_pos(pos);
+        self.goal_col = pos.col;
+    }
+
+    /// Shift and a click: the selection made to reach `p`, from where it
+    /// began, or from the cursor when nothing was selected.
+    pub fn click_extend(&mut self, p: Pos) {
+        let from = self.anchor.unwrap_or(self.pos());
+        self.drag((from, from), p, Unit::Char);
     }
 
     /// Make a new main cursor at `pos`, keeping the old one among the rest.

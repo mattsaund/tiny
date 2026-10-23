@@ -229,3 +229,27 @@ fn copying_on_a_picture_copies_the_file() {
     app.on_key(ctrl('c'));
     assert!(app.status.starts_with("copied logo.png"), "{}", app.status);
 }
+
+#[test]
+fn tab_after_a_word_finishes_it_and_says_which_of_how_many() {
+    let (_td, mut app) = fixture();
+    let path = editing_main(&mut app);
+    app.on_key(k(KeyCode::End));
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, "ut");
+    app.on_key(k(KeyCode::Tab));
+    assert!(
+        text(&app, &path).starts_with("import utils\nutils\n"),
+        "{}",
+        text(&app, &path)
+    );
+    assert_eq!(app.status, "utils");
+    // With nothing to finish, Tab is still a tab stop.
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(k(KeyCode::Tab));
+    assert!(
+        text(&app, &path).starts_with("import utils\nutils\n    \n"),
+        "{}",
+        text(&app, &path)
+    );
+}

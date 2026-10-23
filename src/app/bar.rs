@@ -31,7 +31,7 @@ use crate::config::Config;
 use crate::text::search::{self, Hit, HitKind};
 
 use super::App;
-use super::mode::{Bar, COMMAND_SIGIL, Focus, Mode, Window};
+use super::mode::{Bar, COMMAND_SIGIL, Cycle, Focus, Mode, Window};
 use super::parts::{display_name, edit_field, safe_join};
 use super::preview::Preview;
 
@@ -77,11 +77,15 @@ fn path_candidates(root: &Path, typed: &str, show_hidden: bool) -> Vec<String> {
 }
 
 /// Fill in the rest of whatever is being typed: a verb, a setting name after
-/// `set`, the kind of thing after `goto`, a joining word, or a name.
+/// `set` and then its value, the kind of thing after `goto`, a joining word,
+/// or a name.
 ///
 /// Completes to the longest common prefix of the matches rather than to the
-/// first one, so Tab on an ambiguous prefix advances as far as it safely can
-/// and then stops: the shell behavior.
+/// first one, so Tab on an ambiguous prefix advances as far as it safely can,
+/// the shell behavior. Where they share nothing more, and something has been
+/// typed of the word, Tab puts in the first of them, and again the next,
+/// round all of them and back to what was typed: the menu completion of zsh.
+/// Returns what to say about that, when anything.
 ///
 /// The whole of `copy README.md to notes/today.md` can be typed with Tab, which
 /// is the point: a command that reads like a sentence is no use if every word
@@ -92,11 +96,69 @@ fn complete_command(
     show_hidden: bool,
     added: &[String],
     known: &[String],
-) {
-    if let Some(rest) = completion_for(b, root, show_hidden, added, known) {
+) -> Option<String> {
+    // Tab again, with nothing typed since: the next of them.
+    if let Some(c) = &mut b.cycle
+        && b.input == c.shown
+    {
+        c.at = (c.at + 1) % (c.rests.len() + 1);
+        let rest = c.rests.get(c.at).map_or("", String::as_str);
+        b.input = format!("{}{rest}", c.before);
+        b.cursor = b.input.chars().count();
+        c.shown = b.input.clone();
+        return Some(match c.rests.get(c.at) {
+            Some(_) => format!("{} of {}, Tab for the next", c.at + 1, c.rests.len()),
+            None => "back to what was typed".into(),
+        });
+    }
+    b.cycle = None;
+    let (typed, matches) = completion_options(b, root, show_hidden, added, known)?;
+    if let Some(rest) = common_rest(&typed, &matches) {
         b.input.push_str(&rest);
         b.cursor = b.input.chars().count();
+        return None;
     }
+    // Not from nothing at all: after a space, every file in the project
+    // might be one, and the first of them is no answer. A letter or two
+    // narrows it to something worth going round.
+    if typed.is_empty() {
+        return None;
+    }
+    // What was typed may be one of them already, and the round comes back
+    // to that anyway.
+    let rests: Vec<String> = matches
+        .iter()
+        .map(|m| m[typed.len()..].to_string())
+        .filter(|r| !r.is_empty())
+        .collect();
+    if rests.is_empty() {
+        return None;
+    }
+    let before = b.input.clone();
+    b.input = format!("{before}{}", rests[0]);
+    b.cursor = b.input.chars().count();
+    let n = rests.len();
+    b.cycle = Some(Cycle {
+        before,
+        rests,
+        at: 0,
+        shown: b.input.clone(),
+    });
+    Some(format!("1 of {n}, Tab for the next"))
+}
+
+/// What the matches all have after `typed`, when it is anything: what Tab
+/// fills in, and the bar shows in gray before it is pressed.
+fn common_rest(typed: &str, matches: &[String]) -> Option<String> {
+    let first = matches.first()?;
+    let common = matches.iter().skip(1).fold(first.clone(), |acc, m| {
+        acc.chars()
+            .zip(m.chars())
+            .take_while(|(a, b)| a == b)
+            .map(|(a, _)| a)
+            .collect()
+    });
+    (common.len() > typed.len()).then(|| common[typed.len()..].to_string())
 }
 
 /// What `Tab` would add to the line, if anything.
@@ -107,12 +169,6 @@ fn complete_command(
 ///
 /// Returns only the *remainder*: every candidate is filtered by what has been
 /// typed already, so the completion always begins with it.
-///
-/// What is offered follows the sentence: a verb first, then (depending on
-/// the verb) the kind of thing (`line`, `function`, `file`...), a name, or
-/// the joining word (`to`, `with`, `in`) that comes next. `added` is the
-/// commands plugins have added, which complete like tiny's own; `known` is
-/// every file and folder name in the project, when it has been listed.
 pub fn completion_for(
     b: &Bar,
     root: &Path,
@@ -120,6 +176,24 @@ pub fn completion_for(
     added: &[String],
     known: &[String],
 ) -> Option<String> {
+    let (typed, matches) = completion_options(b, root, show_hidden, added, known)?;
+    common_rest(&typed, &matches)
+}
+
+/// The word being typed, and every way of finishing it, each once.
+///
+/// What is offered follows the sentence: a verb first, then (depending on
+/// the verb) the kind of thing (`line`, `function`, `file`...), a name, or
+/// the joining word (`to`, `with`, `in`) that comes next. `added` is the
+/// commands plugins have added, which complete like tiny's own; `known` is
+/// every file and folder name in the project, when it has been listed.
+fn completion_options(
+    b: &Bar,
+    root: &Path,
+    show_hidden: bool,
+    added: &[String],
+    known: &[String],
+) -> Option<(String, Vec<String>)> {
     use super::sentence::{
         COPY, DELETE, GOTO, KINDS, MOVE, NEW_FILE, NEW_FOLDER, RENAME, REPLACE, VERBS,
         drop_leading_politeness, words,
@@ -202,6 +276,12 @@ pub fn completion_for(
             .iter()
             .map(|(k, _)| k.to_string())
             .collect(),
+        // `set glyphs ascii`, or `set glyphs to ascii`.
+        "set" if position == 2 || (position == 3 && args[2].eq_ignore_ascii_case("to")) => {
+            offer(Config::values_of(&args[1]))
+        }
+        "split" if position == 1 => offer(&["down"]),
+        "close" if position == 1 => offer(&["others", "terminal"]),
         _ if goto && position == 1 => offer(KINDS).into_iter().chain(names()).collect(),
         _ if goto
             && position == 2
@@ -231,25 +311,13 @@ pub fn completion_for(
         _ if REPLACE.contains(&v) && said("in") => names(),
         _ => return None,
     };
-    let prefix = typed;
-
-    let matches: Vec<&String> = candidates
-        .iter()
-        .filter(|c| c.starts_with(&prefix))
-        .collect();
-    let first = matches.first()?;
-    // With several options, fill in only what they all agree on.
-    let common = matches.iter().skip(1).fold((*first).clone(), |acc, m| {
-        acc.chars()
-            .zip(m.chars())
-            .take_while(|(a, b)| a == b)
-            .map(|(a, _)| a)
-            .collect()
-    });
-    if common.len() <= prefix.len() {
-        return None;
+    let mut matches: Vec<String> = Vec::new();
+    for c in candidates {
+        if c.starts_with(&typed) && !matches.contains(&c) {
+            matches.push(c);
+        }
     }
-    Some(common[prefix.len()..].to_string())
+    (!matches.is_empty()).then_some((typed, matches))
 }
 
 impl App {
@@ -296,7 +364,7 @@ impl App {
     /// are the same question asked about two pictures of the same files, so
     /// they are one field in one place; which one the typing reaches is
     /// decided by the window the bar is drawn over, not by a second key.
-    fn filter_map(&mut self, query: &str) {
+    pub(super) fn filter_map(&mut self, query: &str) {
         let Some(view) = self.project_map.as_mut() else {
             return;
         };
@@ -379,13 +447,15 @@ impl App {
             }
             KeyCode::Tab => {
                 if b.is_command() {
-                    complete_command(
+                    if let Some(said) = complete_command(
                         &mut b,
                         self.tree.root_path(),
                         self.config.show_hidden,
                         &self.plugins.commands(),
                         self.known_names(),
-                    );
+                    ) {
+                        self.status = said;
+                    }
                     b.stale = true;
                 }
                 self.mode = Mode::Bar(b);
@@ -407,13 +477,15 @@ impl App {
         // doing the same thing, to what is drawn there. Anywhere else it
         // moves along the text as it always did.
         if key.code == KeyCode::Right && b.is_command() && b.cursor == b.input.chars().count() {
-            complete_command(
+            if let Some(said) = complete_command(
                 &mut b,
                 self.tree.root_path(),
                 self.config.show_hidden,
                 &self.plugins.commands(),
                 self.known_names(),
-            );
+            ) {
+                self.status = said;
+            }
             b.stale = true;
         } else {
             edit_field(&mut b.input, &mut b.cursor, floor, key);

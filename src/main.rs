@@ -74,7 +74,7 @@ use anyhow::{Result, anyhow};
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyEventKind, MouseEventKind,
+    Event, KeyEventKind,
 };
 use crossterm::execute;
 
@@ -411,21 +411,9 @@ fn dispatch(app: &mut App, event: Event) -> bool {
             app.handle_key(k);
             true
         }
-        // One notch, one line. Everything else the mouse reports (moves,
-        // clicks, drags) is deliberately ignored: tiny is a keyboard program,
-        // and the wheel is only here because three-line jumps make a page hard
-        // to read.
-        Event::Mouse(m) => match m.kind {
-            MouseEventKind::ScrollDown => {
-                app.on_scroll(true, m.column, m.row);
-                true
-            }
-            MouseEventKind::ScrollUp => {
-                app.on_scroll(false, m.column, m.row);
-                true
-            }
-            _ => false,
-        },
+        // The wheel, a click, a drag. A mouse moving with no button down is
+        // nothing to tiny, and draws nothing.
+        Event::Mouse(m) => app.on_mouse(m),
         // The terminal's own paste, all of it at once.
         Event::Paste(text) => {
             app.on_paste(text);

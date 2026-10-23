@@ -79,6 +79,22 @@ pub struct Bar {
     /// are in" would become the last result you looked at, and the ordering
     /// would rearrange itself under your cursor as you typed.
     pub home: Option<PathBuf>,
+    /// Tab being pressed again and again on a word with several ways to
+    /// finish it, see `bar::complete_command`.
+    pub(super) cycle: Option<Cycle>,
+}
+
+/// The ways of finishing a word in the bar that Tab goes round.
+#[derive(Debug, Clone)]
+pub(super) struct Cycle {
+    /// The line before any of them was put in.
+    pub(super) before: String,
+    /// What each would add to it.
+    pub(super) rests: Vec<String>,
+    /// Which of them is in the line now.
+    pub(super) at: usize,
+    /// The line as Tab last left it: typing anything else ends the round.
+    pub(super) shown: String,
 }
 
 impl Bar {
@@ -92,6 +108,7 @@ impl Bar {
             stale: false,
             plan: None,
             home,
+            cycle: None,
         }
     }
 
