@@ -53,6 +53,16 @@ jobs:
           git config --global user.email ci@example.com
           git config --global user.name CI
 
+      # The terminal tests (`tests/terminals.rs`) run tiny inside tmux and GNU
+      # screen as well: terminals of their own between tiny and the screen,
+      # and the only ones that run without a desktop. Not on every runner.
+      - name: Install tmux and GNU screen
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux screen
+      - name: Install tmux and GNU screen
+        if: runner.os == 'macOS'
+        run: brew install tmux screen
+
       # `--locked` everywhere: without it cargo quietly re-resolves, so a
       # Cargo.lock that has fallen behind Cargo.toml passes every check here
       # and then fails the tagged release build, which is the one build that
