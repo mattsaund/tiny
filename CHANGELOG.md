@@ -3,6 +3,17 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.5.6 - 2026-10-23
+
+- **The best each terminal can do.** Windows' own console (around Command
+  Prompt or PowerShell) and the Linux console draw box lines, arrows and
+  bullets from the characters every console font has, where 0.5.5 drew
+  plain ASCII. ASCII is left for terminals not reading UTF-8.
+- **Faint, said another way.** Windows' own console draws faint text at full
+  strength, so there it is dark gray, and headings still fade. With
+  `NO_COLOR`, dark gray text is faint instead of plain.
+- `glyphs` takes `console` too.
+
 ## 0.5.5 - 2026-10-23
 
 - **Any font, any terminal.** tiny looks at the terminal it is running in

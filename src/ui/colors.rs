@@ -1,28 +1,47 @@
-//! The finished frame, in as many colors as the terminal has.
+//! The finished frame, in what the terminal can show.
 //!
-//! Everything that draws does so in whatever color it likes: the theme, the
-//! colors a grammar picked for code, the map's two directions. This is the
-//! one place that knows how many colors the terminal can show (the `colors`
-//! setting, see [`crate::config::host`]) and it brings every cell of the
-//! finished frame down to them, so nothing that draws has to know.
+//! Everything that draws does so in whatever color and style it likes: the
+//! theme, the colors a grammar picked for code, the map's two directions,
+//! faint text for what matters less. This is the one place that knows what
+//! the terminal can show (see [`crate::config::host`]) and it brings every
+//! cell of the finished frame down to that, so nothing that draws has to
+//! know.
 //!
 //! Down, never up: a color the terminal has is left as it is, a 24-bit one
 //! becomes the nearest of xterm's 256 or of the sixteen, and with no colors
 //! at all every cell takes the terminal's own. Weight, underline and reverse
 //! video are not colors and stay, which is what keeps a frame with no color
 //! readable: tiny's own look says everything with them.
+//!
+//! # Said another way, not dropped
+//!
+//! Faint and dark gray are tiny's two ways of saying "this matters less",
+//! and a terminal that lacks one of them has the other. Windows' own console
+//! draws faint text at full strength, so there it becomes dark gray; asked
+//! for no color, dark gray has nothing to be, so it becomes faint.
 
 use ratatui::buffer::Buffer;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 
 use crate::config::Colors;
 
-/// Bring every cell in `buf` down to `colors`.
-pub(super) fn fit(buf: &mut Buffer, colors: Colors) {
-    if matches!(colors, Colors::Truecolor | Colors::Auto) {
+/// Bring every cell in `buf` down to `colors`, on a terminal that does or
+/// does not draw `faint` text.
+pub(super) fn fit(buf: &mut Buffer, colors: Colors, faint: bool) {
+    if matches!(colors, Colors::Truecolor | Colors::Auto) && faint {
         return;
     }
     for cell in &mut buf.content {
+        if colors == Colors::None {
+            if faint && cell.fg == Color::DarkGray {
+                cell.modifier.insert(Modifier::DIM);
+            }
+        } else if !faint && cell.modifier.contains(Modifier::DIM) {
+            cell.modifier.remove(Modifier::DIM);
+            if cell.fg == Color::Reset {
+                cell.fg = Color::DarkGray;
+            }
+        }
         cell.fg = fit_color(cell.fg, colors);
         cell.bg = fit_color(cell.bg, colors);
         cell.underline_color = fit_color(cell.underline_color, colors);
@@ -169,6 +188,31 @@ mod tests {
     }
 
     #[test]
+    fn faint_is_dark_gray_where_there_is_no_faint_and_the_other_way_round() {
+        use ratatui::style::Style;
+        let faint = Style::new().add_modifier(Modifier::DIM);
+        let quiet = Style::new().fg(Color::DarkGray);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
+        buf.set_string(0, 0, "a", faint);
+        buf.set_string(1, 0, "b", quiet);
+        // Windows' own console: every color, no faint.
+        fit(&mut buf, Colors::Truecolor, false);
+        let a = &buf.content[0];
+        assert_eq!(a.fg, Color::DarkGray);
+        assert!(!a.modifier.contains(Modifier::DIM));
+
+        // No color asked for, on a terminal that has faint.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
+        buf.set_string(0, 0, "a", faint);
+        buf.set_string(1, 0, "b", quiet);
+        fit(&mut buf, Colors::None, true);
+        let b = &buf.content[1];
+        assert_eq!(b.fg, Color::Reset);
+        assert!(b.modifier.contains(Modifier::DIM), "dark gray became faint");
+        assert!(buf.content[0].modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
     fn with_none_every_cell_takes_the_terminals_own_and_keeps_its_weight() {
         let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
         let style = Style::new()
@@ -176,7 +220,7 @@ mod tests {
             .bg(Color::Blue)
             .add_modifier(ratatui::style::Modifier::BOLD);
         buf.set_string(0, 0, "ab", style);
-        fit(&mut buf, Colors::None);
+        fit(&mut buf, Colors::None, true);
         let cell = &buf.content[0];
         assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset));
         assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));

@@ -549,41 +549,48 @@ fn wide_characters_and_emoji_keep_the_frame_square() {
 
 // ---- what it adapts to ----------------------------------------------------
 
-/// Whether the frame is drawn with line-drawing characters, once tiny has
-/// drawn it: its top-left corner says.
-fn draws_lines(tiny: &Tiny) -> bool {
-    tiny.wait_until("a frame", |t| {
-        t.row(0).starts_with('\u{250c}') || t.row(0).starts_with('+')
+/// Which of its sets of characters tiny is drawing with, once it has drawn:
+/// the browser's open folder says.
+fn characters(tiny: &Tiny) -> &'static str {
+    let marker = |t: &Tiny| t.row(1).chars().nth(1).unwrap_or(' ');
+    tiny.wait_until("a folder marker", |t| {
+        matches!(marker(t), '\u{25be}' | '\u{25bc}' | 'v')
     });
-    tiny.row(0).starts_with('\u{250c}')
+    match marker(tiny) {
+        '\u{25be}' => "unicode",
+        '\u{25bc}' => "console",
+        _ => "ascii",
+    }
 }
 
 #[test]
-fn the_frame_is_drawn_in_characters_the_terminal_has() {
+fn it_draws_with_the_characters_the_terminal_has() {
     let utf8 = ("LANG", "en_US.UTF-8");
-    let cases: Vec<(Vec<(&str, &str)>, bool)> = if cfg!(windows) {
+    let cases: Vec<(Vec<(&str, &str)>, &str)> = if cfg!(windows) {
         vec![
-            // The console Windows opens by itself, and Windows Terminal.
-            (vec![], false),
-            (vec![("WT_SESSION", "tests")], true),
+            // The console Windows opens around Command Prompt by itself,
+            // which draws from one font, and Windows Terminal.
+            (vec![], "console"),
+            (vec![("WT_SESSION", "tests")], "unicode"),
         ]
     } else {
         vec![
-            (vec![("TERM", "xterm-256color"), utf8], true),
+            (vec![("TERM", "xterm-256color"), utf8], "unicode"),
             (
                 vec![("TERM", "xterm-kitty"), ("KITTY_WINDOW_ID", "1"), utf8],
-                true,
+                "unicode",
             ),
-            // The Linux console's font, and a vt100's, have no such lines.
-            (vec![("TERM", "linux"), utf8], false),
-            (vec![("TERM", "vt100"), utf8], false),
-            // Nor does a terminal that is not reading UTF-8.
-            (vec![("TERM", "xterm-256color"), ("LANG", "C")], false),
+            // The Linux console draws from one font too.
+            (vec![("TERM", "linux"), utf8], "console"),
+            // A vt100 has nothing past ASCII, and neither does a terminal
+            // that is not reading UTF-8.
+            (vec![("TERM", "vt100"), utf8], "ascii"),
+            (vec![("TERM", "xterm-256color"), ("LANG", "C")], "ascii"),
         ]
     };
-    for (env, lines) in cases {
+    for (env, set) in cases {
         let tiny = Tiny::start_in(100, 30, &env);
-        assert_eq!(draws_lines(&tiny), lines, "{env:?}:\n{}", tiny.text());
+        assert_eq!(characters(&tiny), set, "{env:?}:\n{}", tiny.text());
         tiny.quit();
     }
 }

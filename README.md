@@ -131,9 +131,9 @@ end)
 
 `*config` opens the settings; `tiny --config` prints where `tiny.conf` is.
 tiny uses your terminal's font and colors, and picks its characters and
-colors to suit the terminal it is in. `glyphs` (`unicode`, `ascii`) and
-`colors` (`truecolor`, `256`, `16`, `none`) override that. Keys go in
-`[keys]`:
+colors to suit the terminal it is in. `glyphs` (`unicode`, `console`,
+`ascii`) and `colors` (`truecolor`, `256`, `16`, `none`) override that. Keys
+go in `[keys]`:
 
 ```toml
 glyphs = "ascii"
