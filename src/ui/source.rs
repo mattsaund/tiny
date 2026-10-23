@@ -27,6 +27,7 @@ use super::parts::highlight_row;
 
 use crate::app::{App, GIT_BUTTONS, GitFocus, GitRow};
 use crate::config::Palette;
+use crate::config::keys::Action;
 use crate::git::{Code, DiffLine, LineKind};
 use crate::text::highlight::Piece;
 use crate::text::tabs;
@@ -262,12 +263,13 @@ fn button_lines(selected: usize, on_row: bool, width: u16, pal: &Palette) -> Vec
 /// highlighted separately, because they *are* two different texts: a line that
 /// opens a string on the right may not exist on the left at all.
 ///
-/// Only the visible window is parsed for color, the same way the editor does
-/// it, so a diff of a very long file costs what is on screen rather than what
-/// is in the file.
+/// Only the visible window is parsed for color, resuming from each side's
+/// saved highlighting the way the editor does, so paging down a diff of a long
+/// file costs what is on screen rather than everything above it.
 fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let tab_width = app.config.tab_width;
-    let git = &app.git;
+    let highlighter = &app.highlighter;
+    let git = &mut app.git;
     let halves = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -294,9 +296,13 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
                 .find(|l| l.kind != LineKind::Filler)
                 .map(|l| l.text.as_str())
                 .unwrap_or("");
-            app.highlighter.syntax_for_path(path, first)
+            highlighter.syntax_for_path(path, first)
         })
-        .unwrap_or_else(|| app.highlighter.syntax_for_token(""));
+        .unwrap_or_else(|| highlighter.syntax_for_token(""));
+    let file = git
+        .current()
+        .map(|(change, _)| std::path::PathBuf::from(&change.path))
+        .unwrap_or_default();
 
     for (i, half) in halves.iter().enumerate() {
         let side = if i == 0 { "before" } else { "after" };
@@ -338,26 +344,29 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
             &git.diff.after
         };
         // Syntect wants plain lines; a filler is a line that is not there, and
-        // an empty string is the closest true thing to hand it.
-        let plain: Vec<String> = lines.iter().map(|l| l.text.clone()).collect();
-        let colored = app.highlighter.highlight_window(
-            &plain,
+        // its empty text is the closest true thing to hand it.
+        let top = git.diff_scroll;
+        let resume = &mut git.diff_highlight[i];
+        resume.sync(&file, &syntax.name, None);
+        let colored = highlighter.highlight_cached(
+            resume,
+            &git.diff_text[i],
             syntax,
-            git.diff_scroll,
+            top,
             inner.height as usize,
         );
         let rows: Vec<Line> = lines
             .iter()
             .enumerate()
-            .skip(git.diff_scroll)
+            .skip(top)
             .take(inner.height as usize)
             .map(|(n, l)| {
-                let pieces = colored.get(n - git.diff_scroll);
+                let pieces = colored.get(n - top);
                 diff_line(
                     l,
                     pieces,
                     i == 0,
-                    gap_label(lines, n, i == 0),
+                    gap_label(lines, n, top, i == 0),
                     pal,
                     tab_width,
                 )
@@ -381,19 +390,19 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
 /// lines are missing and why says the same thing and then gets out of the way.
 ///
 /// The count is of the whole run, so it is the same number wherever the run is
-/// cut off by the top of the pane.
-fn gap_label(lines: &[DiffLine], n: usize, before: bool) -> Option<String> {
-    if lines.get(n).map(|l| l.kind) != Some(LineKind::Filler) {
+/// cut off by the top of the pane, and the first row on screen (`top`) says it
+/// when the run began above the pane.
+fn gap_label(lines: &[DiffLine], n: usize, top: usize, before: bool) -> Option<String> {
+    let filler = |i: usize| lines.get(i).is_some_and(|l| l.kind == LineKind::Filler);
+    if !filler(n) {
         return None;
     }
-    // Mid-run: the line above already said it.
-    if n > 0 && lines[n - 1].kind == LineKind::Filler {
+    // Mid-run: the line above already said it, if it is on screen.
+    if n > top && filler(n - 1) {
         return Some(String::new());
     }
-    let run = lines[n..]
-        .iter()
-        .take_while(|l| l.kind == LineKind::Filler)
-        .count();
+    let start = (0..=n).rev().take_while(|&i| filler(i)).last().unwrap_or(n);
+    let run = (start..lines.len()).take_while(|&i| filler(i)).count();
     let plural = if run == 1 { "" } else { "s" };
     // A gap on the left is what the right gained; a gap on the right is what
     // it lost.
@@ -462,6 +471,22 @@ fn diff_line(
 fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let tab_width = app.config.tab_width;
     let staged = app.git.status.staged.len();
+    // Put down with Esc, the box stays on screen with its text, and says how
+    // to send it or go on with it, the way the list says it does not have
+    // the keyboard: a dim border, a dim title, and no cursor.
+    let focused = app.git.focus == GitFocus::Message;
+    let footer = if focused {
+        format!(
+            " {} commits | {} puts it down ",
+            app.key_name(Action::Save),
+            app.key_name(Action::Back)
+        )
+    } else {
+        format!(
+            " the commit button sends it | {} to write more ",
+            app.key_name(Action::Right)
+        )
+    };
     let Some(editor) = app.git.message.as_mut() else {
         return;
     };
@@ -469,15 +494,23 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(pal.glyphs.border)
-        .border_style(pal.border_focus)
+        .border_style(if focused {
+            pal.border_focus
+        } else {
+            pal.border
+        })
         .title(Line::from(vec![
-            Span::styled(" commit message ", pal.text.add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " commit message ",
+                if focused {
+                    pal.text.add_modifier(Modifier::BOLD)
+                } else {
+                    pal.dim
+                },
+            ),
             Span::styled(format!("for {staged} staged {files} "), pal.dim),
         ]))
-        .title_bottom(Line::from(Span::styled(
-            " Ctrl+S commits | Esc puts it down ",
-            pal.dim,
-        )));
+        .title_bottom(Line::from(Span::styled(footer, pal.dim)));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -530,7 +563,7 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let col = tabs::column(line, editor.cursor_col, tab_width)
         .saturating_sub(tabs::column(line, scroll_x, tab_width));
     let row = editor.cursor_line.saturating_sub(scroll_y);
-    if col < text_w && row < height {
+    if focused && col < text_w && row < height {
         f.set_cursor_position((inner.x + 1 + col as u16, inner.y + row as u16));
     }
 }

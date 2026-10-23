@@ -241,10 +241,15 @@ fn ctrl_s_while_editing_a_setting_does_not_type_an_s_into_it() {
     let Mode::Settings(s) = &app.mode else {
         panic!("settings closed")
     };
-    assert_eq!(
-        s.editing.as_deref(),
-        Some("4"),
-        "the field still holds tab_width's value, not \"4s\""
+    assert!(
+        s.editing.is_none(),
+        "the value was taken, as Enter takes it"
+    );
+    assert_eq!(app.config.tab_width, 4, "and it was 4, not \"4s\"");
+    assert!(
+        app.status.contains("no config file"),
+        "a test has nowhere to write the settings to: {}",
+        app.status
     );
 }
 
