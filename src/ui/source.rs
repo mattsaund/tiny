@@ -517,7 +517,7 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     // The text starts one column in, so that is one column less to show it.
     let text_w = inner.width.saturating_sub(1) as usize;
     let height = inner.height as usize;
-    editor.sync_scroll(text_w.saturating_sub(1), height);
+    editor.sync_scroll(text_w.saturating_sub(1), height, tab_width);
     let (scroll_y, scroll_x) = (editor.scroll_y, editor.scroll_x);
 
     let lines: Vec<Line> = if editor.lines().iter().all(String::is_empty) {
@@ -541,12 +541,17 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
                 } else {
                     pal.text
                 };
-                // Tabs reach the stops they would from the line's own start,
-                // however far it is scrolled.
-                let from = tabs::column(text, scroll_x, tab_width);
-                let rest: String = text.chars().skip(scroll_x).collect();
-                let shown = tabs::expand(&rest, tab_width, from);
-                Line::from(Span::styled(format!(" {shown}"), style))
+                // Clipped the way the editor clips a line, so a tab or a wide
+                // character before the cursor is counted the way it is drawn.
+                let mut spans = vec![Span::raw(" ")];
+                spans.extend(super::editor::clip_pieces(
+                    &[(style, text.clone())],
+                    scroll_x,
+                    text_w,
+                    *pal,
+                    tab_width,
+                ));
+                Line::from(spans)
             })
             .collect()
     };
@@ -560,8 +565,7 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
         .get(editor.cursor_line)
         .map(String::as_str)
         .unwrap_or("");
-    let col = tabs::column(line, editor.cursor_col, tab_width)
-        .saturating_sub(tabs::column(line, scroll_x, tab_width));
+    let col = tabs::column(line, editor.cursor_col, tab_width).saturating_sub(scroll_x);
     let row = editor.cursor_line.saturating_sub(scroll_y);
     if focused && col < text_w && row < height {
         f.set_cursor_position((inner.x + 1 + col as u16, inner.y + row as u16));

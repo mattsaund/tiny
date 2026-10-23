@@ -16,6 +16,7 @@ use super::parts::{highlight_row, keep_visible, mark_query, pane};
 
 use crate::app::{App, Bar, Focus, Mode};
 use crate::text::search::{HitKind, Matcher};
+use crate::text::tabs;
 
 /// The project tree. Draws a window of `app.rows` around the cursor.
 ///
@@ -140,6 +141,7 @@ pub(super) fn results_height(area: Rect, hits: usize) -> u16 {
 /// frame.
 pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect, b: &Bar) {
     let pal = app.palette;
+    let tab_width = app.config.tab_width;
     let title = vec![
         Span::raw(" "),
         Span::styled(
@@ -198,7 +200,12 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect, b: &Bar) {
             HitKind::Content => vec![Span::styled(format!("{}:{} ", rel, hit.line + 1), pal.dim)],
         };
         if hit.kind == HitKind::Content {
-            let text = vec![Span::styled(hit.text.clone(), pal.text)];
+            // A raw tab is a cell holding nothing, so `x := 1\t// TODO` would
+            // read as one word run into the next.
+            let text = vec![Span::styled(
+                tabs::expand(&hit.text, tab_width, 0),
+                pal.text,
+            )];
             match &query {
                 Some(q) => spans.extend(mark_query(text, q)),
                 None => spans.extend(text),

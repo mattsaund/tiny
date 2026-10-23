@@ -1697,6 +1697,7 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-tags",
  "two-face",
+ "unicode-segmentation",
  "unicode-width",
 ]
 

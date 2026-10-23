@@ -222,7 +222,16 @@ impl Renderer<'_> {
             }
             Event::Code(t) => {
                 let style = self.style().patch(self.pal.code);
-                self.spans.push(Span::styled(format!("`{t}`"), style));
+                let t = tabs::expand(&t, tabs::MARKDOWN, 0);
+                // Drawn with the ticks it was written with, and with two, the
+                // way markdown writes it, when the code has a tick of its own:
+                // `a`b` would read as code that stopped at the a.
+                let shown = if t.contains('`') {
+                    format!("`` {t} ``")
+                } else {
+                    format!("`{t}`")
+                };
+                self.spans.push(Span::styled(shown, style));
             }
             Event::SoftBreak => self.spans.push(Span::styled(" ".to_string(), self.style())),
             Event::HardBreak => {

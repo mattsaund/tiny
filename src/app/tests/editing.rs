@@ -279,3 +279,28 @@ fn a_long_markdown_file_is_edited_raw() {
         "past the limit the hashes stay put, formatted or not:\n{out}"
     );
 }
+
+#[test]
+fn the_cursor_stays_on_the_text_when_a_tabbed_line_scrolls_across() {
+    // Two tabs, then more than fits: End scrolls the line, and the cursor
+    // has to sit just after the last character drawn, not some cells away
+    // from it, which is where it went when the scroll and the cursor counted
+    // in different units.
+    let (td, mut app) = fixture();
+    let line = format!("\t\t{}Z", "x".repeat(80));
+    fs::write(td.path().join("tabs.py"), format!("{line}\n")).unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "tabs.py");
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(k(KeyCode::End));
+
+    let mut t = Terminal::new(TestBackend::new(70, 12)).unwrap();
+    t.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+    let pos = t.get_cursor_position().unwrap();
+    let buf = t.backend().buffer();
+    let before = buf.cell((pos.x - 1, pos.y)).unwrap().symbol();
+    assert_eq!(
+        before, "Z",
+        "the cell left of the cursor is the line's last character"
+    );
+}

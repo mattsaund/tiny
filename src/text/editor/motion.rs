@@ -14,6 +14,7 @@
 //! and nobody notices until it is missing.
 
 use super::Editor;
+use crate::text::tabs;
 
 impl Editor {
     pub fn move_left(&mut self) {
@@ -162,7 +163,12 @@ impl Editor {
     /// answer changes when the terminal is resized. Scrolls by the minimum
     /// needed to bring the cursor into view, which keeps the text still when
     /// moving inside the visible region.
-    pub fn sync_scroll(&mut self, view_w: usize, view_h: usize) {
+    ///
+    /// Across, the cursor is measured in columns as the line is drawn, tabs
+    /// at their stops and wide characters two cells, because `scroll_x` is in
+    /// columns too: a count of characters would let a line of tabs or of CJK
+    /// run the cursor off the edge without ever scrolling.
+    pub fn sync_scroll(&mut self, view_w: usize, view_h: usize, tab_width: usize) {
         if view_h > 0 {
             if self.cursor_line < self.scroll_y {
                 self.scroll_y = self.cursor_line;
@@ -171,10 +177,16 @@ impl Editor {
             }
         }
         if view_w > 0 {
-            if self.cursor_col < self.scroll_x {
-                self.scroll_x = self.cursor_col;
-            } else if self.cursor_col >= self.scroll_x + view_w {
-                self.scroll_x = self.cursor_col + 1 - view_w;
+            let line = self
+                .lines
+                .get(self.cursor_line)
+                .map(String::as_str)
+                .unwrap_or("");
+            let col = tabs::column(line, self.cursor_col, tab_width);
+            if col < self.scroll_x {
+                self.scroll_x = col;
+            } else if col >= self.scroll_x + view_w {
+                self.scroll_x = col + 1 - view_w;
             }
         }
     }

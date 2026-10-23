@@ -121,8 +121,9 @@ pub struct Editor {
     /// short lines: the behavior every editor has and nobody notices
     /// until it is missing.
     goal_col: usize,
-    /// Viewport offsets, in lines and characters. Owned here but written by
-    /// [`Editor::sync_scroll`], which `ui` calls once the pane size is known.
+    /// Viewport offsets: down in lines, across in columns as the text is
+    /// drawn. Owned here but written by [`Editor::sync_scroll`], which `ui`
+    /// calls once the pane size is known.
     pub scroll_y: usize,
     pub scroll_x: usize,
     /// The file's own line ending, sampled on open and restored on save, so a
@@ -613,12 +614,28 @@ mod tests {
         let text: String = (0..100).map(|i| format!("line {i}\n")).collect();
         let mut e = ed(&text);
         e.move_doc_end();
-        e.sync_scroll(20, 10);
+        e.sync_scroll(20, 10, 4);
         assert!(e.scroll_y > 0, "scrolled down to reach the end");
         assert!(e.cursor_line >= e.scroll_y && e.cursor_line < e.scroll_y + 10);
         e.move_doc_start();
-        e.sync_scroll(20, 10);
+        e.sync_scroll(20, 10, 4);
         assert_eq!(e.scroll_y, 0, "scrolled back up");
+    }
+
+    #[test]
+    fn scrolling_across_counts_columns_as_they_are_drawn() {
+        // Forty CJK characters are eighty columns: the end of the line is
+        // well past a sixty-column view even though forty is not.
+        let mut e = ed(&format!("{}\n", "文".repeat(40)));
+        e.move_end();
+        e.sync_scroll(60, 10, 4);
+        assert_eq!(e.scroll_x, 80 + 1 - 60, "the cursor's column is on screen");
+
+        // Three tabs and a word: the tabs alone reach column twelve.
+        let mut e = ed("\t\t\tword\n");
+        e.move_end();
+        e.sync_scroll(10, 10, 4);
+        assert_eq!(e.scroll_x, 16 + 1 - 10);
     }
 
     #[test]
