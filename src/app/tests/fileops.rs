@@ -417,3 +417,64 @@ fn reload_keeps_the_cursor_where_it_was_in_a_clean_file() {
     assert!(ed.to_text().starts_with("first"), "the new text");
     assert_eq!(ed.cursor_line, 20, "at the same place in it");
 }
+
+#[test]
+fn a_rename_is_not_refused_because_the_name_is_used_somewhere_else() {
+    // README.md is at the top of the project; renaming a note in a folder to
+    // that name puts it in its own folder, where nothing is in the way.
+    let (td, mut app) = fixture();
+    command(&mut app, "rename notes/design.md to README.md");
+    assert!(td.path().join("notes/README.md").exists(), "{}", app.status);
+    assert!(
+        td.path().join("README.md").exists(),
+        "and the other is untouched"
+    );
+}
+
+#[test]
+fn copying_into_a_folder_that_has_one_of_that_name_is_refused() {
+    let (td, mut app) = fixture();
+    fs::create_dir_all(td.path().join("archive/notes")).unwrap();
+    command(&mut app, "reload");
+    command(&mut app, "copy notes to archive");
+    assert!(app.status.contains("already exists"), "{}", app.status);
+    assert!(
+        !td.path().join("archive/notes/notes").exists(),
+        "rather than a copy nested inside the one already there"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn copying_a_folder_keeps_the_links_inside_it() {
+    let (td, mut app) = fixture();
+    let venv = td.path().join("venv");
+    fs::create_dir_all(venv.join("lib")).unwrap();
+    fs::write(venv.join("lib/site.py"), "x = 1\n").unwrap();
+    std::os::unix::fs::symlink("lib", venv.join("lib64")).unwrap();
+    std::os::unix::fs::symlink("nowhere", venv.join("dangling")).unwrap();
+    command(&mut app, "reload");
+    command(&mut app, "copy venv to venv2");
+    let copy = td.path().join("venv2");
+    assert!(copy.join("lib/site.py").exists(), "{}", app.status);
+    assert_eq!(fs::read_link(copy.join("lib64")).unwrap(), Path::new("lib"));
+    assert_eq!(
+        fs::read_link(copy.join("dangling")).unwrap(),
+        Path::new("nowhere"),
+        "a link to nothing is copied as the link it is"
+    );
+}
+
+#[test]
+fn a_note_named_like_the_new_name_without_its_extension_is_not_in_the_way() {
+    let (td, mut app) = fixture();
+    fs::create_dir_all(td.path().join("docs")).unwrap();
+    fs::write(td.path().join("docs/archive.md"), "old\n").unwrap();
+    command(&mut app, "reload");
+    command(&mut app, "copy notes to archive");
+    assert!(
+        td.path().join("archive/design.md").exists(),
+        "archive is a new name, not docs/archive.md: {}",
+        app.status
+    );
+}

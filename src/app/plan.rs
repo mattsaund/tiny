@@ -275,6 +275,37 @@ impl App {
         }
     }
 
+    /// A file in the project called exactly `name`, or at exactly that path
+    /// from a folder: unlike [`App::find`], never by its name without the
+    /// extension, so `archive` is not `archive.md`.
+    fn file_named(&mut self, name: &str) -> Option<PathBuf> {
+        let wanted = name
+            .trim()
+            .trim_start_matches("./")
+            .replace('\\', "/")
+            .to_lowercase();
+        let root = self.tree.root_path().to_path_buf();
+        self.names();
+        let names = self.names.as_ref()?;
+        names
+            .files
+            .iter()
+            .find(|p| {
+                let rel = p
+                    .strip_prefix(&root)
+                    .unwrap_or(p)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    .to_lowercase();
+                if wanted.contains('/') {
+                    rel == wanted || rel.ends_with(&format!("/{wanted}"))
+                } else {
+                    rel.rsplit('/').next() == Some(wanted.as_str())
+                }
+            })
+            .cloned()
+    }
+
     /// What `this` is: the file being edited, or what the cursor is on.
     fn this(&self, want: Want) -> Result<PathBuf, String> {
         if let (Want::File | Want::Either, Preview::Buffer { path, .. }) = (want, &self.preview)
@@ -417,21 +448,32 @@ impl App {
     /// A folder that answers to the name is gone *into*, when `into` allows
     /// it; otherwise `to` is the new name: beside the original if it is a
     /// bare name, from the top of the project if it has a slash in it.
+    ///
+    /// An existing path is refused. So, for a copy or a move, is naming a
+    /// file the project already has anywhere: that file is almost certainly
+    /// the one meant, and writing a second beside the original would be a
+    /// surprise. A rename names the new name and nothing else, so only its
+    /// own path counts.
     fn destination(&mut self, from: &Path, to: &str, into: bool) -> Result<PathBuf, String> {
         let name = from
             .file_name()
             .ok_or_else(|| "that has no name to keep".to_string())?
             .to_os_string();
-        // Naming a file that is already there is never a place to write.
-        if let Ok(there) = self.find(&Place::Named(to.to_string()), Want::File) {
-            return Err(format!("{} already exists", self.rel(&there)));
-        }
         if into {
             match self.find(&Place::Named(to.to_string()), Want::Folder) {
-                Ok(folder) => return Ok(folder.join(name)),
+                Ok(folder) => {
+                    let path = folder.join(name);
+                    if path.exists() {
+                        return Err(format!("{} already exists", self.rel(&path)));
+                    }
+                    return Ok(path);
+                }
                 // Several folders called that is a question, not a new name.
                 Err(e) if !e.starts_with("no ") => return Err(e),
                 Err(_) => {}
+            }
+            if let Some(there) = self.file_named(to) {
+                return Err(format!("{} already exists", self.rel(&there)));
             }
         }
         let root = self.tree.root_path().to_path_buf();
@@ -441,7 +483,9 @@ impl App {
             from.parent().map(Path::to_path_buf).unwrap_or(root.clone())
         };
         let path = safe_join(&base, to, &root).map_err(|e| format!("{e:#}"))?;
-        if path.exists() {
+        // On a disk that ignores case, a rename to `readme.md` finds
+        // `README.md` already there, being itself.
+        if path.exists() && !super::fileops::same_file(&path, from) {
             return Err(format!("{} already exists", self.rel(&path)));
         }
         Ok(path)
@@ -854,27 +898,38 @@ impl App {
                     )
                 })
             }
+            // A line, a file or a folder is a place in the main window,
+            // wherever the command was typed from.
             Plan::Line { path, line: n } => {
-                if let Some(p) = path {
-                    self.reveal(&p);
+                self.window = AppWindow::Main;
+                if let Some(p) = path
+                    && !self.reveal(&p)
+                {
+                    return Err(anyhow!("{} is not in this project", self.rel(&p)));
                 }
-                self.focus = Focus::Editor;
                 let Some(ed) = self.active_buffer_mut() else {
                     return Err(anyhow!("that file cannot be opened as text"));
                 };
                 let line = (n - 1).min(ed.line_count().saturating_sub(1));
                 ed.goto(line, 0);
+                self.focus = Focus::Editor;
                 Ok(format!("line {}", line + 1))
             }
             Plan::Open(p) => {
-                self.reveal(&p);
+                self.window = AppWindow::Main;
+                if !self.reveal(&p) {
+                    return Err(anyhow!("{} is not in this project", self.rel(&p)));
+                }
                 if matches!(self.preview, Preview::Buffer { .. }) {
                     self.focus_editor();
                 }
                 Ok(format!("opened {}", self.rel(&p)))
             }
             Plan::Reveal(p) => {
-                self.reveal(&p);
+                self.window = AppWindow::Main;
+                if !self.reveal(&p) {
+                    return Err(anyhow!("{} is not in this project", self.rel(&p)));
+                }
                 self.tree.expand(&p);
                 self.rebuild_rows();
                 self.focus_tree();

@@ -421,3 +421,40 @@ fn stepping_through_results_does_not_re_order_them_underneath_you() {
         b.results.iter().map(|h| &h.text).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn moving_along_the_query_keeps_the_hit_that_was_chosen() {
+    let (td, mut app) = fixture();
+    for name in ["a.md", "b.md", "c.md"] {
+        fs::write(td.path().join(name), "a foo here\n").unwrap();
+    }
+    command(&mut app, "reload");
+    type_search(&mut app, "foo");
+    app.settle();
+    app.on_key(k(KeyCode::Down));
+    app.on_key(k(KeyCode::Down));
+    app.on_key(k(KeyCode::Home));
+    app.on_key(k(KeyCode::Left));
+    app.settle();
+    let Mode::Bar(b) = &app.mode else {
+        panic!("the bar closed")
+    };
+    assert_eq!(
+        b.selected, 2,
+        "the cursor moved along the text; the search did not change"
+    );
+}
+
+#[test]
+fn home_in_a_command_stops_after_the_star() {
+    let (_td, mut app) = fixture();
+    command_bar(&mut app);
+    type_str(&mut app, "reload");
+    app.on_key(k(KeyCode::Home));
+    app.on_key(ch('x'));
+    let Mode::Bar(b) = &app.mode else {
+        panic!("the bar closed")
+    };
+    assert!(b.is_command(), "still a command: {:?}", b.input);
+    assert_eq!(b.command(), "xreload");
+}

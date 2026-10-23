@@ -34,27 +34,57 @@ use super::mode::{Confirm, ConfirmKind, Focus, Mode};
 use super::parts::{display_name, safe_join};
 use super::preview::Preview;
 
-/// Copy a directory and everything under it.
+/// Copy a directory and everything under it. Returns how many links were
+/// left out.
 ///
-/// Recurses on directories and copies everything else with `fs::copy`, which
-/// carries permissions across on every platform. A symlink counts as
-/// "everything else": its target is copied as a plain file rather than
-/// followed as a directory, so a link pointing back up its own tree cannot
-/// send this into a loop.
-fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+/// Recurses on directories and copies files with `fs::copy`, which carries
+/// permissions across on every platform. A symlink is never followed, so a
+/// link pointing back up its own tree cannot send this into a loop: on Unix
+/// the link itself is made again, pointing where it pointed (a virtualenv's
+/// `lib64 -> lib` included), and elsewhere, where making one takes rights a
+/// user may not have, it is left out and counted.
+fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<usize> {
     fs::create_dir_all(dst)?;
+    let mut left_out = 0;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let target = dst.join(entry.file_name());
-        // `DirEntry::file_type` does not follow links, which is what keeps the
-        // symlink case out of the recursive branch.
-        if entry.file_type()?.is_dir() {
-            copy_tree(&entry.path(), &target)?;
+        // `DirEntry::file_type` does not follow links.
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(fs::read_link(entry.path())?, &target)?;
+            #[cfg(not(unix))]
+            {
+                left_out += 1;
+            }
+        } else if kind.is_dir() {
+            left_out += copy_tree(&entry.path(), &target)?;
         } else {
             fs::copy(entry.path(), &target)?;
         }
     }
-    Ok(())
+    Ok(left_out)
+}
+
+/// Whether two paths are one file: what a rename that changes only the case
+/// of a name looks like on a disk that ignores case, where the "new" name
+/// already exists because it is the old one.
+pub(super) fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (fs::metadata(a), fs::metadata(b)) {
+            (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+            _ => false,
+        }
+    }
+    // Windows ignores case in names, so two that differ only in case are
+    // the same file there.
+    #[cfg(not(unix))]
+    {
+        a.exists() && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+    }
 }
 
 /// Where `path` is once `from` has moved to `to`: `to` itself, or the same
@@ -151,23 +181,15 @@ impl App {
         }
     }
 
-    /// Copy a file, or a whole folder, to a new path inside the project.
+    /// Copy a file, or a whole folder, to `dst` inside the project.
     ///
-    /// Naming an existing folder as the destination copies *into* it, which is
-    /// what `copy README.md to notes` reads like. Anything else is the new name
-    /// itself, and an existing one is never written over.
+    /// `dst` is the copy's own path, already worked out: "into a folder" is
+    /// the caller's question (see `App::destination`), and an existing path
+    /// is never written over.
     pub(super) fn copy_entry(&mut self, src: &Path, dst: &Path) -> Result<String> {
         let meta = fs::symlink_metadata(src)
             .with_context(|| format!("cannot copy {}", display_name(src)))?;
-        // `copy a to notes` means "put a in notes", not "rename a to notes".
-        let dst = if dst.is_dir() {
-            match src.file_name() {
-                Some(name) => dst.join(name),
-                None => return Err(anyhow!("cannot copy {}", display_name(src))),
-            }
-        } else {
-            dst.to_path_buf()
-        };
+        let dst = dst.to_path_buf();
         if dst == src {
             return Err(anyhow!("{} is already there", display_name(src)));
         }
@@ -183,10 +205,10 @@ impl App {
                 .with_context(|| format!("cannot create {}", parent.display()))?;
         }
 
-        if meta.is_dir() {
+        let left_out = if meta.is_dir() {
             copy_tree(src, &dst)
         } else {
-            fs::copy(src, &dst).map(|_| ())
+            fs::copy(src, &dst).map(|_| 0)
         }
         .with_context(|| {
             format!(
@@ -198,8 +220,13 @@ impl App {
 
         self.tree.refresh_all();
         self.reveal(&dst);
+        let links = match left_out {
+            0 => String::new(),
+            1 => ", one link left out".into(),
+            n => format!(", {n} links left out"),
+        };
         Ok(format!(
-            "copied {} to {}",
+            "copied {} to {}{links}",
             display_name(src),
             display_name(&dst)
         ))
@@ -355,7 +382,7 @@ impl App {
         if target == from {
             return Ok("unchanged".into());
         }
-        if target.exists() {
+        if target.exists() && !same_file(target, from) {
             return Err(anyhow!("{} already exists", display_name(target)));
         }
         if let Some(parent) = target.parent() {

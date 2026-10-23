@@ -551,3 +551,56 @@ fn screenshot() {
         println!("{row}");
     }
 }
+
+#[test]
+fn a_hidden_file_asked_for_by_name_is_opened() {
+    let (td, mut app) = fixture();
+    fs::write(td.path().join(".env"), "ONE=1\nTWO=2\nTHREE=3\n").unwrap();
+    select(&mut app, "README.md");
+    command(&mut app, "open .env");
+    assert_eq!(
+        app.active_buffer().map(|ed| ed.path.clone()),
+        Some(td.path().join(".env")),
+        "{}",
+        app.status
+    );
+    assert_eq!(app.focus, Focus::Editor);
+
+    command(&mut app, "line 3 in .env");
+    let ed = app.active_buffer().unwrap();
+    assert_eq!(
+        ed.path,
+        td.path().join(".env"),
+        "not whatever was open before"
+    );
+    assert_eq!(ed.cursor_line, 2);
+}
+
+#[test]
+fn a_command_that_lands_in_a_file_brings_the_main_window_back() {
+    let (_td, mut app) = fixture();
+    open_map(&mut app);
+    command(&mut app, "goto file main.py");
+    assert_eq!(app.window, Window::Main, "{}", app.status);
+    assert_eq!(
+        app.active_buffer()
+            .and_then(|ed| ed.path.file_name().map(|n| n.to_owned())),
+        Some(std::ffi::OsString::from("main.py"))
+    );
+}
+
+#[test]
+fn naming_a_hidden_file_on_the_command_line_opens_it() {
+    let td = tempfile::tempdir().unwrap();
+    build(td.path());
+    let file = td.path().join(".gitignore");
+    fs::write(&file, "target\n").unwrap();
+    let app = App::new(
+        target(td.path(), Some(file.clone())),
+        Config::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(app.selected_path(), Some(file.as_path()));
+    assert_eq!(app.focus, Focus::Editor);
+}

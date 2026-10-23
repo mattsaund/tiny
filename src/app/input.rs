@@ -494,21 +494,31 @@ impl App {
             self.scroll_pinned(down);
             return;
         }
-        // A file being edited has a cursor and a view tied to it; anything
-        // else is just a picture of something, and the view itself moves.
-        if !matches!(self.preview, Preview::Buffer { .. }) || self.focus != Focus::Editor {
-            let max = self.preview_len.saturating_sub(1);
-            self.preview_scroll = if down {
-                (self.preview_scroll + 1).min(max)
-            } else {
-                self.preview_scroll.saturating_sub(1)
-            };
-        } else if let Some(ed) = self.active_buffer_mut() {
-            if down {
-                ed.move_down();
-            } else {
-                ed.move_up();
+        match &self.preview {
+            // A note the browser is looking at is drawn as a page, which
+            // scrolls by its own count.
+            Preview::Buffer { kind, .. } if kind.reads_first() && self.focus != Focus::Editor => {
+                let max = self.preview_len.saturating_sub(1);
+                self.preview_scroll = if down {
+                    (self.preview_scroll + 1).min(max)
+                } else {
+                    self.preview_scroll.saturating_sub(1)
+                };
             }
+            // Anything else with text is drawn by the editor, whose view
+            // follows its cursor, so the cursor is what moves, the same rule
+            // the other pane scrolls by.
+            Preview::Buffer { .. } => {
+                if let Some(ed) = self.active_buffer_mut() {
+                    if down {
+                        ed.move_down();
+                    } else {
+                        ed.move_up();
+                    }
+                }
+            }
+            // A picture, a folder, a binary: one screen, nothing to scroll.
+            _ => {}
         }
     }
 

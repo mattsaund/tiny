@@ -125,9 +125,10 @@ fn deleting_the_sigil_turns_a_command_back_into_a_search() {
     type_str(&mut app, "*widget");
     assert!(matches!(&app.mode, Mode::Bar(b) if b.results.is_empty()));
 
-    // Back to the front and take the star off.
+    // Back to the front, which in a command is just after the star, where
+    // the cursor is drawn, and take the star off.
     app.on_key(k(KeyCode::Home));
-    app.on_key(k(KeyCode::Delete));
+    app.on_key(k(KeyCode::Backspace));
     let Mode::Bar(b) = &app.mode else {
         panic!("bar closed")
     };
@@ -281,7 +282,7 @@ fn the_right_arrow_still_moves_along_the_text_mid_line() {
         panic!("bar closed")
     };
     assert_eq!(b.command(), "cop", "nothing was completed");
-    assert_eq!(b.cursor, 1, "it just moved");
+    assert_eq!(b.cursor, 2, "it just moved, from just after the star");
 }
 
 #[test]
