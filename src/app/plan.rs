@@ -50,6 +50,13 @@ const MAX_PREVIEW_CODE_FILES: usize = 2000;
 pub struct Names {
     files: Vec<PathBuf>,
     folders: Vec<PathBuf>,
+    /// Every file and folder name, each once, sorted, see [`sorted_names`].
+    sorted: Vec<String>,
+    /// Each file's path from the root, and each folder's, lowercased with
+    /// forward slashes: what a typed name is compared with, made once
+    /// rather than for every entry on every keystroke.
+    files_rel: Vec<String>,
+    folders_rel: Vec<String>,
     /// Every function-like definition, by name.
     definitions: Option<Vec<(String, Hit)>>,
     /// Every markdown heading, by its title in lower case.
@@ -57,26 +64,31 @@ pub struct Names {
 }
 
 impl Names {
-    /// Every file and folder name, each once, sorted: what Tab offers. A
-    /// folder's ends with a separator, the way a typed path to one would, so
-    /// Tab can carry straight on into it.
-    pub fn all_names(&self) -> Vec<String> {
-        let name = |p: &PathBuf| p.file_name().map(|n| n.to_string_lossy().into_owned());
-        let mut out: Vec<String> = self
-            .files
-            .iter()
-            .filter_map(name)
-            .chain(
-                self.folders
-                    .iter()
-                    .filter_map(name)
-                    .map(|n| format!("{n}{}", std::path::MAIN_SEPARATOR)),
-            )
-            .collect();
-        out.sort_unstable();
-        out.dedup();
-        out
+    /// Every file and folder name, each once, sorted: what Tab offers.
+    pub fn all_names(&self) -> &[String] {
+        &self.sorted
     }
+}
+
+/// Every file and folder name, each once, sorted. A folder's ends with a
+/// separator, the way a typed path to one would, so Tab can carry straight on
+/// into it. Made once when the project is listed, rather than on every frame
+/// the bar offers a completion.
+fn sorted_names(files: &[PathBuf], folders: &[PathBuf]) -> Vec<String> {
+    let name = |p: &PathBuf| p.file_name().map(|n| n.to_string_lossy().into_owned());
+    let mut out: Vec<String> = files
+        .iter()
+        .filter_map(name)
+        .chain(
+            folders
+                .iter()
+                .filter_map(name)
+                .map(|n| format!("{n}{}", std::path::MAIN_SEPARATOR)),
+        )
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// What a name may be.
@@ -144,8 +156,24 @@ impl App {
     /// The project's files and folders, listed if they are not already.
     fn names(&mut self) -> &Names {
         if self.names.is_none() {
-            let walked = search::walk_all(self.tree.root_path(), &self.search_opts());
+            let root = self.tree.root_path().to_path_buf();
+            let walked = search::walk_all(&root, &self.search_opts());
+            let lowered = |paths: &[PathBuf]| -> Vec<String> {
+                paths
+                    .iter()
+                    .map(|p| {
+                        p.strip_prefix(&root)
+                            .unwrap_or(p)
+                            .to_string_lossy()
+                            .replace('\\', "/")
+                            .to_lowercase()
+                    })
+                    .collect()
+            };
             self.names = Some(Names {
+                sorted: sorted_names(&walked.files, &walked.folders),
+                files_rel: lowered(&walked.files),
+                folders_rel: lowered(&walked.folders),
                 files: walked.files,
                 folders: walked.folders,
                 ..Names::default()
@@ -209,42 +237,41 @@ impl App {
         }
 
         let wanted = name.replace('\\', "/").to_lowercase();
-        let rel_of = |p: &Path| {
-            p.strip_prefix(&root)
-                .unwrap_or(p)
-                .to_string_lossy()
-                .replace('\\', "/")
-                .to_lowercase()
-        };
         self.names();
         let names = self.names.as_ref().expect("listed just above");
-        let pool: Vec<&PathBuf> = match want {
-            Want::File => names.files.iter().collect(),
-            Want::Folder => names.folders.iter().collect(),
-            Want::Either => names.files.iter().chain(&names.folders).collect(),
+        let files = names.files.iter().zip(&names.files_rel);
+        let folders = names.folders.iter().zip(&names.folders_rel);
+        let pool: Vec<(&PathBuf, &String)> = match want {
+            Want::File => files.collect(),
+            Want::Folder => folders.collect(),
+            Want::Either => files.chain(folders).collect(),
         };
         // The whole name first; then, for a file, the name without its
-        // extension: `goto file readme` is plainly README.md.
+        // extension: `goto file readme` is plainly README.md. Never for a
+        // folder, which has no extension to leave off.
+        let ending = format!("/{wanted}");
         let by_name: Vec<&PathBuf> = pool
             .iter()
-            .copied()
-            .filter(|p| {
-                let rel = rel_of(p);
+            .filter(|(_, rel)| {
                 if wanted.contains('/') {
-                    rel == wanted || rel.ends_with(&format!("/{wanted}"))
+                    **rel == wanted || rel.ends_with(&ending)
                 } else {
                     rel.rsplit('/').next() == Some(wanted.as_str())
                 }
             })
+            .map(|(p, _)| *p)
             .collect();
-        let found = if by_name.is_empty() && !wanted.contains('/') {
-            pool.iter()
-                .copied()
-                .filter(|p| {
-                    p.is_file()
-                        && p.file_stem()
-                            .is_some_and(|s| s.to_string_lossy().to_lowercase() == wanted)
+        let found = if by_name.is_empty() && !wanted.contains('/') && want != Want::Folder {
+            names
+                .files
+                .iter()
+                .zip(&names.files_rel)
+                .filter(|(_, rel)| {
+                    let file = rel.rsplit('/').next().unwrap_or(rel);
+                    file.rsplit_once('.')
+                        .is_some_and(|(stem, _)| stem == wanted)
                 })
+                .map(|(p, _)| p)
                 .collect()
         } else {
             by_name

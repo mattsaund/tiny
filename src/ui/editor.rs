@@ -32,8 +32,9 @@ use crate::text::tabs;
 
 /// Raw source with line numbers, syntax highlighting, and the real cursor.
 ///
-/// Only the visible window is highlighted, see `highlight::highlight_window`
-/// for why that is both correct and cheap.
+/// Only the visible window is highlighted, resuming from the saved parser
+/// state above it, see `highlight::Highlighter::highlight_cached` for why
+/// that is both correct and cheap.
 ///
 /// The cursor is placed with `set_cursor_position` so the terminal's own
 /// blinking cursor lands in the right cell, rather than being faked with a
@@ -403,5 +404,3 @@ pub(super) fn clip_pieces<'a>(
     }
     out
 }
-
-// ---- the project map ------------------------------------------------------

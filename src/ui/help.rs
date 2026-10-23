@@ -276,7 +276,6 @@ pub(super) fn draw_help(
         (natural_width(&stacked) + 2) as u16
     };
     let popup = centered(area, width, rows as u16 + 2);
-    let scrolls = (popup.height as usize).saturating_sub(2) < rows;
 
     f.render_widget(Clear, popup);
     let block = Block::default()
@@ -288,11 +287,9 @@ pub(super) fn draw_help(
             pal.text.add_modifier(Modifier::BOLD),
         )))
         .title_bottom(Line::from(Span::styled(
-            if scrolls {
-                " up/down scroll | any other key closes "
-            } else {
-                " any key closes "
-            },
+            // The arrows keep it open whether or not there is anything to
+            // scroll, so the footer always says so.
+            " up/down scroll | any other key closes ",
             pal.dim,
         )));
     let inner = block.inner(popup);

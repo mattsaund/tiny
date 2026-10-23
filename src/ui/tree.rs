@@ -1,10 +1,12 @@
 //! The browser pane, and the result list that drops down in front of it.
 //!
 //! Two scrolling lists with one highlighted row each, which is why they share
-//! [`super::parts::keep_visible`] and [`super::parts::highlight_row`] and
-//! differ only in what a row says. They no longer share a rectangle: the tree
-//! keeps its pane and the results drop down above both panes, pushing them
-//! down, so a search never costs you sight of where you are.
+//! [`super::parts::highlight_row`] and differ mostly in what a row says. The
+//! results scroll with [`super::parts::keep_visible`]; the tree keeps its own
+//! offset, moved as little as keeps the cursor on screen. They no longer share
+//! a rectangle: the tree keeps its pane and the results drop down above both
+//! panes, pushing them down, so a search never costs you sight of where you
+//! are.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -139,7 +141,7 @@ pub(super) fn results_height(area: Rect, hits: usize) -> u16 {
 /// Note that scrolling is computed into a local, not written back to `b`: the
 /// bar is borrowed immutably here, and the offset is cheap to recompute each
 /// frame.
-pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect, b: &Bar) {
+pub(super) fn draw_results(f: &mut Frame, app: &App, area: Rect, b: &Bar) {
     let pal = app.palette;
     let tab_width = app.config.tab_width;
     let title = vec![
