@@ -50,17 +50,21 @@ a command.
 
 ## Editing
 
+![six cursors, each with a word selected](docs/cursors.png)
+
 Shift selects. `Ctrl+C` `Ctrl+X` `Ctrl+V` use your system's clipboard.
 `Alt+N` and `Alt+Shift+Up`/`Down` add cursors. `Ctrl+R` records keys, `Ctrl+P`
 plays them.
 
 ## Panes
 
-![two files side by side](docs/split.png)
+![three panes, side by side and stacked](docs/split.png)
 
 `Ctrl+W` next pane. `*split`, `*split down`, `*close`.
 
 ## Terminal
+
+![a shell under the panes](docs/terminal.png)
 
 `Ctrl+O` opens your shell under the panes, and comes back.
 
