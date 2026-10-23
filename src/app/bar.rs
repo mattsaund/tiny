@@ -32,7 +32,7 @@ use crate::text::search::{self, Hit, HitKind};
 
 use super::App;
 use super::mode::{Bar, COMMAND_SIGIL, Focus, Mode, Window};
-use super::parts::{char_byte, display_name, safe_join, split_args};
+use super::parts::{display_name, edit_field, safe_join};
 use super::preview::Preview;
 
 /// Entries that could finish the path fragment `typed`, as whole paths
@@ -120,33 +120,19 @@ pub fn completion_for(
     added: &[String],
     known: &[String],
 ) -> Option<String> {
-    use super::sentence::{KINDS, VERBS};
-    const GOTO: &[&str] = &[
-        "goto", "go", "open", "find", "jump", "show", "view", "visit",
-    ];
-    const TWO_ENDS: &[&str] = &[
-        "copy",
-        "cp",
-        "duplicate",
-        "move",
-        "mv",
-        "put",
-        "rename",
-        "ren",
-    ];
-    const ONE_NAME: &[&str] = &["delete", "del", "remove", "rm", "trash", "erase"];
-    const MAKE: &[&str] = &["new", "create", "make", "add", "mkdir", "touch"];
-    const REPLACE: &[&str] = &["replace", "sub", "substitute", "swap", "change"];
+    use super::sentence::{
+        COPY, DELETE, GOTO, KINDS, MOVE, NEW_FILE, NEW_FOLDER, RENAME, REPLACE, VERBS, words,
+    };
 
     // The sigil is not part of the command, so completion never sees it. The
     // replacement at the bottom still works on `b.input`, because whatever is
     // being completed is a suffix of both.
-    let line = b.command().to_string();
-    let args = split_args(&line);
+    let line = b.command();
+    let mut args: Vec<String> = words(line).into_iter().map(|w| w.text).collect();
     let trailing_space = line.ends_with(' ');
     // Which argument the cursor is in the middle of. A trailing space means the
     // one after the last complete argument has been started but not typed into.
-    let position = if trailing_space {
+    let mut position = if trailing_space {
         args.len()
     } else {
         args.len().saturating_sub(1)
@@ -158,6 +144,25 @@ pub fn completion_for(
     };
     let verb = args.first().map(|v| v.to_lowercase()).unwrap_or_default();
     let v = verb.as_str();
+    // `go to line 5`, `take me to line 5` and `move to line 5` are all read
+    // as `goto line 5`, so they complete like it too: the words leading in
+    // are passed over, the same ones the reading passes over.
+    let to_after = position > 1 && args[1].eq_ignore_ascii_case("to");
+    let goto = GOTO.contains(&v) || (to_after && (MOVE.contains(&v) || v == "skip"));
+    if goto && position > 1 {
+        let lead_in = args[1..position]
+            .iter()
+            .take_while(|a| {
+                ["to", "me", "for"]
+                    .iter()
+                    .any(|w| a.eq_ignore_ascii_case(w))
+            })
+            .count();
+        args.drain(1..1 + lead_in);
+        position -= lead_in;
+    }
+    let two_ends = !goto && (COPY.contains(&v) || MOVE.contains(&v) || RENAME.contains(&v));
+    let making = NEW_FILE.contains(&v) || NEW_FOLDER.contains(&v);
     let said = |w: &str| args.iter().any(|a| a.eq_ignore_ascii_case(w));
     // A name: a path from the project root while one is being typed with a
     // slash in it, and otherwise any file or folder in the project by name.
@@ -170,11 +175,11 @@ pub fn completion_for(
             out
         }
     };
-    let words = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let offer = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<_>>();
 
     let candidates: Vec<String> = match v {
         // Still on the verb itself.
-        _ if position == 0 => words(VERBS)
+        _ if position == 0 => offer(VERBS)
             .into_iter()
             .chain(added.iter().cloned())
             .collect(),
@@ -182,10 +187,8 @@ pub fn completion_for(
             .iter()
             .map(|(k, _)| k.to_string())
             .collect(),
-        _ if GOTO.contains(&v) && position == 1 => {
-            words(KINDS).into_iter().chain(names()).collect()
-        }
-        _ if GOTO.contains(&v)
+        _ if goto && position == 1 => offer(KINDS).into_iter().chain(names()).collect(),
+        _ if goto
             && position == 2
             && args
                 .get(1)
@@ -196,18 +199,19 @@ pub fn completion_for(
         // `copy README.md `: what comes next is the word joining the two
         // halves, so offer that and nothing else. Anyone copying a name with
         // spaces in it can type the two letters themselves.
-        _ if TWO_ENDS.contains(&v) && position == 2 => words(&["to"]),
-        _ if TWO_ENDS.contains(&v) && (position == 1 || said("to")) => names(),
-        _ if ONE_NAME.contains(&v) => names(),
-        _ if MAKE.contains(&v) && position == 1 => words(&["file", "folder"])
+        _ if two_ends && position == 2 => offer(&["to"]),
+        _ if two_ends && (position == 1 || said("to")) => names(),
+        _ if DELETE.contains(&v) => names(),
+        // `mkdir` has already said it makes a folder.
+        _ if NEW_FILE.contains(&v) && position == 1 => offer(&["file", "folder"])
             .into_iter()
             .chain(path_candidates(root, &typed, show_hidden))
             .collect(),
-        _ if MAKE.contains(&v) => path_candidates(root, &typed, show_hidden),
+        _ if making => path_candidates(root, &typed, show_hidden),
         // `replace hi ` wants its `with`; `replace hi with hello ` its `in`.
-        _ if REPLACE.contains(&v) && position == 2 && !said("with") => words(&["with"]),
+        _ if REPLACE.contains(&v) && position == 2 && !said("with") => offer(&["with"]),
         _ if REPLACE.contains(&v) && said("with") && !said("in") && position == args.len() => {
-            words(&["in"])
+            offer(&["in"])
         }
         _ if REPLACE.contains(&v) && said("in") => names(),
         _ => return None,
@@ -383,50 +387,21 @@ impl App {
         // from the text, and a letter typed in front of it would turn the
         // command back into a search. Backspace can still take it away.
         let floor = usize::from(b.is_command());
-        match key.code {
-            KeyCode::Backspace => {
-                if b.cursor > 0 {
-                    let s = char_byte(&b.input, b.cursor - 1);
-                    let e = char_byte(&b.input, b.cursor);
-                    b.input.replace_range(s..e, "");
-                    b.cursor -= 1;
-                }
-            }
-            KeyCode::Delete => {
-                let n = b.input.chars().count();
-                if b.cursor < n {
-                    let s = char_byte(&b.input, b.cursor);
-                    let e = char_byte(&b.input, b.cursor + 1);
-                    b.input.replace_range(s..e, "");
-                }
-            }
-            KeyCode::Left => b.cursor = b.cursor.saturating_sub(1).max(floor),
-            KeyCode::Right => {
-                // At the end of the line the only thing to the right of the
-                // cursor is the gray suggestion, so the arrow takes it up:
-                // the same key, doing the same thing, to what is drawn there.
-                // Anywhere else it moves along the text as it always did.
-                if b.is_command() && b.cursor == b.input.chars().count() {
-                    complete_command(
-                        &mut b,
-                        self.tree.root_path(),
-                        self.config.show_hidden,
-                        &self.plugins.commands(),
-                        self.known_names(),
-                    );
-                    b.stale = true;
-                } else {
-                    b.cursor = (b.cursor + 1).min(b.input.chars().count());
-                }
-            }
-            KeyCode::Home => b.cursor = floor,
-            KeyCode::End => b.cursor = b.input.chars().count(),
-            KeyCode::Char(c) => {
-                let byte = char_byte(&b.input, b.cursor);
-                b.input.insert(byte, c);
-                b.cursor += 1;
-            }
-            _ => {}
+        // At the end of the line the only thing to the right of the cursor
+        // is the gray suggestion, so the arrow takes it up: the same key,
+        // doing the same thing, to what is drawn there. Anywhere else it
+        // moves along the text as it always did.
+        if key.code == KeyCode::Right && b.is_command() && b.cursor == b.input.chars().count() {
+            complete_command(
+                &mut b,
+                self.tree.root_path(),
+                self.config.show_hidden,
+                &self.plugins.commands(),
+                self.known_names(),
+            );
+            b.stale = true;
+        } else {
+            edit_field(&mut b.input, &mut b.cursor, floor, key);
         }
         if b.input == before {
             self.mode = Mode::Bar(b);

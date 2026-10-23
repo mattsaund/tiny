@@ -30,7 +30,7 @@ use anyhow::{Result, anyhow};
 
 use super::App;
 use super::parts::plural;
-use super::plan;
+use super::sentence;
 
 impl App {
     // ---- commands ---------------------------------------------------------
@@ -55,7 +55,7 @@ impl App {
     pub(super) fn run_command(&mut self, line: &str) {
         self.forget_names();
         self.planning_for_preview = false;
-        let said = plan::read(line);
+        let said = sentence::parse(line);
         let result = match self.plan(&said, line) {
             Ok(plan) => self.carry_out(plan, line),
             Err(why) => Err(anyhow!(why)),
@@ -72,7 +72,7 @@ impl App {
     /// What the command typed so far would do, for the line under the bar.
     pub(super) fn preview_command(&mut self, line: &str) -> Result<String, String> {
         self.planning_for_preview = true;
-        let said = plan::read(line);
+        let said = sentence::parse(line);
         let planned = self.plan(&said, line);
         self.planning_for_preview = false;
         planned.map(|p| self.describe(&p))

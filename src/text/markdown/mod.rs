@@ -71,6 +71,19 @@ use self::wrap::wrap;
 use crate::config::Palette;
 use crate::text::highlight::Highlighter;
 
+/// Whether a path names a markdown file, by its extension in any case.
+///
+/// The one list of markdown's extensions: the editor, the map and the
+/// commands that look for headings all ask here, so a `.mdown` note is a
+/// note to all of them or to none.
+pub fn is_markdown(path: &std::path::Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        ["md", "markdown", "mdown", "mkd"]
+            .iter()
+            .any(|m| e.eq_ignore_ascii_case(m))
+    })
+}
+
 /// Extract every `[[target]]` in document order, with any `|alias` stripped.
 /// Duplicates are kept; callers that want unique edges can dedupe.
 ///

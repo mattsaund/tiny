@@ -2,8 +2,8 @@
 //!
 //! Nothing here touches [`App`](super::App). They are the shared answers to questions that
 //! come up in several places (how a path is named in a message, how a list
-//! cursor moves, how a command line is split into arguments) kept in one
-//! place so the answer cannot differ depending on which file asked.
+//! cursor moves, how a one-line field is typed into) kept in one place so
+//! the answer cannot differ depending on which file asked.
 //!
 //! [`safe_join`] is the one that matters. Every path that arrives as text goes
 //! through it, and it fails closed twice: once if `..` pops past the start,
@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use crate::text::editor::byte_of_char;
 
 /// Filename for a status message, falling back to the full path.
 pub(super) fn display_name(path: &Path) -> String {
@@ -60,45 +62,44 @@ pub(super) fn list_move(key: KeyEvent, at: usize, last: usize, page: usize) -> O
     })
 }
 
-/// Byte offset of character index `ci`.
-pub(super) fn char_byte(s: &str, ci: usize) -> usize {
-    s.char_indices().nth(ci).map_or(s.len(), |(b, _)| b)
-}
-
-/// Split a command line on whitespace, keeping double-quoted runs together so
-/// `*replace "old thing" "new thing"` works.
+/// One key typed into a one-line field, with its cursor counted in
+/// characters and never put before `floor`. False for a key a field has no
+/// use for, so the caller can give it a meaning of its own.
 ///
-/// The `any` flag tracks whether the current argument was *started*, which is
-/// what lets `""` produce a deliberate empty argument rather than being
-/// dropped as whitespace. There is no escaping: a literal quote cannot be
-/// passed, which is a known limit rather than an oversight.
-pub(super) fn split_args(line: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut quoted = false;
-    let mut any = false;
-    for c in line.trim().chars() {
-        match c {
-            '"' => {
-                quoted = !quoted;
-                any = true;
-            }
-            c if c.is_whitespace() && !quoted => {
-                if any || !cur.is_empty() {
-                    out.push(std::mem::take(&mut cur));
-                    any = false;
-                }
-            }
-            c => {
-                cur.push(c);
-                any = true;
-            }
+/// The bar and the settings fields type the same way, so Backspace cannot
+/// mean one thing in one and something else in the other. What Enter, Esc
+/// and Tab do stays with each of them.
+pub(super) fn edit_field(
+    text: &mut String,
+    cursor: &mut usize,
+    floor: usize,
+    key: KeyEvent,
+) -> bool {
+    let len = text.chars().count();
+    match key.code {
+        // Backspace is the one key allowed under the floor: the bar's `*` is
+        // there to be taken away, which turns a command back into a search.
+        KeyCode::Backspace if *cursor > 0 => {
+            let at = byte_of_char(text, *cursor - 1)..byte_of_char(text, *cursor);
+            text.replace_range(at, "");
+            *cursor -= 1;
         }
+        KeyCode::Delete if *cursor < len => {
+            let at = byte_of_char(text, *cursor)..byte_of_char(text, *cursor + 1);
+            text.replace_range(at, "");
+        }
+        KeyCode::Backspace | KeyCode::Delete => {}
+        KeyCode::Left => *cursor = cursor.saturating_sub(1).max(floor),
+        KeyCode::Right => *cursor = (*cursor + 1).min(len),
+        KeyCode::Home => *cursor = floor,
+        KeyCode::End => *cursor = len,
+        KeyCode::Char(c) => {
+            text.insert(byte_of_char(text, *cursor), c);
+            *cursor += 1;
+        }
+        _ => return false,
     }
-    if any || !cur.is_empty() {
-        out.push(cur);
-    }
-    out
+    true
 }
 
 /// Join a user-typed name onto `base`, refusing anything that would escape the

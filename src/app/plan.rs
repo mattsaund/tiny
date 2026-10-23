@@ -27,13 +27,14 @@ use anyhow::anyhow;
 use crate::map::scan;
 use crate::parallel::par_map;
 use crate::text::editor::Editor;
+use crate::text::markdown;
 use crate::text::search::{self, Hit, HitKind, Matcher, Needle, Report};
 
 use super::App;
 use super::mode::{Confirm, ConfirmKind, Focus, Mode, Window as AppWindow};
 use super::parts::{display_name, plural, safe_join};
 use super::preview::{Preview, read_editable};
-use super::sentence::{self, Place, Sentence, Target, Window};
+use super::sentence::{Place, Sentence, Target, Window};
 
 /// Most places a `goto` collects before it stops counting.
 const MAX_SPOTS: usize = 1000;
@@ -700,7 +701,7 @@ impl App {
     /// case. Lines inside a fenced code block are not headings, whatever
     /// they start with.
     fn read_headings(&self, files: &[PathBuf]) -> Vec<(String, Hit)> {
-        let notes: Vec<&PathBuf> = files.iter().filter(|p| is_markdown(p)).collect();
+        let notes: Vec<&PathBuf> = files.iter().filter(|p| markdown::is_markdown(p)).collect();
         let buffers = &self.buffers;
         par_map(
             &notes,
@@ -1103,16 +1104,6 @@ fn what_of(target: &Target) -> String {
     }
 }
 
-/// Whether a path is a markdown note, which is where headings are.
-fn is_markdown(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        matches!(
-            e.to_ascii_lowercase().as_str(),
-            "md" | "markdown" | "mdown" | "mkd"
-        )
-    })
-}
-
 /// The title of a markdown heading line (`## Install` is `Install`) or
 /// `None` for any other line.
 fn heading_text(line: &str) -> Option<&str> {
@@ -1125,10 +1116,4 @@ fn heading_text(line: &str) -> Option<&str> {
         return None; // `#tag`, not a heading
     }
     Some(rest.trim().trim_end_matches('#').trim())
-}
-
-/// Read a command line into a sentence. Here so the rest of `app` asks one
-/// module for both halves.
-pub(super) fn read(line: &str) -> Sentence {
-    sentence::parse(line)
 }

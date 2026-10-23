@@ -128,9 +128,6 @@ pub enum Context {
     /// Chords that work from any pane. Checked before the pane's own set.
     Global,
     Tree,
-    /// A preview with no text buffer behind it: a picture, a directory, a
-    /// binary. There is nothing to type into, so the arrows scroll the view.
-    View,
     /// The editor, and the one key that leaves it.
     Editor,
     Map,
@@ -143,7 +140,6 @@ impl Context {
         match self {
             Context::Global => "ANYWHERE",
             Context::Tree => "BROWSER",
-            Context::View => "VIEWING",
             Context::Editor => "EDITOR",
             Context::Map => "MAP",
             Context::Source => "GIT",
@@ -277,7 +273,7 @@ type Row = (
 );
 
 /// The panes that are navigated rather than typed into.
-const PANES: &[Context] = &[Context::Tree, Context::View, Context::Map, Context::Source];
+const PANES: &[Context] = &[Context::Tree, Context::Map, Context::Source];
 
 const TABLE: &[Row] = &[
     (
@@ -387,38 +383,28 @@ const TABLE: &[Row] = &[
     ),
     (
         Action::First,
-        &[Context::Tree, Context::View, Context::Source],
+        &[Context::Tree, Context::Source],
         "first",
         "",
         "home I",
     ),
     (
         Action::Last,
-        &[Context::Tree, Context::View, Context::Source],
+        &[Context::Tree, Context::Source],
         "last",
         "",
         "end K",
     ),
     (
         Action::PageUp,
-        &[
-            Context::Tree,
-            Context::View,
-            Context::Source,
-            Context::Editor,
-        ],
+        &[Context::Tree, Context::Source, Context::Editor],
         "page_up",
         "",
         "pageup ctrl+u",
     ),
     (
         Action::PageDown,
-        &[
-            Context::Tree,
-            Context::View,
-            Context::Source,
-            Context::Editor,
-        ],
+        &[Context::Tree, Context::Source, Context::Editor],
         "page_down",
         "",
         "pagedown ctrl+d",
@@ -1116,7 +1102,7 @@ mod tests {
         let k = ev(KeyCode::Char('k'), KeyModifiers::NONE);
         // One action, answered by each pane in its own way.
         assert_eq!(map.resolve(Context::Tree, &k), Some(Action::Down));
-        assert_eq!(map.resolve(Context::View, &k), Some(Action::Down));
+        assert_eq!(map.resolve(Context::Map, &k), Some(Action::Down));
         // The editor has no bare-letter bindings: there, k is the letter k.
         assert_eq!(map.resolve(Context::Editor, &k), None);
     }
@@ -1174,7 +1160,7 @@ mod tests {
     fn one_movement_is_one_action_in_every_pane_that_has_it() {
         let map = Keymap::default();
         let down = ev(KeyCode::Down, KeyModifiers::NONE);
-        for ctx in [Context::Tree, Context::View, Context::Map, Context::Source] {
+        for ctx in [Context::Tree, Context::Map, Context::Source] {
             assert_eq!(
                 map.resolve(ctx, &down),
                 Some(Action::Down),
@@ -1187,7 +1173,7 @@ mod tests {
         let (map, warning) = Keymap::new(&over, Keyboard::default());
         assert!(warning.is_none());
         let n = ev(KeyCode::Char('n'), KeyModifiers::NONE);
-        for ctx in [Context::Tree, Context::View, Context::Map, Context::Source] {
+        for ctx in [Context::Tree, Context::Map, Context::Source] {
             assert_eq!(map.resolve(ctx, &n), Some(Action::Down), "{ctx:?}");
         }
     }
@@ -1196,7 +1182,12 @@ mod tests {
     fn the_global_chords_reach_every_context() {
         let map = Keymap::default();
         let save = ev(KeyCode::Char('s'), KeyModifiers::CONTROL);
-        for ctx in [Context::Tree, Context::View, Context::Editor] {
+        for ctx in [
+            Context::Tree,
+            Context::Map,
+            Context::Source,
+            Context::Editor,
+        ] {
             assert_eq!(map.resolve(ctx, &save), Some(Action::Save));
         }
     }

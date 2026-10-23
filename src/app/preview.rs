@@ -84,15 +84,13 @@ pub(super) const PROSE_NAMES: &[&str] = &[
 /// [`PROSE_NAMES`], and are code otherwise, which is the right default for a
 /// `Makefile` or a shell script.
 pub(super) fn text_kind(path: &Path, prose_exts: &[String]) -> TextKind {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_lowercase)
-    {
-        // Markdown is checked first: it is also in the prose list by default,
-        // but it has a renderer of its own.
-        Some(e) if matches!(e.as_str(), "md" | "markdown" | "mdown" | "mkd") => TextKind::Markdown,
-        Some(e) if prose_exts.iter().any(|p| p.eq_ignore_ascii_case(&e)) => TextKind::Prose,
+    // Markdown is checked first: it is also in the prose list by default, but
+    // it has a renderer of its own.
+    if crate::text::markdown::is_markdown(path) {
+        return TextKind::Markdown;
+    }
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(e) if prose_exts.iter().any(|p| p.eq_ignore_ascii_case(e)) => TextKind::Prose,
         Some(_) => TextKind::Code,
         None => {
             let name = path

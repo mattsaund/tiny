@@ -366,11 +366,11 @@ impl Editor {
 
 /// Byte offset of character index `ci`, or the string length if past the end.
 ///
-/// The bridge between the character-indexed cursor and byte-indexed `String`
-/// operations. Every `insert`, `replace_range` and `split_off` in this module
-/// goes through it; slicing with a raw `cursor_col` would panic on any file
-/// containing a non-ASCII character.
-pub(super) fn byte_of_char(s: &str, ci: usize) -> usize {
+/// The bridge between a cursor counted in characters and byte-indexed
+/// `String` operations. Every `insert`, `replace_range` and `split_off` on a
+/// line goes through it, here and in the one-line fields: slicing with a raw
+/// cursor would panic on any text containing a non-ASCII character.
+pub fn byte_of_char(s: &str, ci: usize) -> usize {
     s.char_indices().nth(ci).map_or(s.len(), |(b, _)| b)
 }
 

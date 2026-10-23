@@ -259,20 +259,22 @@ fn shift_i_and_k_go_all_the_way_like_shift_and_an_arrow() {
 }
 
 #[test]
-fn ijkl_scroll_something_with_no_text_in_it() {
+fn ijkl_in_front_of_a_picture_reach_nothing_behind_it() {
     let (_td, mut app) = fixture();
-    // A picture has no buffer and no cursor, so the letters that stand in
-    // for arrows still move the view. In a text file they are letters.
-    // Folding the tree away is what hands the keyboard to a pane like
-    // this one \u{2014} Enter on a picture opens it outside tiny instead.
+    // A picture has no buffer to type into and its few lines of facts do not
+    // scroll, so the letters that stand in for arrows do nothing there: not
+    // a scroll that is never drawn, and not a move of the browser folded away
+    // behind it. Folding the tree away is what hands the keyboard to a pane
+    // like this one, since Enter on a picture opens it outside tiny instead.
     select(&mut app, "logo.png");
+    let at = app.selected;
     app.on_key(ctrl('t'));
     assert_eq!(app.focus, Focus::Editor);
     joined(&mut app);
     app.on_key(ch('k'));
-    assert_eq!(app.preview_scroll, 1);
     app.on_key(ch('i'));
-    assert_eq!(app.preview_scroll, 0);
+    assert_eq!((app.selected, app.preview_scroll), (at, 0));
+    assert!(matches!(app.preview, Preview::Media { .. }));
 }
 
 #[test]

@@ -27,8 +27,8 @@
 /// One word of a command line, and whether it was written in quotes. A quoted
 /// word is always part of a name, even when it is `to`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Word {
-    text: String,
+pub(super) struct Word {
+    pub(super) text: String,
     quoted: bool,
 }
 
@@ -40,7 +40,11 @@ impl Word {
 }
 
 /// Split a line into words, keeping a double-quoted run as one word.
-fn words(line: &str) -> Vec<Word> {
+///
+/// `""` is a word too, an empty one, so `*replace "x" ""` can say "with
+/// nothing". There is no escaping: a quote mark cannot be part of a word,
+/// which is a known limit rather than an oversight.
+pub(super) fn words(line: &str) -> Vec<Word> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut quoted = false;
@@ -185,17 +189,19 @@ pub enum Sentence {
 
 // ---- the words ------------------------------------------------------------
 
-const GOTO: &[&str] = &[
+// The verbs are read by the bar's Tab completion too, so a spelling added
+// here is one Tab knows what comes after.
+pub(super) const GOTO: &[&str] = &[
     "goto", "go", "jump", "open", "show", "find", "view", "visit", "locate", "navigate", "take",
     "head",
 ];
-const COPY: &[&str] = &["copy", "cp", "duplicate", "dup", "clone"];
-const MOVE: &[&str] = &["move", "mv", "put", "relocate", "transfer"];
-const RENAME: &[&str] = &["rename", "ren"];
-const DELETE: &[&str] = &["delete", "del", "remove", "rm", "trash", "erase", "destroy"];
-const NEW_FILE: &[&str] = &["new", "create", "make", "add", "touch"];
-const NEW_FOLDER: &[&str] = &["mkdir", "md"];
-const REPLACE: &[&str] = &["replace", "sub", "substitute", "swap", "change", "switch"];
+pub(super) const COPY: &[&str] = &["copy", "cp", "duplicate", "dup", "clone"];
+pub(super) const MOVE: &[&str] = &["move", "mv", "put", "relocate", "transfer"];
+pub(super) const RENAME: &[&str] = &["rename", "ren"];
+pub(super) const DELETE: &[&str] = &["delete", "del", "remove", "rm", "trash", "erase", "destroy"];
+pub(super) const NEW_FILE: &[&str] = &["new", "create", "make", "add", "touch"];
+pub(super) const NEW_FOLDER: &[&str] = &["mkdir", "md"];
+pub(super) const REPLACE: &[&str] = &["replace", "sub", "substitute", "swap", "change", "switch"];
 
 const LINE: &[&str] = &["line", "ln", "row"];
 const FUNCTION: &[&str] = &[
@@ -275,7 +281,7 @@ pub fn parse(line: &str) -> Sentence {
     let rest = &w[1..];
 
     if first.quoted {
-        return goto(rest_from(&w, 0));
+        return goto(&w);
     }
     if first.text.parse::<usize>().is_ok() {
         // `*42`, the way `:42` is everywhere else.
@@ -687,8 +693,10 @@ fn replace(w: &[Word]) -> Sentence {
 
 // ---- what a sentence starts with ----------------------------------------
 
-/// Every verb tiny reads, for completing the first word. One spelling of
-/// each idea leads, so Tab offers the plainest.
+/// The verbs Tab completes as the first word: the plain spelling of each
+/// idea and the others people reach for most. The parser reads more (the
+/// lists above); a rarer spelling still works, it is only not offered, so
+/// that it does not stand in the way of completing a common one.
 pub const VERBS: &[&str] = &[
     "goto",
     "copy",
@@ -738,6 +746,21 @@ mod tests {
 
     fn goes(target: Target, within: Option<Place>) -> Sentence {
         Sentence::Goto { target, within }
+    }
+
+    #[test]
+    fn words_keep_quoted_runs_together() {
+        let texts =
+            |line: &str| -> Vec<String> { words(line).into_iter().map(|w| w.text).collect() };
+        assert_eq!(texts("set tab_width 2"), ["set", "tab_width", "2"]);
+        assert_eq!(
+            texts(r#"replace "old thing" "new thing""#),
+            ["replace", "old thing", "new thing"]
+        );
+        assert_eq!(texts("  spaced   out  "), ["spaced", "out"]);
+        assert!(texts("").is_empty());
+        // An empty quoted string is a real word, not nothing.
+        assert_eq!(texts(r#"replace "x" """#), ["replace", "x", ""]);
     }
 
     // ---- goto -------------------------------------------------------------

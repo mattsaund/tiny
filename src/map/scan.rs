@@ -141,12 +141,14 @@ impl Facts {
 /// Classify a file. Order matters: markdown is checked before the prose list
 /// because it is usually *in* that list but has a link syntax of its own.
 pub(super) fn node_kind(path: &Path, prose_exts: &[String]) -> NodeKind {
+    if crate::text::markdown::is_markdown(path) {
+        return NodeKind::Note;
+    }
     match path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
     {
-        Some(e) if matches!(e.as_str(), "md" | "markdown" | "mdown" | "mkd") => NodeKind::Note,
         Some(e) if prose_exts.iter().any(|p| p.eq_ignore_ascii_case(&e)) => NodeKind::Prose,
         Some(_) if lang_of(path).is_some() => NodeKind::Code,
         // Source in a language tiny cannot parse still shows, it just has no
