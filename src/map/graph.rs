@@ -802,6 +802,34 @@ mod tests {
     }
 
     #[test]
+    fn a_wide_character_beside_a_call_or_in_a_char_is_read_past() {
+        use super::super::scan::{Facts, Lang, collect_path_calls, strip_tests};
+        // Each of these once cut a character in half and took tiny down.
+        for text in [
+            "// \u{8c03}\u{7528}Config::load()\n",
+            "/// \u{2018}Config::load()\u{2019}\n",
+            "let g = Gr\u{f6}\u{df}e::new();\n",
+        ] {
+            let mut f = Facts::default();
+            collect_path_calls(text, &mut f);
+            assert!(
+                f.calls.contains_key("load") || f.calls.contains_key("new"),
+                "{text}"
+            );
+        }
+        let mut f = Facts::default();
+        collect_path_calls("x \u{2018}Config::load()", &mut f);
+        assert!(f.calls.contains_key("Config"), "the type is still credited");
+        for text in [
+            "#[cfg(test)]\nmod t { const C: char = '\\\u{e9}'; }\nfn real() {}\n",
+            "#[cfg(test)]\nmod t { const C: char = '\\",
+        ] {
+            let (body, _) = strip_tests(Lang::Rust, text);
+            assert!(!body.contains("const C"), "{body}");
+        }
+    }
+
+    #[test]
     fn a_test_module_in_a_file_of_its_own_is_a_test() {
         let td = tempfile::tempdir().unwrap();
         write(

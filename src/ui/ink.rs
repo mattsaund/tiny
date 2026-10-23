@@ -18,9 +18,11 @@
 //! line out of one file also shares a trunk, so a file with eight connections
 //! produces one bundle leaving it rather than eight separate departures.
 
+use std::collections::HashMap;
+
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::config::{Glyphs, Palette};
 use crate::map::layout::{Channels, Placed};
@@ -65,6 +67,10 @@ pub(super) struct Ink {
     h: usize,
     bits: Vec<u8>,
     text: Vec<Option<(char, InkStyle)>>,
+    /// The whole of a character written as several (an `e` and its accent, a
+    /// thumb and its skin tone), by the cell whose `text` holds the first of
+    /// them. Kept apart because nearly every cell is one `char`.
+    clusters: HashMap<usize, String>,
 }
 
 impl Ink {
@@ -74,6 +80,7 @@ impl Ink {
             h,
             bits: vec![0; w * h],
             text: vec![None; w * h],
+            clusters: HashMap::new(),
         }
     }
 
@@ -95,6 +102,9 @@ impl Ink {
     fn put(&mut self, x: i32, y: i32, ch: char, style: InkStyle) {
         if let Some(i) = self.at(x, y) {
             self.text[i] = Some((ch, style));
+            if !self.clusters.is_empty() {
+                self.clusters.remove(&i);
+            }
         }
     }
 
@@ -146,23 +156,44 @@ impl Ink {
     }
 
     /// Write a run of text starting at a cell, clipped at the right edge, a
-    /// cell per column: a wide character takes two, the second covered.
+    /// character as it is drawn at a time: a wide one takes two cells, the
+    /// second covered, and one written as several stays whole, measured the
+    /// way the layout measured the name it sits in.
     pub(super) fn write(&mut self, x: i32, y: i32, text: &str, style: InkStyle) {
         let mut x = x;
-        for c in text.chars() {
-            match c.width().unwrap_or(0) {
-                // A combining mark has no cell of its own to go in.
+        for g in text.graphemes(true) {
+            let w = crate::text::tabs::cluster_width(g) as i32;
+            let first = g.chars().next().unwrap_or(' ');
+            match w {
+                // Nothing to draw, so no cell to take.
                 0 => continue,
-                1 => self.put(x, y, c, style),
-                _ if self.at(x + 1, y).is_some() => {
-                    self.put(x, y, c, style);
-                    self.put(x + 1, y, COVERED, style);
+                _ if self.at(x + w - 1, y).is_some() => {
+                    self.put(x, y, first, style);
+                    if first.len_utf8() < g.len()
+                        && let Some(i) = self.at(x, y)
+                    {
+                        self.clusters.insert(i, g.to_string());
+                    }
+                    for dx in 1..w {
+                        self.put(x + dx, y, COVERED, style);
+                    }
                 }
-                // Half of it would hang off the grid.
+                // Part of it would hang off the grid.
                 _ => self.put(x, y, ' ', style),
             }
-            x += c.width().unwrap_or(0).max(1) as i32;
+            x += w;
         }
+    }
+
+    /// Whether the wide heading character starting at `i` has a line through
+    /// either of its cells, and so cannot be drawn whole.
+    fn broken(&self, i: usize) -> bool {
+        matches!(self.text[i], Some((c, InkStyle::Folder)) if c != COVERED)
+            && matches!(
+                self.text.get(i + 1),
+                Some(Some((COVERED, InkStyle::Folder)))
+            )
+            && (self.bits[i] != 0 || self.bits[i + 1] != 0)
     }
 
     /// Turn the grid into one `Line` per row, merging neighboring cells that
@@ -188,19 +219,27 @@ impl Ink {
             for x in 0..self.w {
                 let i = y * self.w + x;
                 let line = self.bits[i] != 0;
-                let (ch, style) = match self.text[i] {
-                    // A heading names the boxes under it; a line crossing it
-                    // keeps its cells, or the line would read as two.
-                    Some((_, InkStyle::Folder)) if line => {
-                        (g.map_lines[self.bits[i] as usize], pal.text)
-                    }
-                    Some((ch, s)) => (ch, style_of(s)),
-                    None if line => (g.map_lines[self.bits[i] as usize], pal.text),
-                    None => (' ', pal.dim),
-                };
-                if ch == COVERED {
-                    continue;
-                }
+                let lined = (g.map_lines[self.bits[i] as usize], pal.text, false);
+                let blank = (' ', pal.dim, false);
+                // Which character, how, and whether it is the text written
+                // there, which may be the first of several.
+                let (ch, style, as_text) =
+                    match self.text[i] {
+                        // The second cell of a wide heading character a line goes
+                        // through: the character gave up both its cells, so this
+                        // one is drawn on its own.
+                        Some((COVERED, InkStyle::Folder)) if x > 0 && self.broken(i - 1) => {
+                            if line { lined } else { blank }
+                        }
+                        Some((COVERED, _)) => continue,
+                        // A heading names the boxes under it; a line crossing it
+                        // keeps its cells, or the line would read as two.
+                        Some((_, InkStyle::Folder)) if line => lined,
+                        Some((_, InkStyle::Folder)) if self.broken(i) => blank,
+                        Some((ch, s)) => (ch, style_of(s), true),
+                        None if line => lined,
+                        None => blank,
+                    };
                 if run_style != Some(style) {
                     if !run.is_empty() {
                         spans.push(Span::styled(
@@ -210,7 +249,10 @@ impl Ink {
                     }
                     run_style = Some(style);
                 }
-                run.push(ch);
+                match self.clusters.get(&i) {
+                    Some(whole) if as_text => run.push_str(whole),
+                    _ => run.push(ch),
+                }
             }
             if !run.is_empty() {
                 spans.push(Span::styled(run, run_style.unwrap_or(pal.dim)));
@@ -404,6 +446,56 @@ mod tests {
             (slot(0, 0, 8), slot(3, 2, 9), "down and to the right"),
             (slot(3, 2, 9), slot(0, 0, 8), "up and to the left"),
         ]
+    }
+
+    /// Each row's width as drawn, and its text.
+    fn drawn(ink: &Ink) -> Vec<(usize, String)> {
+        let g = &crate::config::glyphs::UNICODE;
+        ink.render(g, &Palette::default())
+            .iter()
+            .map(|l| {
+                let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                (l.width(), text)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_line_through_a_wide_heading_character_keeps_the_row_its_width() {
+        // Through the character's first cell, and through its second.
+        for x in [1, 2] {
+            let mut ink = Ink::new(16, 3);
+            ink.write(0, 1, "a\u{6587}\u{6863}/  2 files", InkStyle::Folder);
+            ink.vline(x, 0, 2);
+            for (width, text) in drawn(&ink) {
+                assert_eq!(width, 16, "line at {x}: {text:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_name_written_as_several_characters_stays_whole_and_in_its_box() {
+        for name in ["\u{1f44d}\u{1f3fd}.md", "re\u{301}sume\u{301}.md"] {
+            // As wide as the layout makes it: the name, and a border each side.
+            let width = name
+                .graphemes(true)
+                .map(crate::text::tabs::cluster_width)
+                .sum::<usize>() as u16
+                + 2;
+            let mut ink = Ink::new(20, 3);
+            let g = &crate::config::glyphs::UNICODE;
+            ink.draw_box(&placed(0, 0, 0, width), name, InkStyle::Far, g);
+            let rows = drawn(&ink);
+            for (w, text) in &rows {
+                assert_eq!(*w, 20, "{text:?}");
+            }
+            assert!(rows[1].1.contains(name), "the name whole: {:?}", rows[1].1);
+            assert!(
+                rows[1].1.trim_end().ends_with(g.map_vertical),
+                "and its border: {:?}",
+                rows[1].1
+            );
+        }
     }
 
     #[test]

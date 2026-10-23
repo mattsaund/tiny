@@ -85,11 +85,13 @@ pub(super) struct Renderer<'a> {
     table: Option<TableState>,
     /// Inside a block of raw HTML, whose lines are drawn as they are written.
     in_html: bool,
-    /// A blank line asked for and not yet drawn. It waits for the next line,
-    /// so it is drawn inside whatever that line is inside: between two blocks
-    /// in a quote it carries the gutter, after the quote's last one it does
-    /// not, and at the very end it is never drawn at all.
-    blank_due: bool,
+    /// A blank line asked for and not yet drawn, and how many of the
+    /// containers open now were open when it was asked for. It waits for the
+    /// next line and is drawn inside the containers the two lines share:
+    /// between two blocks in a quote it carries the gutter, before the
+    /// quote's first line or after its last it does not, and at the very end
+    /// it is never drawn at all.
+    blank_due: Option<usize>,
 }
 
 /// How a heading of each level is drawn.
@@ -134,7 +136,7 @@ impl<'a> Renderer<'a> {
             code_buf: String::new(),
             table: None,
             in_html: false,
-            blank_due: false,
+            blank_due: None,
         }
     }
 
@@ -193,9 +195,15 @@ impl Renderer<'_> {
     /// outermost first. For the first line drawn in an item, `first` takes
     /// its marker in place of the spaces.
     fn prefix(&mut self, first: bool) -> Vec<Span<'static>> {
+        let open = self.nest.len();
+        self.prefix_of(open, first)
+    }
+
+    /// [`Renderer::prefix`], of only the outermost `depth` containers.
+    fn prefix_of(&mut self, depth: usize, first: bool) -> Vec<Span<'static>> {
         let gutter = Span::styled(self.pal.glyphs.gutter, self.pal.dim);
         let mut out = Vec::new();
-        for n in &mut self.nest {
+        for n in &mut self.nest[..depth] {
             match n {
                 Nest::Quote => out.push(gutter.clone()),
                 Nest::List(_) => {}
@@ -224,10 +232,10 @@ impl Renderer<'_> {
     /// Put a finished line out, after the blank line due before it, if one
     /// is.
     fn push_line(&mut self, line: Line<'static>) {
-        if std::mem::take(&mut self.blank_due) {
-            // Drawn inside the containers this line is in: a quote's gutter
-            // stays, an item's spaces are trimmed away.
-            let mut spans = self.prefix(false);
+        if let Some(shared) = self.blank_due.take() {
+            // Drawn inside the containers it shares with the line before it:
+            // a quote's gutter stays, an item's spaces are trimmed away.
+            let mut spans = self.prefix_of(shared, false);
             while spans.last().is_some_and(|s| s.content.trim().is_empty()) {
                 spans.pop();
             }
@@ -245,7 +253,17 @@ impl Renderer<'_> {
     /// to check. See `blank_due` for when it is drawn.
     fn blank(&mut self) {
         if !self.out.is_empty() {
-            self.blank_due = true;
+            let open = self.nest.len();
+            self.blank_due = Some(self.blank_due.map_or(open, |k| k.min(open)));
+        }
+    }
+
+    /// Close the innermost container. A blank line still waiting no longer
+    /// shares it with whatever comes next.
+    fn close(&mut self) {
+        self.nest.pop();
+        if let Some(k) = &mut self.blank_due {
+            *k = (*k).min(self.nest.len());
         }
     }
 
@@ -509,7 +527,7 @@ impl Renderer<'_> {
             }
             TagEnd::BlockQuote(_) => {
                 self.flush();
-                self.nest.pop();
+                self.close();
                 self.blank();
             }
             TagEnd::CodeBlock => {
@@ -523,7 +541,7 @@ impl Renderer<'_> {
                 self.blank();
             }
             TagEnd::List(_) => {
-                self.nest.pop();
+                self.close();
                 if !self.in_list() {
                     self.blank();
                 }
@@ -543,11 +561,11 @@ impl Renderer<'_> {
                     let line = self.prefix(true);
                     self.push_line(Line::from(line));
                 }
-                self.nest.pop();
+                self.close();
             }
             TagEnd::FootnoteDefinition => {
                 self.flush();
-                self.nest.pop();
+                self.close();
                 self.blank();
             }
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
@@ -706,6 +724,17 @@ impl Renderer<'_> {
 mod tests {
     use super::*;
     use crate::text::markdown::testing::*;
+
+    #[test]
+    fn the_gap_before_a_quote_is_outside_it() {
+        // The blank line between a paragraph and a quote belongs to neither,
+        // so it has no bar; one between two paragraphs in a quote does.
+        let out = plain("para\n\n> quote\n>\n> more\n", 40);
+        assert_eq!(out[1].trim(), "", "{out:?}");
+        assert!(out[3].trim_start().starts_with('\u{2502}'), "{out:?}");
+        let nested = plain("> a\n>\n> > b\n", 40);
+        assert_eq!(nested[1].trim(), "\u{2502}", "one bar, not two: {nested:?}");
+    }
 
     #[test]
     fn headings_get_a_rule_and_deeper_levels_fade_instead() {

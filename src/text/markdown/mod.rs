@@ -274,6 +274,12 @@ pub fn blocks(lines: &[String]) -> Vec<Block> {
     // than a block of its own.
     let mut fence_in_item = false;
     let mut i = 0;
+    // Front matter is one block however it is spaced inside: a blank line or
+    // a `# comment` in it is YAML, not a paragraph break or a heading.
+    if let Some(end) = front_matter_end(lines) {
+        out.push(Block { start: 0, end });
+        i = end;
+    }
     let in_item = |start: Option<usize>| start.is_some_and(|s| is_list_item(&lines[s]));
 
     let close = |out: &mut Vec<Block>, start: &mut Option<usize>, at: usize| {
@@ -327,7 +333,9 @@ pub fn blocks(lines: &[String]) -> Vec<Block> {
             i += 1;
             continue;
         }
-        if is_atx_heading(line) {
+        // A heading indented under a list item is the item's, drawn under
+        // its text; anywhere else it is a block of its own.
+        if is_atx_heading(line) && !(in_item(start) && is_item_body(line)) {
             close(&mut out, &mut start, i);
             out.push(Block {
                 start: i,
@@ -408,24 +416,28 @@ fn is_atx_heading(line: &str) -> bool {
 /// `labels` are the note's link reference definitions, from [`link_labels`]:
 /// a block alone does not know about a `[1]: https://...` further down the
 /// note, and without them `[the spec][1]` would be drawn as it was typed.
+///
+/// `top` says the block begins the note, the one place front matter can be:
+/// a `---`, `key: value`, `---` further down is a rule and a heading.
 pub fn render_block(
     lines: &[String],
     width: usize,
     pal: &Palette,
     hl: &Highlighter,
-    labels: &[String],
+    labels: &[(String, String)],
+    top: bool,
 ) -> Vec<Line<'static>> {
-    let made = render_with(&lines.join("\n"), width, pal, hl, labels);
+    let made = render_with(&lines.join("\n"), width, pal, hl, labels, top);
     if made.is_empty() {
         return vec![Line::default()];
     }
     made
 }
 
-/// The labels of every link reference definition in a note, `[1]` of a
-/// `[1]: https://...` line, as markdown compares them: case and runs of
-/// spaces ignored.
-pub fn link_labels(lines: &[String]) -> Vec<String> {
+/// Every link reference definition in a note, `[1]: https://...`: its label
+/// as markdown compares them (case and runs of spaces ignored) and where it
+/// goes, which a picture shows.
+pub fn link_labels(lines: &[String]) -> Vec<(String, String)> {
     lines
         .iter()
         .filter_map(|line| {
@@ -433,8 +445,16 @@ pub fn link_labels(lines: &[String]) -> Vec<String> {
             if line.len() - t.len() > 3 {
                 return None;
             }
-            let (label, _) = t.strip_prefix('[')?.split_once("]:")?;
-            (!label.starts_with('^') && !label.trim().is_empty()).then(|| same_label(label))
+            let (label, rest) = t.strip_prefix('[')?.split_once("]:")?;
+            if label.starts_with('^') || label.trim().is_empty() {
+                return None;
+            }
+            let dest = rest.split_whitespace().next().unwrap_or("");
+            let dest = dest
+                .strip_prefix('<')
+                .and_then(|d| d.strip_suffix('>'))
+                .unwrap_or(dest);
+            Some((same_label(label), dest.to_string()))
         })
         .collect()
 }
@@ -457,7 +477,7 @@ fn same_label(label: &str) -> String {
 /// Trailing blank lines are trimmed so a note does not open with dead space at
 /// the bottom of the pane.
 pub fn render(source: &str, width: usize, pal: &Palette, hl: &Highlighter) -> Vec<Line<'static>> {
-    render_with(source, width, pal, hl, &[])
+    render_with(source, width, pal, hl, &[], true)
 }
 
 /// [`render()`], with link labels defined somewhere else in the note, see
@@ -467,7 +487,8 @@ fn render_with(
     width: usize,
     pal: &Palette,
     hl: &Highlighter,
-    labels: &[String],
+    labels: &[(String, String)],
+    top: bool,
 ) -> Vec<Line<'static>> {
     let width = width.max(8);
     let mut opts = Options::empty();
@@ -477,19 +498,26 @@ fn render_with(
     opts.insert(Options::ENABLE_FOOTNOTES);
 
     let mut r = Renderer::new(width, pal, hl);
-    let (yaml, body) = front_matter(source);
+    let (yaml, body) = if top {
+        front_matter(source)
+    } else {
+        (None, source)
+    };
     if let Some(yaml) = yaml {
         r.front_matter(yaml);
     }
     // Adjacent text merged into one event: the parser hands over each `[`
     // and `]` of a `[[wikilink]]` on its own, and the renderer has to see the
     // link whole to draw it as one.
-    // A label this text does not define, but the note does, is a link: the
-    // renderer draws the text it covers and nothing of where it goes.
+    // A label this text does not define, but the note does, is a link (the
+    // renderer draws the text it covers) or a picture (which says where it
+    // is, so it needs the destination too).
     let mut known = |link: BrokenLink<'_>| {
+        let wanted = same_label(&link.reference);
         labels
-            .contains(&same_label(&link.reference))
-            .then(|| (CowStr::from(""), CowStr::from("")))
+            .iter()
+            .find(|(label, _)| *label == wanted)
+            .map(|(_, dest)| (CowStr::from(dest.clone()), CowStr::from("")))
     };
     let parser = Parser::new_with_broken_link_callback(body, opts, Some(&mut known));
     for event in TextMergeStream::new(parser) {
@@ -517,11 +545,7 @@ fn front_matter(source: &str) -> (Option<&str>, &str) {
     let Some(rest) = open else {
         return (None, source);
     };
-    let key = rest.lines().next().unwrap_or("");
-    let looks_like_yaml = key.split_once(':').is_some_and(|(k, _)| {
-        !k.is_empty() && k.chars().all(|c| c.is_alphanumeric() || "_-".contains(c))
-    });
-    if !looks_like_yaml {
+    if !looks_like_key(rest.lines().next().unwrap_or("")) {
         return (None, source);
     }
     let mut at = 0;
@@ -533,6 +557,27 @@ fn front_matter(source: &str) -> (Option<&str>, &str) {
         at += line.len();
     }
     (None, source)
+}
+
+/// Whether a line reads as a YAML `key: value`: what has to follow a note's
+/// opening `---` for it to be front matter rather than a rule.
+fn looks_like_key(line: &str) -> bool {
+    line.split_once(':').is_some_and(|(k, _)| {
+        !k.is_empty() && k.chars().all(|c| c.is_alphanumeric() || "_-".contains(c))
+    })
+}
+
+/// Just past the closing fence of the front matter a note starts with, by
+/// line, the way [`front_matter`] finds it in the text.
+fn front_matter_end(lines: &[String]) -> Option<usize> {
+    if lines.first()?.trim_end_matches('\r') != "---" || !looks_like_key(lines.get(1)?) {
+        return None;
+    }
+    lines
+        .iter()
+        .skip(1)
+        .position(|l| matches!(l.trim_end(), "---" | "..."))
+        .map(|n| n + 2)
 }
 
 pub(super) fn is_blank(l: &Line<'_>) -> bool {
@@ -623,9 +668,12 @@ mod tests {
         let hl = Highlighter::new();
         let note = lines_of("See [the spec][1].\n\n[1]: https://example.com");
         let labels = link_labels(&note);
-        assert_eq!(labels, ["1"]);
-        let linked = |labels: &[String]| -> Vec<String> {
-            render_block(&note[..1], 40, &pal, &hl, labels)[0]
+        assert_eq!(
+            labels,
+            [("1".to_string(), "https://example.com".to_string())]
+        );
+        let linked = |labels: &[(String, String)]| -> Vec<String> {
+            render_block(&note[..1], 40, &pal, &hl, labels, false)[0]
                 .spans
                 .iter()
                 .filter(|s| s.style == pal.text.patch(pal.link))
@@ -637,10 +685,52 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_by_reference_says_where_it_is_from_another_block() {
+        let pal = Palette::default();
+        let hl = Highlighter::new();
+        let note = lines_of("![d][d]\n\n[d]: <docs/d.png> \"title\"");
+        let labels = link_labels(&note);
+        let out = render_block(&note[..1], 40, &pal, &hl, &labels, true);
+        let text: String = out[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("[image: docs/d.png]"), "{text}");
+    }
+
+    #[test]
+    fn front_matter_is_one_block_and_only_at_the_top() {
+        let pal = Palette::default();
+        let hl = Highlighter::new();
+        let text = |ls: &[Line]| -> Vec<String> {
+            ls.iter()
+                .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+                .collect()
+        };
+        // A blank line and a comment inside it are YAML, not a paragraph
+        // break and a heading.
+        let note = lines_of("---\ntitle: x\n\n# a comment\ntags: [a]\n---\n\nBody");
+        let got = blocks(&note);
+        assert_eq!(got[0], Block { start: 0, end: 6 }, "{got:?}");
+        let top = render_block(&note[0..6], 40, &pal, &hl, &[], true);
+        assert_eq!(text(&top)[0], "---", "drawn as written: {:?}", text(&top));
+        // Further down, the same three lines are a rule and a heading, the
+        // way the whole note renders them.
+        let mid = lines_of("---\nStatus: done\n---");
+        let alone = text(&render_block(&mid, 40, &pal, &hl, &[], false));
+        let whole = text(&render("Intro\n\n---\nStatus: done\n---", 40, &pal, &hl));
+        assert!(whole.ends_with(&alone), "{whole:?} vs {alone:?}");
+    }
+
+    #[test]
+    fn a_heading_indented_in_a_list_item_stays_with_the_item() {
+        let lines = lines_of("- item\n  ## inside\n  more\n\nafter");
+        let got = blocks(&lines);
+        assert_eq!(got[0], Block { start: 0, end: 3 }, "{got:?}");
+    }
+
+    #[test]
     fn a_blank_line_block_still_renders_as_a_row() {
         let pal = Palette::default();
         let hl = Highlighter::new();
-        let out = render_block(&[String::new()], 40, &pal, &hl, &[]);
+        let out = render_block(&[String::new()], 40, &pal, &hl, &[], false);
         assert_eq!(out.len(), 1, "the gap between paragraphs is a row");
     }
 
@@ -659,8 +749,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let whole = render("# Title\n\n- a\n- b\n", 40, &pal, &hl);
-        let heading = render_block(&lines_of("# Title"), 40, &pal, &hl, &[]);
-        let list = render_block(&lines_of("- a\n- b"), 40, &pal, &hl, &[]);
+        let heading = render_block(&lines_of("# Title"), 40, &pal, &hl, &[], true);
+        let list = render_block(&lines_of("- a\n- b"), 40, &pal, &hl, &[], false);
         assert_eq!(
             text(&heading),
             text(&whole)[..2],

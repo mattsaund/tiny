@@ -20,7 +20,6 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 use super::parts::{FORMAT_LIMIT, digits, mark_query};
 
@@ -296,7 +295,13 @@ fn live_rows(
             }
             continue;
         }
-        let made = block_rows(app, &ed.lines()[b.start..b.end], width, &labels);
+        let made = block_rows(
+            app,
+            &ed.lines()[b.start..b.end],
+            width,
+            &labels,
+            b.start == 0,
+        );
         if b.start >= scroll_y && top.is_none() {
             // Part way down this block, if that is where the pane began.
             let down = if b.start == scroll_y { scroll_rows } else { 0 };
@@ -334,17 +339,24 @@ fn live_rows(
 /// The note's link labels are part of what a block is drawn from, so they
 /// are part of the key: a definition added further down turns `[spec][1]`
 /// into a link.
-fn block_rows(app: &App, lines: &[String], width: usize, labels: &[String]) -> Vec<Line<'static>> {
+fn block_rows(
+    app: &App,
+    lines: &[String],
+    width: usize,
+    labels: &[(String, String)],
+    top: bool,
+) -> Vec<Line<'static>> {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     lines.hash(&mut h);
     width.hash(&mut h);
     labels.hash(&mut h);
+    top.hash(&mut h);
     let key = h.finish();
     if let Some(made) = app.block_rows.borrow().get(&key) {
         return made.clone();
     }
-    let made = markdown::render_block(lines, width, &app.palette, &app.highlighter, labels);
+    let made = markdown::render_block(lines, width, &app.palette, &app.highlighter, labels, top);
     let mut cache = app.block_rows.borrow_mut();
     // Kept from growing without end as text is typed and deleted: whatever
     // is on screen is back in a frame.
@@ -379,7 +391,7 @@ pub(super) fn clip_pieces<'a>(
         let mut shown = String::new();
         for g in text.graphemes(true) {
             let at = col;
-            col += g.width();
+            col += tabs::cluster_width(g);
             if col <= scroll_x {
                 continue;
             }
