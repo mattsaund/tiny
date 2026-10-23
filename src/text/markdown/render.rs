@@ -64,19 +64,28 @@ pub(super) struct Renderer<'a> {
 
 /// How a heading of each level is drawn.
 ///
-/// H1 and H2 carry a rule under them, so their text is simply the heading
-/// style. Deeper levels have no rule to tell them apart, so they fade: one
-/// step to the dim color while keeping the weight, then the dim color alone.
+/// Each level is one step quieter than the one above it, and each step
+/// changes one thing. H1 and H2 are the heading style, told apart by the rules
+/// under them. Below those: fainter (H3), the dim color (H4), the weight gone
+/// (H5), fainter again (H6). Measured in kitty, the brightest pixel of each
+/// goes 220, 220, 146, 96, 96, 63, where it used to drop from 220 straight to
+/// 96 at H4 and stay there.
 ///
-/// They used to keep their `###` prefix instead, which left the markup
+/// Faint is the one attribute here a terminal may not draw, and one that
+/// does not just shows that level a step brighter, as tiny used to.
+///
+/// Headings used to keep their `###` prefix instead, which left the markup
 /// showing through a rendered view, and in the editor's live preview a line
-/// that never looked finished. Weight and color say the same thing and are
-/// drawn by every terminal, which an escape for real text size is not.
+/// that never looked finished. Weight and brightness say the same thing and
+/// are drawn by every terminal, which an escape for real text size is not.
 fn heading_style(pal: &Palette, level: HeadingLevel) -> Style {
+    let faint = |style: Style| style.add_modifier(Modifier::DIM);
     match level {
-        HeadingLevel::H1 | HeadingLevel::H2 | HeadingLevel::H3 => pal.heading,
+        HeadingLevel::H1 | HeadingLevel::H2 => pal.heading,
+        HeadingLevel::H3 => faint(pal.heading),
         HeadingLevel::H4 => pal.heading.patch(pal.dim),
-        HeadingLevel::H5 | HeadingLevel::H6 => pal.dim,
+        HeadingLevel::H5 => pal.dim,
+        HeadingLevel::H6 => faint(pal.dim),
     }
 }
 
@@ -580,15 +589,28 @@ mod tests {
                 .style
         };
 
-        assert_eq!(style_of("### three\n"), pal.heading);
-        let h4 = style_of("#### four\n");
-        assert_ne!(h4, pal.heading, "H4 is a step down from H3");
-        assert_eq!(h4.fg, pal.dim.fg, "into the dim color");
+        let levels: Vec<Style> = (1..=6)
+            .map(|n| style_of(&format!("{} level {n}\n", "#".repeat(n))))
+            .collect();
+        assert_eq!(levels[0], pal.heading, "H1 is the heading style");
+        assert_eq!(levels[1], pal.heading, "and so is H2: their rules differ");
+        // Below the rules, every level differs from the one above it, by
+        // one thing at a time.
+        let bold = |s: &Style| s.add_modifier.contains(Modifier::BOLD);
+        let faint = |s: &Style| s.add_modifier.contains(Modifier::DIM);
+        assert!(bold(&levels[2]) && faint(&levels[2]), "H3 is fainter");
         assert!(
-            h4.add_modifier.contains(Modifier::BOLD),
-            "while keeping the weight"
+            bold(&levels[3]) && !faint(&levels[3]) && levels[3].fg == pal.dim.fg,
+            "H4 is in the dim color, still bold"
         );
-        assert_eq!(style_of("##### five\n"), pal.dim, "and H5 is dim alone");
+        assert_eq!(levels[4], pal.dim, "H5 has lost the weight");
+        assert!(
+            !bold(&levels[5]) && faint(&levels[5]) && levels[5].fg == pal.dim.fg,
+            "H6 is fainter again"
+        );
+        for pair in levels[1..].windows(2) {
+            assert_ne!(pair[0], pair[1], "no two levels below H1 alike");
+        }
     }
 
     #[test]
