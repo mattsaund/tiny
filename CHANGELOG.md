@@ -14,9 +14,9 @@ Each version is a `v` tag, with ready-made binaries on its
   terminal, and in the git window the list's edge and the border between the
   halves of a diff. The parts always fill the window, and neither gets
   smaller than leaves room for what it holds.
-- **Smaller and quicker.** About a tenth smaller to download, and a key
-  reaches the screen a little sooner, now that the program is optimized as
-  one piece. A long file's colors keep one copy of each state the parser
+- **Smaller and quicker.** Between 0.5 and 0.8 MB smaller, whatever the
+  system, and a key reaches the screen a little sooner, now that the program
+  is optimized as one piece. A long file's colors keep one copy of each state the parser
   comes back to, rather than one every fifty lines.
 
 ## 0.6.1 - 2026-10-23
