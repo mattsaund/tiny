@@ -536,3 +536,27 @@ fn the_wheel_scrolls_the_help_and_stops_at_its_end() {
     app.on_scroll(false, 10, 5);
     assert_ne!(screen(&mut app, 90, 14).join("\n"), end);
 }
+
+#[test]
+fn far_down_a_long_file_colors_are_guessed_then_read_in_behind() {
+    let (td, mut app) = fixture();
+    let code: String = (0..120)
+        .map(|n| format!("fn f{n}() {{\n    g();\n}}\n\n"))
+        .collect();
+    fs::write(td.path().join("long.rs"), code).unwrap();
+    command(&mut app, "reload");
+    select(&mut app, "long.rs");
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(ctrl_key(KeyCode::End));
+    let first = screen(&mut app, 100, 30);
+    assert!(app.colors_behind, "the first frame is drawn from a guess");
+    // What the event loop does while nothing else is happening.
+    app.reading_colors = true;
+    let mut frames = 0;
+    while app.colors_behind {
+        assert_eq!(screen(&mut app, 100, 30), first, "only colors change");
+        frames += 1;
+        assert!(frames <= 480, "the exact colors never came");
+    }
+    assert!(!app.highlight_cache.behind());
+}

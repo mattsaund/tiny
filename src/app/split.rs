@@ -25,10 +25,13 @@
 //! # The layout
 //!
 //! A tree, [`Layout`]: each pane a leaf, and each split a row of panes side
-//! by side or a column of them stacked, sharing the space equally. Splitting
-//! a pane the same way as the row or column it is in adds one to that row or
-//! column, so three panes side by side are thirds rather than a half and two
-//! quarters; splitting it the other way makes it a row or column of its own.
+//! by side or a column of them stacked, each with its share of the space.
+//! The shares start equal, and dragging the line between two panes moves it.
+//! Splitting a pane the same way as the row or column it is in adds one to
+//! that row or column, so three panes side by side are thirds rather than a
+//! half and two quarters; once a line has been dragged, the new pane halves
+//! the one it came from and the rest stay as they were. Splitting it the
+//! other way makes it a row or column of its own.
 //!
 //! # Opening and closing
 //!
@@ -38,7 +41,7 @@
 //! browser, leaves the old view where it was. Closing a pane hands the
 //! keyboard to the one before it.
 
-use ratatui::layout::{Constraint, Direction, Layout as Areas, Rect};
+use ratatui::layout::Rect;
 
 use crate::config::keys::Action;
 use crate::text::editor::View;
@@ -73,8 +76,69 @@ pub struct Split {
 pub enum Layout {
     /// One pane, by number.
     Pane(usize),
-    /// Panes side by side, or with `stacked`, one above another.
-    Split { stacked: bool, parts: Vec<Layout> },
+    /// Panes side by side, or with `stacked`, one above another: `parts[i]`
+    /// takes `shares[i]` out of all the shares of the space.
+    Split {
+        stacked: bool,
+        parts: Vec<Layout>,
+        shares: Vec<u32>,
+    },
+}
+
+/// The line between two neighbors in a row or column of panes, as
+/// [`Layout::areas`] laid them out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneLine {
+    /// Which row or column: the part to go into at each level from the top.
+    pub path: Vec<usize>,
+    /// The first of the two, the line being after it.
+    pub first: usize,
+    /// Where the row or column is.
+    pub area: Rect,
+    /// Whether it is a column, so the line runs across and moves up and
+    /// down.
+    pub stacked: bool,
+    /// Where the second of the two begins.
+    pub at: u16,
+    /// The first and the last place it may begin, leaving each of the two
+    /// room for its panes.
+    pub range: (u16, u16),
+}
+
+/// `area` cut into a row of parts, or with `stacked` a column of them, each
+/// as long as its share says. Where each cut falls is rounded, rather than
+/// each length on its own, so the parts always fill `area` exactly.
+fn cut(area: Rect, stacked: bool, shares: &[u32]) -> Vec<Rect> {
+    let total = shares.iter().map(|&s| u64::from(s)).sum::<u64>().max(1);
+    let len = u64::from(if stacked { area.height } else { area.width });
+    let mut sum = 0;
+    let mut from = 0;
+    shares
+        .iter()
+        .map(|&s| {
+            sum += u64::from(s);
+            let to = ((len * sum + total / 2) / total) as u16;
+            let part = if stacked {
+                Rect::new(area.x, area.y + from, area.width, to - from)
+            } else {
+                Rect::new(area.x + from, area.y, to - from, area.height)
+            };
+            from = to;
+            part
+        })
+        .collect()
+}
+
+/// The same shares in their smallest terms, so they cannot grow without end.
+fn tidy(shares: &mut [u32]) {
+    let gcd = |mut a: u32, mut b: u32| {
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        a
+    };
+    let d = shares.iter().fold(0, |d, &s| gcd(d, s)).max(1);
+    shares.iter_mut().for_each(|s| *s /= d);
 }
 
 impl Layout {
@@ -93,16 +157,29 @@ impl Layout {
                 *self = Layout::Split {
                     stacked,
                     parts: vec![Layout::Pane(id), Layout::Pane(new)],
+                    shares: vec![1, 1],
                 };
             }
             Layout::Pane(_) => {}
             Layout::Split {
                 stacked: way,
                 parts,
+                shares,
             } => {
                 let at = parts.iter().position(|p| *p == Layout::Pane(id));
                 match at {
-                    Some(i) if *way == stacked => parts.insert(i + 1, Layout::Pane(new)),
+                    Some(i) if *way == stacked => {
+                        // Equal shares stay equal. Otherwise the new pane
+                        // halves the one it came from, and the rest keep
+                        // what they were dragged to.
+                        if shares.iter().any(|&s| s != shares[0]) {
+                            shares.iter_mut().for_each(|s| *s *= 2);
+                            shares[i] /= 2;
+                        }
+                        parts.insert(i + 1, Layout::Pane(new));
+                        shares.insert(i + 1, shares[i]);
+                        tidy(shares);
+                    }
                     _ => parts.iter_mut().for_each(|p| p.split(id, new, stacked)),
                 }
             }
@@ -110,52 +187,191 @@ impl Layout {
     }
 
     /// Take pane `id` out, and any row or column it leaves with one pane in
-    /// it, or inside another going the same way.
+    /// it, or inside another going the same way. What it gave up goes to the
+    /// rest of its row or column, each keeping its share of what is left.
     fn remove(&mut self, id: usize) {
-        let Layout::Split { stacked, parts } = self else {
+        let Layout::Split {
+            stacked,
+            parts,
+            shares,
+        } = self
+        else {
             return;
         };
-        parts.retain(|p| *p != Layout::Pane(id));
+        if let Some(i) = parts.iter().position(|p| *p == Layout::Pane(id)) {
+            parts.remove(i);
+            shares.remove(i);
+        }
         for part in parts.iter_mut() {
             part.remove(id);
         }
-        // A row inside a row is one row: three panes across are thirds.
+        // A row inside a row is one row, and each of its panes keeps the
+        // part of the width it had.
         let way = *stacked;
-        let flat: Vec<Layout> = std::mem::take(parts)
+        let total: f64 = shares.iter().map(|&s| f64::from(s)).sum();
+        let mut flat = Vec::new();
+        for (part, share) in std::mem::take(parts).into_iter().zip(shares.iter()) {
+            let of = f64::from(*share) / total;
+            match part {
+                Layout::Split {
+                    stacked,
+                    parts: inner,
+                    shares: inside,
+                } if stacked == way => {
+                    let sum: f64 = inside.iter().map(|&s| f64::from(s)).sum();
+                    for (p, s) in inner.into_iter().zip(inside) {
+                        flat.push((p, of * f64::from(s) / sum));
+                    }
+                }
+                other => flat.push((other, of)),
+            }
+        }
+        let (flat, mut new): (Vec<Layout>, Vec<u32>) = flat
             .into_iter()
-            .flat_map(|p| match p {
-                Layout::Split { stacked, parts } if stacked == way => parts,
-                other => vec![other],
-            })
-            .collect();
+            .map(|(p, of)| (p, ((of * 10_000.0).round() as u32).max(1)))
+            .unzip();
+        tidy(&mut new);
         *parts = flat;
+        *shares = new;
         if parts.len() == 1 {
             *self = parts.remove(0);
         }
     }
 
-    /// Where each pane goes in `area`, sharing it out equally.
+    /// Where each pane goes in `area`, each row or column shared out as its
+    /// shares say.
     pub fn areas(&self, area: Rect) -> Vec<(usize, Rect)> {
         match self {
             Layout::Pane(id) => vec![(*id, area)],
-            Layout::Split { stacked, parts } => {
-                let n = parts.len() as u32;
-                let direction = if *stacked {
-                    Direction::Vertical
+            Layout::Split {
+                stacked,
+                parts,
+                shares,
+            } => parts
+                .iter()
+                .zip(cut(area, *stacked, shares))
+                .flat_map(|(part, cell)| part.areas(cell))
+                .collect(),
+        }
+    }
+
+    /// The least room this needs across, or with `stacked` up and down, to
+    /// give every pane in it at least `least` of it.
+    pub fn least(&self, stacked: bool, least: u16) -> u16 {
+        match self {
+            Layout::Pane(_) => least,
+            Layout::Split {
+                stacked: way,
+                parts,
+                ..
+            } => {
+                let each = parts.iter().map(|p| p.least(stacked, least));
+                if *way == stacked {
+                    each.sum()
                 } else {
-                    Direction::Horizontal
-                };
-                let cells = Areas::default()
-                    .direction(direction)
-                    .constraints(parts.iter().map(|_| Constraint::Ratio(1, n)))
-                    .split(area);
-                parts
-                    .iter()
-                    .zip(cells.iter())
-                    .flat_map(|(part, cell)| part.areas(*cell))
-                    .collect()
+                    each.max().unwrap_or(least)
+                }
             }
         }
+    }
+
+    /// Every line between two neighbors, as [`Layout::areas`] lays them out
+    /// in `area`, each kept from leaving a pane narrower than `width` or
+    /// shorter than `height`.
+    pub fn lines(&self, area: Rect, width: u16, height: u16) -> Vec<PaneLine> {
+        let mut out = Vec::new();
+        self.lines_into(area, (width, height), &mut Vec::new(), &mut out);
+        out
+    }
+
+    fn lines_into(
+        &self,
+        area: Rect,
+        least: (u16, u16),
+        path: &mut Vec<usize>,
+        out: &mut Vec<PaneLine>,
+    ) {
+        let Layout::Split {
+            stacked,
+            parts,
+            shares,
+        } = self
+        else {
+            return;
+        };
+        let cells = cut(area, *stacked, shares);
+        let min = if *stacked { least.1 } else { least.0 };
+        // Where a part begins and ends, along the way the line moves.
+        let span = |r: &Rect| {
+            if *stacked {
+                (r.y, r.bottom())
+            } else {
+                (r.x, r.right())
+            }
+        };
+        for k in 0..parts.len() - 1 {
+            let (begins, _) = span(&cells[k]);
+            let (at, ends) = span(&cells[k + 1]);
+            let lo = begins + parts[k].least(*stacked, min);
+            let hi = ends.saturating_sub(parts[k + 1].least(*stacked, min));
+            out.push(PaneLine {
+                path: path.clone(),
+                first: k,
+                area,
+                stacked: *stacked,
+                at,
+                // A window too small for the panes it has leaves them where
+                // they are rather than making them smaller still.
+                range: (lo.min(at), hi.max(at)),
+            });
+        }
+        for (k, (part, cell)) in parts.iter().zip(cells).enumerate() {
+            path.push(k);
+            part.lines_into(cell, least, path, out);
+            path.pop();
+        }
+    }
+
+    /// Move a line [`Layout::lines`] gave: the second of its two panes now
+    /// begins at `to`, and the shares are the lengths that leaves.
+    pub fn move_line(&mut self, line: &PaneLine, to: u16) {
+        let mut node = self;
+        for &k in &line.path {
+            let Layout::Split { parts, .. } = node else {
+                return;
+            };
+            let Some(part) = parts.get_mut(k) else {
+                return;
+            };
+            node = part;
+        }
+        let Layout::Split {
+            stacked, shares, ..
+        } = node
+        else {
+            return;
+        };
+        if line.first + 1 >= shares.len() {
+            return;
+        }
+        let cells = cut(line.area, *stacked, shares);
+        let (start, end) = if *stacked {
+            (cells[line.first].y, cells[line.first + 1].bottom())
+        } else {
+            (cells[line.first].x, cells[line.first + 1].right())
+        };
+        let to = to.clamp(start, end);
+        let mut lengths: Vec<u32> = cells
+            .iter()
+            .map(|r| u32::from(if *stacked { r.height } else { r.width }))
+            .collect();
+        lengths[line.first] = u32::from(to - start);
+        lengths[line.first + 1] = u32::from(end - to);
+        // A share of nothing would be a pane that could never be given room
+        // again by sharing; the ranges keep it from coming to that.
+        lengths.iter_mut().for_each(|l| *l = (*l).max(1));
+        tidy(&mut lengths);
+        *shares = lengths;
     }
 }
 
@@ -427,17 +643,25 @@ mod tests {
     use super::*;
 
     fn row(parts: Vec<Layout>) -> Layout {
+        let shares = vec![1; parts.len()];
         Layout::Split {
             stacked: false,
             parts,
+            shares,
         }
     }
 
     fn column(parts: Vec<Layout>) -> Layout {
+        let shares = vec![1; parts.len()];
         Layout::Split {
             stacked: true,
             parts,
+            shares,
         }
+    }
+
+    fn widths(layout: &Layout, area: Rect) -> Vec<u16> {
+        layout.areas(area).iter().map(|(_, r)| r.width).collect()
     }
 
     #[test]
@@ -487,12 +711,64 @@ mod tests {
         ]);
         layout.remove(1);
         assert_eq!(
-            layout,
-            row(vec![Layout::Pane(0), Layout::Pane(2), Layout::Pane(3)]),
+            layout.panes(),
+            [0, 2, 3],
             "a column of one is its pane, and a row in a row is the row"
+        );
+        assert_eq!(
+            widths(&layout, Rect::new(0, 0, 80, 20)),
+            [40, 20, 20],
+            "and nobody's width changed"
         );
         layout.remove(2);
         layout.remove(3);
         assert_eq!(layout, Layout::Pane(0));
+    }
+
+    #[test]
+    fn panes_always_fill_the_space_exactly() {
+        let layout = row(vec![Layout::Pane(0), Layout::Pane(1), Layout::Pane(2)]);
+        for w in 30..200 {
+            let areas = layout.areas(Rect::new(3, 0, w, 10));
+            assert_eq!(areas[0].1.x, 3);
+            for pair in areas.windows(2) {
+                assert_eq!(pair[0].1.right(), pair[1].1.x, "no gap at width {w}");
+            }
+            assert_eq!(areas[2].1.right(), 3 + w, "nothing left over at width {w}");
+        }
+    }
+
+    #[test]
+    fn a_line_moves_where_it_is_dragged_and_no_further_than_leaves_room() {
+        let mut layout = Layout::Pane(0);
+        layout.split(0, 1, false);
+        let area = Rect::new(0, 0, 100, 20);
+        let line = layout.lines(area, 24, 6).remove(0);
+        assert_eq!((line.at, line.range), (50, (24, 76)));
+
+        layout.move_line(&line, 70);
+        assert_eq!(widths(&layout, area), [70, 30]);
+        // The proportion is what is kept, so a wider window keeps it.
+        assert_eq!(widths(&layout, Rect::new(0, 0, 200, 20)), [140, 60]);
+
+        // A third pane split from the narrow one halves it; the wide one
+        // keeps what it was dragged to.
+        layout.split(1, 2, false);
+        assert_eq!(widths(&layout, area), [70, 15, 15]);
+    }
+
+    #[test]
+    fn a_line_leaves_room_for_every_pane_beside_it() {
+        // A row of two, the second a column with a row of two at its foot:
+        // the line between the first and the rest cannot squeeze those two.
+        let mut layout = Layout::Pane(0);
+        layout.split(0, 1, false);
+        layout.split(1, 2, true);
+        layout.split(2, 3, false);
+        let lines = layout.lines(Rect::new(0, 0, 120, 30), 24, 6);
+        let outer = lines.iter().find(|l| l.path.is_empty()).unwrap();
+        assert_eq!(outer.range, (24, 120 - 48));
+        let column = lines.iter().find(|l| l.stacked).unwrap();
+        assert_eq!(column.range, (6, 24));
     }
 }

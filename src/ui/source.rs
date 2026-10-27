@@ -25,7 +25,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::parts::highlight_row;
 
-use crate::app::{App, GIT_BUTTONS, GitFocus, GitHit, GitRow};
+use crate::app::{App, Divider, GIT_BUTTONS, GitFocus, GitHit, GitRow, Moves};
 use crate::config::Palette;
 use crate::config::keys::Action;
 use crate::git::{Code, DiffLine, LineKind};
@@ -69,14 +69,26 @@ pub(super) fn draw_source(f: &mut Frame, app: &mut App, area: Rect) {
         .constraints([Constraint::Min(6), Constraint::Length(graph_h)])
         .split(area);
 
+    // The list is as wide as the browser, and its edge moves the same way.
+    let room = rows[0];
+    let w = f32::from(room.width);
     let width = app.config.tree_width.clamp(0.15, 0.5);
+    let (lo, hi) = (
+        (w * 0.15).ceil() as u16,
+        ((w * 0.5) as u16).min(room.width.saturating_sub(20)),
+    );
+    let list_w = ((w * width).round() as u16).clamp(lo.min(hi), hi);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((width * 100.0) as u16),
-            Constraint::Min(20),
-        ])
-        .split(rows[0]);
+        .constraints([Constraint::Length(list_w), Constraint::Min(20)])
+        .split(room);
+    app.last_dividers.push(Divider::new(
+        Moves::Changes { area: room },
+        room,
+        true,
+        columns[1].x,
+        (room.x + lo, room.x + hi),
+    ));
 
     draw_changes(f, app, columns[0], &pal);
     // The message box stands in for both diff columns rather than squeezing in
@@ -305,12 +317,26 @@ fn button_lines(
 /// file costs what is on screen rather than everything above it.
 fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let tab_width = app.config.tab_width;
-    let highlighter = &app.highlighter;
-    let git = &mut app.git;
+    let (reading, waiting) = (app.reading_colors, app.input_waiting);
+    // Halves, unless the line between them has been dragged elsewhere.
+    let (lo, hi) = (area.x + 12, area.right().saturating_sub(12));
+    let first = ((f32::from(area.width) * app.diff_share).round() as u16).clamp(
+        12.min(area.width),
+        area.width.saturating_sub(12).max(12.min(area.width)),
+    );
     let halves = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([Constraint::Length(first), Constraint::Min(0)])
         .split(area);
+    app.last_dividers.push(Divider::new(
+        Moves::Halves { area },
+        area,
+        true,
+        halves[1].x,
+        (lo, hi),
+    ));
+    let highlighter = &app.highlighter;
+    let git = &mut app.git;
 
     let name = git
         .current()
@@ -341,6 +367,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
         .map(|(change, _)| std::path::PathBuf::from(&change.path))
         .unwrap_or_default();
 
+    let mut behind = false;
     for (i, half) in halves.iter().enumerate() {
         let side = if i == 0 { "before" } else { "after" };
         let title = if i == 0 {
@@ -392,6 +419,10 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
             top,
             inner.height as usize,
         );
+        if reading {
+            highlighter.read_on(resume, &git.diff_text[i], syntax, waiting);
+        }
+        behind |= resume.behind();
         let rows: Vec<Line> = lines
             .iter()
             .enumerate()
@@ -415,6 +446,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     // know how tall the columns are until they have been drawn.
     let height = halves[0].height.saturating_sub(2) as usize;
     app.git.diff_height = height;
+    app.colors_behind |= behind;
 }
 
 /// What to write on the first line of a run of fillers, and nothing on the rest

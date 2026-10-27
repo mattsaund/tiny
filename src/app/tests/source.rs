@@ -1130,3 +1130,58 @@ fn a_click_picks_a_change_and_a_second_stages_it() {
         app.status
     );
 }
+
+#[test]
+fn the_lines_in_the_git_window_move_with_the_mouse_too() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (_td, mut app) = repo();
+    source(&mut app);
+    cursor_on(&mut app, "README.md");
+    screen(&mut app, 120, 30);
+    let drag = |app: &mut App, d: &Divider, by: i32| {
+        let y = d.hit.y + 2;
+        for (kind, x) in [
+            (MouseEventKind::Down(MouseButton::Left), d.at),
+            (
+                MouseEventKind::Drag(MouseButton::Left),
+                (i32::from(d.at) + by) as u16,
+            ),
+            (
+                MouseEventKind::Up(MouseButton::Left),
+                (i32::from(d.at) + by) as u16,
+            ),
+        ] {
+            app.on_mouse(MouseEvent {
+                kind,
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+    };
+    let find = |app: &App, halves: bool| {
+        app.last_dividers
+            .iter()
+            .find(|d| matches!(d.moves, Moves::Halves { .. }) == halves)
+            .cloned()
+            .unwrap()
+    };
+
+    let halves = find(&app, true);
+    drag(&mut app, &halves, 10);
+    screen(&mut app, 120, 30);
+    assert_eq!(find(&app, true).at, halves.at + 10, "the diff's halves");
+
+    let list = find(&app, false);
+    drag(&mut app, &list, -6);
+    screen(&mut app, 120, 30);
+    // The diff begins where the list's edge was dragged to, and fills what
+    // the list gave up.
+    let diff = app.git.diff_area.unwrap();
+    assert_eq!(
+        (diff.x, diff.right()),
+        (list.at - 6, 120),
+        "the list's edge"
+    );
+    assert!(app.git.list_cols.unwrap().1 <= diff.x);
+}

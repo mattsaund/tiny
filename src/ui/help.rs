@@ -113,6 +113,7 @@ const KEYS: &[KeyRow] = &[
         &[Action::ToggleTreePane, Action::Narrower, Action::Wider],
         "browser, width",
     ),
+    Fixed("drag a border", "resize"),
     Bound(&[Action::Help], "help"),
     Bound(&[Action::Quit], "quit"),
     Blank,

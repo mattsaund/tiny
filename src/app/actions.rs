@@ -28,8 +28,8 @@ const TREE_WIDTH_STEP: f32 = 0.05;
 /// The narrowest and widest the browser goes, matching what `Config::sanitized`
 /// will accept; a pane the keys could reach but the config would clamp back
 /// would be a width that changed by itself on the next restart.
-const TREE_WIDTH_MIN: f32 = 0.10;
-const TREE_WIDTH_MAX: f32 = 0.60;
+pub const TREE_WIDTH_MIN: f32 = 0.10;
+pub const TREE_WIDTH_MAX: f32 = 0.60;
 
 impl App {
     // ---- actions ----------------------------------------------------------

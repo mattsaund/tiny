@@ -26,6 +26,25 @@
 //! from it down is dropped, and everything above is still true, because a
 //! change on line 900 cannot alter what the parser believed on line 100.
 //!
+//! # Any length, and nothing waits for it
+//!
+//! Resuming covers moving about, but not the first jump into a long file: the
+//! state at the bottom of a 100,000-line file is only known by reading all
+//! 100,000 lines, and that takes nine seconds. A file past 20,000 lines used
+//! to be drawn plain rather than read that far.
+//!
+//! Now a window more than [`REACH`] lines below every exact state is drawn
+//! from a guess: a fresh start a little above it, at a line that looks like
+//! the start of a function or a type, see [`sync_point`]. That is Vim's answer
+//! to the same problem, and the state there is nearly always the parser's
+//! first one, so the guess is nearly always right. Then, whenever nothing else
+//! is happening, exact states are read on down toward the window, each taking
+//! the place of a guessed one, until the window is drawn exactly; a key stops
+//! the reading the moment it is pressed, see [`Highlighter::read_on`]. A frame
+//! reads a few hundred lines at most, or after a jump into the middle of a
+//! long class, up to [`FAR`]; so every file gets colors, however long, and
+//! nothing waits long for them.
+//!
 //! # Two different highlighters
 //!
 //! This module and `markdown` both style text, and they do not overlap:
@@ -46,7 +65,10 @@
 //! Grammars carry their own licenses, listed by [`acknowledgments`] and shown
 //! by `tiny --licenses`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use ratatui::style::{Color, Modifier, Style};
 use syntect::highlighting::{
@@ -77,10 +99,6 @@ pub struct Highlighter {
     theme_name: String,
 }
 
-/// Files past this many lines are shown unhighlighted: the parse cost stops
-/// being worth it and plain text still edits fine.
-const MAX_HIGHLIGHT_LINES: usize = 20_000;
-
 /// The longest line, in bytes, that is parsed for color. A longer one is
 /// drawn plain and the parser carries on below it as though it were not
 /// there: a minified script is one line of a megabyte or more, and parsing
@@ -103,9 +121,47 @@ const NAME_OVERRIDES: &[(&str, &str)] = &[(crate::config::CONF_NAME, "toml")];
 /// This is the whole trade-off in one number: a frame may have to parse up to
 /// `STRIDE` lines to reach the top of the window, and a file keeps one saved
 /// state per `STRIDE` lines. Fifty puts the worst case at a few milliseconds
-/// and a 20,000-line file (the most [`MAX_HIGHLIGHT_LINES`] allows) at 400
-/// saved states, which is nothing.
+/// and a 100,000-line file at 2,000 saved states, which is nothing.
 const STRIDE: usize = 50;
+
+/// How far below the nearest exact state a window may be and still be read
+/// down to from it: a few dozen milliseconds of Rust at the most. Further,
+/// and the parse starts afresh near the window, see the module docs.
+const REACH: usize = 300;
+
+/// How far above a window a fresh start is looked for first, see
+/// [`sync_point`].
+const SYNC: usize = 200;
+
+/// How far above it a block's first line is looked for when nothing nearer
+/// will do, see [`sync_point`]: as long as a long class runs. Reading that far
+/// costs a jump there a tenth of a second or two, once.
+const FAR: usize = 2_000;
+
+/// How long a frame drawn only to read exact states on down toward a guess
+/// may spend on it, see [`Highlighter::read_on`]. A key pressed meanwhile
+/// stops it at once, so this only sets how often the screen is drawn while
+/// the reading goes on.
+const READ_ON: Duration = Duration::from_millis(25);
+
+/// The furthest down a file exact states are read toward a guess. Past it the
+/// guess stands, as it always does in Vim: 200,000 lines of Rust are twenty
+/// seconds of reading, and further would keep a core busy for longer than
+/// exact colors are worth.
+const CATCH_UP_LINES: usize = 200_000;
+
+/// A parser partway through a file: what it had read, and how it was
+/// coloring.
+type State = (ParseState, HighlightState);
+
+/// A saved [`State`], shared by every checkpoint that saved the same one: a
+/// long file leaves the parser in the same few states over and over, and a
+/// 100,000-line file of Rust saved 2,000 of them where 330 were different.
+type Checkpoint = Rc<State>;
+
+/// How many of the states saved last are looked through for one the same as
+/// a new one, see [`Resume::keep`].
+const RECENT: usize = 16;
 
 /// Saved parser state, so a window deep in a file is reached by resuming
 /// rather than by parsing everything above it again.
@@ -115,6 +171,10 @@ const STRIDE: usize = 50;
 /// shows. Switching files throws it away and rebuilds: a cache per file would
 /// have to be evicted, which is a second problem in exchange for a saving
 /// nobody would notice.
+///
+/// Two kinds of state are kept, see the module docs: the exact ones, reached
+/// by reading from the first line, and below them the ones reached by
+/// starting afresh near a window that was too far down to read to.
 #[derive(Default)]
 pub struct Resume {
     /// What these states describe. Anything else and they are meaningless:
@@ -123,7 +183,23 @@ pub struct Resume {
     /// `states[i]` is the parser entering line `i * STRIDE`. Contiguous from
     /// the start of the file, so index `i` is only present once every line
     /// above it has been parsed at least once.
-    states: Vec<(ParseState, HighlightState)>,
+    states: Vec<Checkpoint>,
+    /// The same, by index, for lines below the last of `states`, reached by
+    /// a fresh start partway down. Nearly always the same as an exact one
+    /// would be, and replaced by it when the exact ones reach this far.
+    near: BTreeMap<usize, Checkpoint>,
+    /// Where the last window drawn from a guess starts, while exact states
+    /// are still being read on down toward it, see [`Resume::behind`].
+    guessed: Option<usize>,
+    /// How far that reading had got when a frame's time ran out between two
+    /// saved states: the parser entering that line, for the next frame to
+    /// carry on from.
+    reading: Option<(usize, State)>,
+    /// Whether reading on down met a line syntect would not parse, past which
+    /// there are no exact states to be had. Until an edit, guesses stand.
+    stuck: bool,
+    /// The different states saved last, for a new checkpoint to share.
+    recent: Vec<Checkpoint>,
 }
 
 impl std::fmt::Debug for Resume {
@@ -133,6 +209,8 @@ impl std::fmt::Debug for Resume {
         f.debug_struct("Resume")
             .field("key", &self.key)
             .field("states", &self.states.len())
+            .field("near", &self.near.len())
+            .field("guessed", &self.guessed)
             .finish()
     }
 }
@@ -147,8 +225,8 @@ impl Resume {
     pub fn sync(&mut self, path: &Path, syntax: &str, touched: Option<usize>) {
         let key = (path.to_path_buf(), syntax.to_string());
         if self.key.as_ref() != Some(&key) {
+            self.clear();
             self.key = Some(key);
-            self.states.clear();
             return;
         }
         if let Some(line) = touched {
@@ -156,14 +234,37 @@ impl Resume {
             // above it, so it survives an edit at or after its own line. Keep
             // index `i` while `i * STRIDE <= line`.
             self.states.truncate(line / STRIDE + 1);
+            drop(self.near.split_off(&(line / STRIDE + 1)));
+            self.reading.take_if(|(at, _)| *at > line);
+            self.stuck = false;
         }
     }
 
     /// Forget everything. Used when the theme changes, since the saved
     /// highlight states carry styles taken from it.
     pub fn clear(&mut self) {
-        self.key = None;
-        self.states.clear();
+        *self = Self::default();
+    }
+
+    /// Whether the last window drawn from here started from a guess that
+    /// exact states are still being read toward, see
+    /// [`Highlighter::read_on`]. While it did, there is reason to draw again.
+    pub fn behind(&self) -> bool {
+        self.guessed.is_some()
+    }
+
+    /// A checkpoint of `parse` and `hl`: one already saved, when one of the
+    /// last few is the same, or else a new one.
+    fn keep(&mut self, parse: &ParseState, hl: &HighlightState) -> Checkpoint {
+        if let Some(same) = self.recent.iter().find(|c| c.0 == *parse && c.1 == *hl) {
+            return Rc::clone(same);
+        }
+        let new = Rc::new((parse.clone(), hl.clone()));
+        if self.recent.len() == RECENT {
+            self.recent.remove(0);
+        }
+        self.recent.push(Rc::clone(&new));
+        new
     }
 }
 
@@ -275,10 +376,14 @@ impl Highlighter {
         start: usize,
         count: usize,
     ) -> Vec<Vec<Piece>> {
-        self.window(lines, syntax, start, count, &mut Resume::default())
+        self.window(lines, syntax, start, count, &mut Resume::default(), false)
     }
 
     /// The same, resuming from `resume` and extending it as it goes.
+    ///
+    /// A window far enough down a long file is drawn from a guess, see the
+    /// module docs, and [`Resume::behind`] then says so: [`Highlighter::read_on`]
+    /// is what puts exact colors in its place.
     ///
     /// The caller must have called [`Resume::sync`] first; without it the
     /// cache could still be describing a different file.
@@ -290,7 +395,75 @@ impl Highlighter {
         start: usize,
         count: usize,
     ) -> Vec<Vec<Piece>> {
-        self.window(lines, syntax, start, count, resume)
+        self.window(lines, syntax, start, count, resume, true)
+    }
+
+    /// Read exact states on down from the last one toward the window last
+    /// drawn from a guess, each taking the place of a guessed one, for up to
+    /// [`READ_ON`] or until `stop` says something else wants the time. Once
+    /// they are within [`REACH`] of the window, the next frame draws it
+    /// exactly.
+    ///
+    /// Only for a frame nobody is waiting on: until it returns, the frame is
+    /// not on screen.
+    pub fn read_on(
+        &self,
+        resume: &mut Resume,
+        lines: &[String],
+        syntax: &SyntaxReference,
+        stop: impl Fn() -> bool,
+    ) {
+        let Some(target) = resume.guessed else {
+            return;
+        };
+        let began = Instant::now();
+        let hi = SynHighlighter::new(&self.theme);
+        // From where the last frame stopped, when that is past the last
+        // saved state, or else from that state.
+        let last = resume.states.len().saturating_sub(1) * STRIDE;
+        let (from, (mut parse, mut hl)) = match resume.reading.take() {
+            Some((at, state)) if at > last => (at, state),
+            _ => (
+                last,
+                resume.states.last().map_or_else(
+                    || {
+                        (
+                            ParseState::new(syntax),
+                            HighlightState::new(&hi, ScopeStack::new()),
+                        )
+                    },
+                    |c| State::clone(c),
+                ),
+            ),
+        };
+        let mut buf = String::new();
+        for (i, line) in lines.iter().enumerate().skip(from) {
+            if i % STRIDE == 0 && resume.states.len() == i / STRIDE {
+                let saved = resume.keep(&parse, &hl);
+                resume.states.push(saved);
+                resume.near.remove(&(i / STRIDE));
+                if i + REACH >= target {
+                    return;
+                }
+            }
+            // Asking costs a system call, so only every few lines.
+            if began.elapsed() >= READ_ON || (i % 8 == 0 && stop()) {
+                resume.reading = Some((i, (parse, hl)));
+                return;
+            }
+            if line.len() > MAX_HIGHLIGHT_LINE {
+                continue;
+            }
+            buf.clear();
+            buf.push_str(line);
+            buf.push('\n');
+            let Ok(ops) = parse.parse_line(&buf, &self.syntaxes) else {
+                resume.stuck = true;
+                resume.guessed = None;
+                return;
+            };
+            HighlightIterator::new(&mut hl, &ops, &buf, &hi).for_each(drop);
+        }
     }
 
     /// The shared body.
@@ -300,9 +473,14 @@ impl Highlighter {
     /// string rather than as code, and `resume` is what keeps "above it" from
     /// meaning "all of them".
     ///
-    /// Three escape hatches drop to unstyled text rather than failing: files
-    /// past [`MAX_HIGHLIGHT_LINES`], a line past [`MAX_HIGHLIGHT_LINE`], and
-    /// any line syntect refuses to parse. None of them should stop you editing.
+    /// With `guess`, a window too far below every exact state starts afresh
+    /// just above itself, see the module docs, so no call reads more than
+    /// about [`REACH`] lines before its window, however long the file.
+    /// Without it, the parse reads down from the top however far that is.
+    ///
+    /// Two escape hatches drop to unstyled text rather than failing: a line
+    /// past [`MAX_HIGHLIGHT_LINE`], and any line syntect refuses to parse.
+    /// Neither should stop you editing.
     fn window(
         &self,
         lines: &[String],
@@ -310,7 +488,11 @@ impl Highlighter {
         start: usize,
         count: usize,
         resume: &mut Resume,
+        guess: bool,
     ) -> Vec<Vec<Piece>> {
+        // Whatever the last window was waiting for, this one is what is on
+        // screen now.
+        resume.guessed = None;
         let end = (start + count).min(lines.len());
         if start >= end {
             return Vec::new();
@@ -321,23 +503,41 @@ impl Highlighter {
                 .map(|l| vec![(Style::default(), l.clone())])
                 .collect()
         };
-        if lines.len() > MAX_HIGHLIGHT_LINES {
-            return plain();
-        }
-
         let hi = SynHighlighter::new(&self.theme);
-        // The nearest saved state at or above the window. `states` is
-        // contiguous from the start of the file, so when it is too short the
-        // last one is still the furthest down we can legitimately start.
-        let at = (start / STRIDE).min(resume.states.len().saturating_sub(1));
-        let (mut parse, mut hl, first) = match resume.states.get(at) {
-            Some((p, h)) => (p.clone(), h.clone(), at * STRIDE),
-            None => (
+        let fresh = || {
+            (
                 ParseState::new(syntax),
                 HighlightState::new(&hi, ScopeStack::new()),
-                0,
-            ),
+            )
         };
+        // Where to read from: the nearest exact state at or above the window,
+        // when it is in reach. `states` is contiguous from the start of the
+        // file, so when it is too short its last is the furthest down an exact
+        // read can start. Out of reach, the nearest state started afresh, and
+        // failing that, a fresh start just above the window.
+        let at = (start / STRIDE).min(resume.states.len().saturating_sub(1));
+        let exact_from = if resume.states.is_empty() {
+            0
+        } else {
+            at * STRIDE
+        };
+        let near = resume
+            .near
+            .range(..=start / STRIDE)
+            .next_back()
+            .filter(|(i, _)| start - *i * STRIDE <= REACH);
+        let ((mut parse, mut hl), first, exact) = if !guess || start - exact_from <= REACH {
+            let state = resume
+                .states
+                .get(at)
+                .map_or_else(fresh, |c| State::clone(c));
+            (state, exact_from, true)
+        } else if let Some((i, state)) = near {
+            (State::clone(state), i * STRIDE, false)
+        } else {
+            (fresh(), sync_point(lines, start), false)
+        };
+        resume.guessed = (!exact && !resume.stuck && start <= CATCH_UP_LINES).then_some(start);
 
         let mut out = Vec::with_capacity(end - start);
         // One buffer, refilled. syntect's syntaxes are the `_newlines`
@@ -348,9 +548,18 @@ impl Highlighter {
         for (i, line) in lines.iter().enumerate().take(end).skip(first) {
             // Save the state entering this line if it is a checkpoint we do
             // not already hold. Filled in by the parse that had to happen
-            // anyway, so building the cache costs nothing extra.
-            if i % STRIDE == 0 && resume.states.len() == i / STRIDE {
-                resume.states.push((parse.clone(), hl.clone()));
+            // anyway, so building the cache costs nothing extra. An exact one
+            // takes the place of one started afresh.
+            if i % STRIDE == 0 {
+                let k = i / STRIDE;
+                if exact && resume.states.len() == k {
+                    let saved = resume.keep(&parse, &hl);
+                    resume.states.push(saved);
+                    resume.near.remove(&k);
+                } else if !exact && k >= resume.states.len() && !resume.near.contains_key(&k) {
+                    let saved = resume.keep(&parse, &hl);
+                    resume.near.insert(k, saved);
+                }
             }
             if line.len() > MAX_HIGHLIGHT_LINE {
                 if i >= start {
@@ -393,6 +602,46 @@ impl Highlighter {
         let n = lines.len();
         self.highlight_window(&lines, syntax, 0, n)
     }
+}
+
+/// Where to start reading afresh for a window at `start`, too far below every
+/// exact state to read down to.
+///
+/// First choice, within [`SYNC`] lines: the nearest line that begins at the
+/// margin straight after a blank one. In nearly every language that is where
+/// a function, a type or a section begins, outside any string or comment,
+/// where the parser's first state is the right one. Inside a long class or
+/// block nothing is at the margin, so next, within [`FAR`], the nearest line
+/// at the margin that opens a block: the class itself. Failing both, [`SYNC`]
+/// lines above, which in a file of code is usually right as well.
+///
+/// Measured on 136 long files in nine languages, a window drawn from this
+/// guess matched one read from the top 95 times in 100, and where it did not,
+/// mostly by the shade of a token or two. JavaScript, Rust, HTML and Markdown
+/// did best, at 99 in 100 or better.
+fn sync_point(lines: &[String], start: usize) -> usize {
+    let at_margin = |i: usize| lines[i].starts_with(|c: char| !c.is_whitespace());
+    let floor = start.saturating_sub(SYNC);
+    (floor + 1..=start)
+        .rev()
+        .find(|&i| at_margin(i) && lines[i - 1].trim().is_empty())
+        .or_else(|| {
+            (start.saturating_sub(FAR)..=start)
+                .rev()
+                .find(|&i| at_margin(i) && opens_block(&lines[i]))
+        })
+        .unwrap_or(floor)
+}
+
+/// Whether a line opens a block: ends in `{`, `(`, `[` or `:`. Not a C
+/// preprocessor line or a label (`out:`), which sit at the margin in the
+/// middle of a function.
+fn opens_block(line: &str) -> bool {
+    let line = line.trim_end();
+    let label = line
+        .strip_suffix(':')
+        .is_some_and(|w| !w.is_empty() && w.chars().all(|c| c.is_alphanumeric() || c == '_'));
+    line.ends_with(['{', '(', '[', ':']) && !line.starts_with('#') && !label
 }
 
 /// Look up a named theme, falling back with a warning when it is not one we
@@ -771,5 +1020,212 @@ mod tests {
         let syn = h.syntax_for_token("python").clone();
         let got = h.highlight_snippet("def f():\n    return 1", &syn);
         assert_eq!(text(&got), ["def f():", "    return 1"]);
+    }
+
+    /// One function, over and over, a blank line after each.
+    const RUST_BLOCK: [&str; 6] = [
+        "/// Adds one.",
+        "pub fn next(x: u32) -> u32 {",
+        "    let s = \"a string\"; // and a comment",
+        "    x + 1",
+        "}",
+        "",
+    ];
+
+    /// A Rust file of `n` lines of [`RUST_BLOCK`]. Every window that starts
+    /// where a block does is colored exactly as the top of the file is, so
+    /// its right colors are known without reading down to it.
+    fn long_rust(n: usize) -> Vec<String> {
+        RUST_BLOCK
+            .iter()
+            .cycle()
+            .take(n)
+            .map(|l| l.to_string())
+            .collect()
+    }
+
+    /// The start of the block at or above `line`.
+    fn block_at(line: usize) -> usize {
+        line / RUST_BLOCK.len() * RUST_BLOCK.len()
+    }
+
+    #[test]
+    fn a_fresh_start_is_made_where_a_definition_begins() {
+        let mut lines: Vec<String> = vec!["    body();".to_string(); 3000];
+        lines[699] = String::new();
+        lines[700] = "fn here() {".into();
+        lines[749] = String::new();
+        lines[750] = "    indented() {".into();
+        assert_eq!(sync_point(&lines, 800), 700, "at the margin after a blank");
+        assert_eq!(sync_point(&lines, 700), 700, "the window's own first line");
+        // Further down, nothing near is at the margin after a blank: the
+        // block it is all in, skipping what only looks like one.
+        lines[1500] = "#if FEATURE".into();
+        lines[1600] = "out:".into();
+        lines[1700] = "}".into();
+        assert_eq!(sync_point(&lines, 2000), 700, "the block it is in");
+        assert_eq!(sync_point(&lines, 2800), 2800 - SYNC, "none near enough");
+    }
+
+    #[test]
+    fn what_opens_a_block() {
+        for line in [
+            "class Cache {",
+            "impl Thing {",
+            "def f(x):",
+            "x = [",
+            "f(  ",
+        ] {
+            assert!(opens_block(line), "{line:?}");
+        }
+        for line in ["#ifdef X {", "out:", "}", "return x;", ""] {
+            assert!(!opens_block(line), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn far_down_a_long_file_colors_come_at_once_from_a_guess() {
+        let h = Highlighter::new();
+        let syntax = h.syntax_for_path(Path::new("x.rs"), "").clone();
+        let lines = long_rust(100_000);
+        let far = block_at(99_000);
+        let mut r = Resume::default();
+        r.sync(Path::new("x.rs"), &syntax.name, None);
+        assert_eq!(
+            h.highlight_cached(&mut r, &lines, &syntax, far, 30),
+            h.highlight_window(&lines, &syntax, 0, 30),
+            "the same lines as the top, so the same colors"
+        );
+        assert!(r.behind(), "exact ones are still to come");
+        assert!(r.states.is_empty(), "nothing read from the top: {r:?}");
+        // A window with nothing in it waits for nothing, or the event loop
+        // would go on drawing it.
+        h.highlight_cached(&mut r, &lines, &syntax, lines.len(), 30);
+        assert!(!r.behind());
+    }
+
+    #[test]
+    fn exact_colors_are_read_in_behind_a_wrong_guess() {
+        let h = Highlighter::new();
+        let syntax = h.syntax_for_path(Path::new("x.py"), "").clone();
+        // What fools a guess: a blank line, then one at the margin, inside a
+        // string, which looks just like code starting.
+        let mut lines: Vec<String> = (0..400).map(|i| format!("a = {i}")).collect();
+        lines.push("HELP = \"\"\"".into());
+        lines.extend((0..20).map(|i| format!("help, line {i}")));
+        lines.push(String::new());
+        lines.push("Usage: tiny [FILE]".into());
+        lines.extend((0..20).map(|i| format!("more help {i}")));
+        lines.push("\"\"\"".into());
+        lines.extend((0..40).map(|i| format!("b = {i}")));
+        let at = 430;
+        let exact = h.highlight_window(&lines, &syntax, at, 20);
+
+        let mut r = Resume::default();
+        r.sync(Path::new("x.py"), &syntax.name, None);
+        let guessed = h.highlight_cached(&mut r, &lines, &syntax, at, 20);
+        assert_ne!(guessed, exact, "the guess took the string for code");
+        // Each frame reads at least a line, however slow the machine.
+        let mut frames = 0;
+        while r.behind() {
+            h.read_on(&mut r, &lines, &syntax, || false);
+            h.highlight_cached(&mut r, &lines, &syntax, at, 20);
+            frames += 1;
+            assert!(frames <= at, "never caught up: {r:?}");
+        }
+        assert_eq!(h.highlight_cached(&mut r, &lines, &syntax, at, 20), exact);
+    }
+
+    #[test]
+    fn the_same_state_saved_twice_is_kept_once() {
+        let h = Highlighter::new();
+        let syntax = h.syntax_for_path(Path::new("x.rs"), "").clone();
+        let lines = long_rust(3_000);
+        let mut r = Resume::default();
+        r.sync(Path::new("x.rs"), &syntax.name, None);
+        for start in (0..3_000).step_by(250) {
+            h.highlight_cached(&mut r, &lines, &syntax, start, 250);
+        }
+        assert_eq!(r.states.len(), 60);
+        // The file repeats every six lines, so the parser is in one of three
+        // states at a checkpoint fifty lines on: as many as are kept.
+        let mut kept: Vec<*const State> = r.states.iter().map(Rc::as_ptr).collect();
+        kept.sort();
+        kept.dedup();
+        assert!(kept.len() <= 3, "{} kept", kept.len());
+        // And sharing changed no color.
+        assert_eq!(
+            h.highlight_cached(&mut r, &lines, &syntax, 2_500, 40),
+            h.highlight_window(&lines, &syntax, 2_500, 40)
+        );
+    }
+
+    #[test]
+    fn reading_on_stops_when_asked_and_carries_on_after() {
+        let h = Highlighter::new();
+        let syntax = h.syntax_for_path(Path::new("x.rs"), "").clone();
+        let lines = long_rust(2_000);
+        let far = block_at(1_900);
+        let mut r = Resume::default();
+        r.sync(Path::new("x.rs"), &syntax.name, None);
+        h.highlight_cached(&mut r, &lines, &syntax, far, 30);
+        h.read_on(&mut r, &lines, &syntax, || true);
+        assert!(r.states.len() <= 1, "a key was waiting: {r:?}");
+        assert!(r.behind());
+
+        // Asked again and again, it gets there, and stops of itself.
+        let mut frames = 0;
+        while r.behind() {
+            h.read_on(&mut r, &lines, &syntax, || false);
+            h.highlight_cached(&mut r, &lines, &syntax, far, 30);
+            frames += 1;
+            assert!(frames <= far, "never caught up: {r:?}");
+        }
+        assert!(r.states.len() * STRIDE + REACH >= far, "{r:?}");
+    }
+
+    #[test]
+    fn an_edit_drops_the_guesses_below_it_too() {
+        let h = Highlighter::new();
+        let syntax = h.syntax_for_path(Path::new("x.rs"), "").clone();
+        let lines = long_rust(6_000);
+        let mut r = Resume::default();
+        r.sync(Path::new("x.rs"), &syntax.name, None);
+        h.highlight_cached(&mut r, &lines, &syntax, 5_000, 30);
+        let guesses = r.near.len();
+        assert!(guesses > 0, "{r:?}");
+
+        r.sync(Path::new("x.rs"), &syntax.name, Some(5_020));
+        assert_eq!(r.near.len(), guesses, "one below them leaves them be");
+        r.sync(Path::new("x.rs"), &syntax.name, Some(4_900));
+        assert!(r.near.is_empty(), "one above takes them with it");
+
+        // And so does where a frame stopped reading in behind them.
+        let hi = SynHighlighter::new(&h.theme);
+        let state = (
+            ParseState::new(&syntax),
+            HighlightState::new(&hi, ScopeStack::new()),
+        );
+        r.reading = Some((120, state));
+        r.sync(Path::new("x.rs"), &syntax.name, Some(120));
+        assert!(r.reading.is_some(), "decided by the lines above it");
+        r.sync(Path::new("x.rs"), &syntax.name, Some(119));
+        assert!(r.reading.is_none());
+    }
+
+    #[test]
+    fn far_enough_down_the_guess_stands() {
+        let h = Highlighter::new();
+        let syntax = h.syntax_for_path(Path::new("x.rs"), "").clone();
+        let lines = long_rust(CATCH_UP_LINES + 10_000);
+        let far = block_at(CATCH_UP_LINES + 5_000);
+        let mut r = Resume::default();
+        r.sync(Path::new("x.rs"), &syntax.name, None);
+        assert_eq!(
+            h.highlight_cached(&mut r, &lines, &syntax, far, 30),
+            h.highlight_window(&lines, &syntax, 0, 30),
+        );
+        assert!(!r.behind(), "nothing more is read");
+        assert!(r.states.is_empty(), "{r:?}");
     }
 }

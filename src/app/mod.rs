@@ -142,14 +142,15 @@ mod term;
 mod update;
 mod watch;
 
+pub use self::actions::{TREE_WIDTH_MAX, TREE_WIDTH_MIN};
 pub use self::bar::completion_for;
 pub use self::mode::{
     BUTTONS, Bar, ConfirmKind, Focus, KEYBIND_BUTTONS, Keybinds, Mode, Settings, Window,
 };
-pub use self::mouse::{GitHit, PaneHit, TextHits};
+pub use self::mouse::{Divider, GitHit, Moves, PaneHit, TextHits};
 pub use self::preview::{Preview, TextKind};
 pub use self::source::{BUTTONS as GIT_BUTTONS, GitFocus, GitPane, Row as GitRow};
-pub use self::split::Split;
+pub use self::split::{MIN_PANE_HEIGHT, MIN_PANE_WIDTH, Split};
 use self::watch::Watch;
 
 use self::parts::display_name;
@@ -229,6 +230,16 @@ pub struct App {
     /// it on every keystroke. Written by `ui` while drawing, see the module
     /// docs.
     pub highlight_cache: Resume,
+    /// Whether the last frame drew code from a guess that exact colors are
+    /// still being read toward, see `highlight::Resume::behind`. While it
+    /// did, the event loop draws again whenever nothing else is happening.
+    pub colors_behind: bool,
+    /// Whether this frame is drawn for that alone, with nobody waiting on it,
+    /// and so may spend a while reading, see `highlight::Highlighter::read_on`.
+    pub reading_colors: bool,
+    /// Whether a key or a click is waiting to be read, for that reading to
+    /// stop for. The event loop's question; nothing is waiting in tests.
+    pub input_waiting: fn() -> bool,
     /// Which of the three windows is on screen. `Ctrl+G` and `Ctrl+L` switch
     /// to the other two, and back.
     pub window: Window,
@@ -345,9 +356,20 @@ pub struct App {
     pub last_bar_area: Option<ratatui::layout::Rect>,
     pub last_results: Option<(ratatui::layout::Rect, usize)>,
     pub last_map_boxes: Vec<(ratatui::layout::Rect, usize)>,
+    /// The lines where parts of the last frame met, which a drag moves.
+    pub last_dividers: Vec<Divider>,
     /// A drag going on in a file, and the last press, for double clicks.
     drag: Option<mouse::Drag>,
     press: Option<mouse::Press>,
+    /// A divider being dragged, and how far from where it was it was taken
+    /// hold of.
+    resizing: Option<(Divider, i32)>,
+    /// How much of the height under the browser the terminal takes, and how
+    /// much of a diff's width its first half does: moved by dragging the
+    /// line between, and kept only while tiny runs, the way the browser's
+    /// width is.
+    pub term_share: f32,
+    pub diff_share: f32,
     /// What the files and folders on screen looked like at the last scan,
     /// see [`watch`]. Nothing outside that module reads it.
     watch: Watch,
@@ -409,6 +431,9 @@ impl App {
             palette,
             highlighter,
             highlight_cache: Resume::default(),
+            colors_behind: false,
+            reading_colors: false,
+            input_waiting: || false,
             window: Window::Main,
             git: GitPane::default(),
             project_map: None,
@@ -454,8 +479,12 @@ impl App {
             last_bar_area: None,
             last_results: None,
             last_map_boxes: Vec::new(),
+            last_dividers: Vec::new(),
             drag: None,
             press: None,
+            resizing: None,
+            term_share: 0.4,
+            diff_share: 0.5,
             watch: Watch::default(),
         };
         app.note_dirs();

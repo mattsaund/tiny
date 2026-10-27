@@ -320,3 +320,121 @@ fn a_click_on_the_map_picks_a_box_and_a_second_opens_it() {
     click(&mut app, at);
     assert_eq!(app.window, Window::Main, "the second click opens it");
 }
+
+/// The divider the last frame drew that moves `what`.
+fn divider(app: &App, what: fn(&Moves) -> bool) -> Divider {
+    app.last_dividers
+        .iter()
+        .find(|d| what(&d.moves))
+        .cloned()
+        .expect("drawn")
+}
+
+/// Take hold of `d` and drag it `by` cells along the way it moves.
+fn drag_divider(app: &mut App, d: &Divider, by: i32) {
+    let (x, y) = if d.across {
+        (d.at, d.hit.y + 1)
+    } else {
+        (d.hit.x + 1, d.at)
+    };
+    let to = |v: u16| (i32::from(v) + by).max(0) as u16;
+    let end = if d.across { (to(x), y) } else { (x, to(y)) };
+    mouse(app, MouseEventKind::Down(LEFT), (x, y), KeyModifiers::NONE);
+    mouse(app, MouseEventKind::Drag(LEFT), end, KeyModifiers::NONE);
+    mouse(app, MouseEventKind::Up(LEFT), end, KeyModifiers::NONE);
+}
+
+#[test]
+fn dragging_the_browsers_edge_makes_it_wider_or_narrower() {
+    let (_td, mut app) = fixture();
+    screen(&mut app, 100, 20);
+    let (x0, x1) = app.last_tree_cols.unwrap();
+    let edge = divider(&app, |m| matches!(m, Moves::Browser { .. }));
+    assert_eq!(edge.at, x1, "where the panes begin");
+
+    drag_divider(&mut app, &edge, 10);
+    screen(&mut app, 100, 20);
+    assert_eq!(app.last_tree_cols.unwrap(), (x0, x1 + 10));
+    assert!(app.status.contains("browser"), "{}", app.status);
+
+    // As far as the keys go and no further, the panes filling the rest.
+    let edge = divider(&app, |m| matches!(m, Moves::Browser { .. }));
+    drag_divider(&mut app, &edge, 500);
+    let rows = screen(&mut app, 100, 20);
+    let (_, x1) = app.last_tree_cols.unwrap();
+    assert_eq!(x1, 60, "sixty in a hundred");
+    let live = app.last_panes.iter().find(|p| p.pinned.is_none()).unwrap();
+    assert_eq!(
+        (live.area.x, live.area.right()),
+        (60, 100),
+        "{}",
+        rows.join("\n")
+    );
+}
+
+#[test]
+fn dragging_the_line_between_panes_moves_it_and_leaves_no_gap() {
+    let (_td, mut app) = fixture();
+    editing_main(&mut app);
+    app.on_key(ctrl('w'));
+    screen(&mut app, 120, 30);
+    let line = divider(&app, |m| matches!(m, Moves::Panes(_)));
+    let before: Vec<u16> = app.last_panes.iter().map(|p| p.area.width).collect();
+
+    drag_divider(&mut app, &line, -8);
+    screen(&mut app, 120, 30);
+    let mut panes: Vec<_> = app.last_panes.iter().map(|p| p.area).collect();
+    panes.sort_by_key(|r| r.x);
+    let mut was = before.clone();
+    was.sort();
+    assert_eq!(panes[0].right(), line.at - 8, "where it was dragged to");
+    assert_eq!(panes[0].right(), panes[1].x, "nothing between");
+    assert_eq!(
+        panes[0].width + panes[1].width,
+        was.iter().sum::<u16>(),
+        "the two still fill the space"
+    );
+
+    // A pane is never squeezed below what a split allows.
+    let line = divider(&app, |m| matches!(m, Moves::Panes(_)));
+    drag_divider(&mut app, &line, -500);
+    screen(&mut app, 120, 30);
+    let narrowest = app.last_panes.iter().map(|p| p.area.width).min().unwrap();
+    assert_eq!(narrowest, crate::app::MIN_PANE_WIDTH);
+    assert_eq!(app.last_panes.len(), 2, "both still drawn");
+}
+
+#[test]
+fn a_click_on_a_divider_is_not_a_click_in_the_pane() {
+    let (_td, mut app) = fixture();
+    editing_main(&mut app);
+    let cursor_before = cursor(&app);
+    screen(&mut app, 100, 20);
+    let edge = divider(&app, |m| matches!(m, Moves::Browser { .. }));
+    click(&mut app, (edge.at, edge.hit.y + 3));
+    assert_eq!(cursor(&app), cursor_before, "the cursor stayed");
+    assert_eq!(app.focus, Focus::Editor);
+}
+
+#[test]
+fn every_divider_stays_sane_in_a_tiny_window() {
+    // Drawn at every small size, with the browser on either side and the
+    // panes split, nothing may overflow and every divider may only move
+    // within the window.
+    for side in [Side::Left, Side::Right] {
+        let (_td, mut app) = fixture();
+        app.config.tree_side = side;
+        editing_main(&mut app);
+        app.on_key(ctrl('w'));
+        for w in 1..40u16 {
+            for h in 1..14u16 {
+                screen(&mut app, w, h);
+                for d in &app.last_dividers {
+                    assert!(d.range.0 <= d.at && d.at <= d.range.1, "{d:?} at {w}x{h}");
+                    let far = if d.across { w } else { h };
+                    assert!(d.range.1 <= far, "{d:?} past the edge at {w}x{h}");
+                }
+            }
+        }
+    }
+}
