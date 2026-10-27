@@ -5,7 +5,7 @@
 .\"
 .\" A test in src/main.rs reads this against the keymap and the options, so a
 .\" key or an option that changes without changing here fails the build.
-.TH TINY 1 2026-10-23 "tiny 0.6.1" "User Commands"
+.TH TINY 1 2026-10-27 "tiny 0.6.2" "User Commands"
 .SH NAME
 tiny \- an IDE, text editor, knowledge manager and file browser in the \%terminal
 .SH SYNOPSIS
@@ -251,6 +251,10 @@ In a list, the first click picks and the second opens: a row of the browser,
 a box on the map, a change or a button in the git window.
 A search result opens with one.
 A click on another pane, or on the terminal, gives it the keyboard.
+A drag on the border between two parts resizes them: the browser's edge,
+the border between two panes or above the terminal, and in the git window
+the list's edge and the border between the two halves of a diff.
+Neither part is made smaller than leaves room for what it holds.
 The wheel scrolls whatever it is over.
 A program in the terminal that asks for the mouse gets it there.
 .SS The project map

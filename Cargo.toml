@@ -1,6 +1,6 @@
 [package]
 name = "tiny"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 # Let-chains, which this uses throughout, landed in 1.88.
 rust-version = "1.88"
@@ -48,23 +48,20 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 serde_json = "1.0.151"
 tempfile = "3.27.0"
 
-# Release is what people install, and they wait for it: `install.sh` builds
-# from source on their machine, so this profile is the install time.
+# Release is what people install. `install.sh` downloads it ready-made, so
+# what this profile costs in build time is paid once, by the release
+# workflow, and again only by whoever builds from source.
 #
-# Thin LTO still lets the optimizer see across crate boundaries, which matters
-# here because the hot loop (syntect's regex matching, called from `highlight`)
-# sits behind two of them, but it does the work per-module and in parallel
-# instead of merging the whole program into one unit. With sixteen codegen
-# units to go at, that is the difference between a 42-second install and a
-# 19-second one, measured on a clean build of the full dependency graph. It
-# costs about 0.7 MB of binary, which is the trade this project has chosen:
-# nobody notices the megabyte, everybody notices the wait.
+# So the whole program is optimized as one unit (`lto = "fat"`, one codegen
+# unit), which lets the optimizer see across every crate boundary at once. It
+# made the binary 0.70 MB smaller than thin LTO across sixteen units did, and
+# a clean build 36 seconds instead of 14.
 #
 # `strip` drops symbols that only a debugger would want, and takes about 2 MB
 # off the binary.
 [profile.release]
-lto = "thin"
-codegen-units = 16
+lto = "fat"
+codegen-units = 1
 strip = true
 # No unwinding. A panic in tiny is a bug with nothing to recover to: nothing
 # catches one, and the terminal is given back by a hook rather than by a
@@ -73,3 +70,29 @@ strip = true
 # Tests are built with the dev profile and still unwind, so `#[should_panic]`
 # would go on working if anything here ever wanted it.
 panic = "abort"
+
+# Optimized for size rather than speed: code nobody waits on. Reading the
+# config, running a plugin's Lua, starting the shell in the terminal pane and
+# describing an error each run when asked, not while anything is drawn. The
+# grammars behind the project map are not here: the map is built while you
+# wait, and at this setting it took 40% longer. Together, 0.16 MB.
+[profile.release.package.toml]
+opt-level = "s"
+[profile.release.package.toml_parser]
+opt-level = "s"
+[profile.release.package.toml_datetime]
+opt-level = "s"
+[profile.release.package.toml_writer]
+opt-level = "s"
+[profile.release.package.serde_spanned]
+opt-level = "s"
+[profile.release.package.mlua]
+opt-level = "s"
+[profile.release.package.mlua-sys]
+opt-level = "s"
+[profile.release.package.portable-pty]
+opt-level = "s"
+[profile.release.package.serial2]
+opt-level = "s"
+[profile.release.package.anyhow]
+opt-level = "s"

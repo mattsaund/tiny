@@ -152,13 +152,23 @@ pub(super) fn draw_editor(
             // a long file taking a third of a second and taking two
             // milliseconds.
             app.highlight_cache.sync(path, &syntax.name, touched);
-            app.highlighter.highlight_cached(
+            let colored = app.highlighter.highlight_cached(
                 &mut app.highlight_cache,
                 ed.lines(),
                 syntax,
                 a,
                 b + 1 - a,
-            )
+            );
+            if app.reading_colors {
+                app.highlighter.read_on(
+                    &mut app.highlight_cache,
+                    ed.lines(),
+                    syntax,
+                    app.input_waiting,
+                );
+            }
+            app.colors_behind |= app.highlight_cache.behind();
+            colored
         }
         _ => Vec::new(),
     };

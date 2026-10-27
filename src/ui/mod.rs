@@ -94,7 +94,10 @@ use self::term::draw_terminal;
 use self::tree::{draw_results, draw_tree, results_height};
 use self::update::draw_update;
 
-use crate::app::{App, ConfirmKind, Mode, Window};
+use crate::app::{
+    App, ConfirmKind, Divider, MIN_PANE_HEIGHT, MIN_PANE_WIDTH, Mode, Moves, TREE_WIDTH_MAX,
+    TREE_WIDTH_MIN, Window,
+};
 use crate::config::Side;
 
 /// Paint one frame. Called once per keypress by the event loop in `main`.
@@ -123,6 +126,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.last_term_inner = None;
     app.git.list_hits.clear();
     app.git.diff_area = None;
+    app.last_dividers.clear();
+    // Set again by any pane this frame draws from a guess.
+    app.colors_behind = false;
     let [bar_row, main, status_row] = Layout::vertical([
         Constraint::Length(bar_h),
         Constraint::Min(3),
@@ -186,8 +192,21 @@ fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
     };
     app.last_results = results;
 
+    // The least room the panes need, each at least as big as a pane may be
+    // split into, so no line moved by the mouse can squeeze one smaller.
+    let least = |stacked: bool, each: u16| {
+        app.split
+            .as_ref()
+            .map_or(each, |s| s.layout.least(stacked, each))
+    };
+    let (panes_w, panes_h) = (
+        least(false, MIN_PANE_WIDTH).max(12),
+        least(true, MIN_PANE_HEIGHT),
+    );
+
     // The browser keeps whatever share of the width it was last given:
-    // `<` and `>` move it, and `Ctrl+T` takes it away entirely.
+    // `<` and `>` move it, dragging its edge does too, and `Ctrl+T` takes it
+    // away entirely.
     let (side_area, preview_area) = if app.tree_hidden {
         (None, main)
     } else {
@@ -202,10 +221,36 @@ fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
             .direction(Direction::Horizontal)
             .constraints([left, right])
             .split(main);
-        match app.config.tree_side {
-            Side::Left => (Some(panes[0]), panes[1]),
-            Side::Right => (Some(panes[1]), panes[0]),
-        }
+        let right = app.config.tree_side == Side::Right;
+        let (side, rest) = if right {
+            (panes[1], panes[0])
+        } else {
+            (panes[0], panes[1])
+        };
+        // How wide its edge may make it: what the keys allow, and no wider
+        // than leaves the panes their room.
+        let w = f32::from(main.width);
+        let lo = ((w * TREE_WIDTH_MIN).ceil() as u16).max(14);
+        let hi = ((w * TREE_WIDTH_MAX) as u16).min(main.width.saturating_sub(panes_w));
+        let (at, range) = if right {
+            (
+                side.x,
+                (
+                    main.right().saturating_sub(hi),
+                    main.right().saturating_sub(lo),
+                ),
+            )
+        } else {
+            (rest.x, (main.x + lo, main.x + hi))
+        };
+        app.last_dividers.push(Divider::new(
+            Moves::Browser { area: main, right },
+            main,
+            true,
+            at,
+            range,
+        ));
+        (Some(side), rest)
     };
 
     // Tell `app` where the tree ended up, so a mouse wheel can work out which
@@ -216,12 +261,22 @@ fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
         draw_tree(f, app, side_area);
     }
 
-    // The terminal, under the panes, when there is one.
+    // The terminal, under the panes, when there is one, as tall as the line
+    // above it was last dragged to make it.
     app.last_term_area = None;
     let preview_area = if app.term.is_some() && preview_area.height >= 12 {
-        let share = ((f32::from(preview_area.height) * 0.4) as u16).max(6);
+        let h = preview_area.height;
+        let room = h.saturating_sub(panes_h).max(6);
+        let tall = ((f32::from(h) * app.term_share).round() as u16).clamp(6, room);
         let [panes, term] =
-            Layout::vertical([Constraint::Min(6), Constraint::Length(share)]).areas(preview_area);
+            Layout::vertical([Constraint::Min(6), Constraint::Length(tall)]).areas(preview_area);
+        app.last_dividers.push(Divider::new(
+            Moves::Terminal { area: preview_area },
+            preview_area,
+            false,
+            term.y,
+            (preview_area.bottom() - room, preview_area.bottom() - 6),
+        ));
         draw_terminal(f, app, term);
         panes
     } else {
@@ -245,6 +300,16 @@ fn draw_main(f: &mut Frame, app: &mut App, main: ratatui::layout::Rect) {
         app.last_live_area = preview_area;
         return draw_preview(f, app, preview_area);
     };
+    if let Some(split) = &app.split {
+        for line in split
+            .layout
+            .lines(preview_area, MIN_PANE_WIDTH, MIN_PANE_HEIGHT)
+        {
+            let (area, across, at, range) = (line.area, !line.stacked, line.at, line.range);
+            app.last_dividers
+                .push(Divider::new(Moves::Panes(line), area, across, at, range));
+        }
+    }
     let live_area = areas
         .iter()
         .find(|(id, _)| *id == live)

@@ -16,9 +16,6 @@ use crate::shell::Shell;
 use super::App;
 use super::mode::{Focus, Window};
 
-/// How much of the space under the browser a new terminal takes.
-const SHARE: f32 = 0.4;
-
 impl App {
     /// `Ctrl+O`: the terminal, and back.
     pub(super) fn toggle_terminal(&mut self) {
@@ -36,7 +33,8 @@ impl App {
         }
         if self.term.is_none() {
             let room = self.last_live_area;
-            let rows = ((f32::from(room.height) * SHARE) as u16).max(4);
+            // As tall as the last one was left, and drawing fits it after.
+            let rows = ((f32::from(room.height) * self.term_share) as u16).max(4);
             let root = self.root().to_path_buf();
             match Shell::start(&root, rows, room.width.saturating_sub(2)) {
                 Ok(shell) => self.term = Some(shell),

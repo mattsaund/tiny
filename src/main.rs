@@ -315,18 +315,6 @@ const IDLE: Duration = Duration::from_millis(500);
 /// enough that output scrolls by smoothly, and only while there is a shell.
 const TICK: Duration = Duration::from_millis(16);
 
-/// The event loop: draw, wait for something to happen, dispatch, repeat.
-///
-/// Note the order: the frame is drawn *before* the quit check, so the last
-/// action a user takes is visible on screen before the program exits.
-///
-/// The inner loop is what keeps "one frame per thing that happened" true now
-/// that waiting can end without an event. A timeout that finds nothing changed
-/// on disk goes back to waiting rather than falling out and redrawing an
-/// identical screen, so an idle tiny still draws nothing at all.
-///
-/// `ratatui::restore` in the caller runs whether or not this returns an error,
-/// so a failure in here still gives the terminal back.
 /// The cursor the settings ask for: the terminal's own, or a shape, blinking
 /// or not.
 fn cursor_style(config: &Config) -> SetCursorStyle {
@@ -341,8 +329,26 @@ fn cursor_style(config: &Config) -> SetCursorStyle {
     }
 }
 
+/// The event loop: draw, wait for something to happen, dispatch, repeat.
+///
+/// Note the order: the frame is drawn *before* the quit check, so the last
+/// action a user takes is visible on screen before the program exits.
+///
+/// The inner loop is what keeps "one frame per thing that happened" true now
+/// that waiting can end without an event. A timeout that finds nothing changed
+/// on disk goes back to waiting rather than falling out and redrawing an
+/// identical screen, so an idle tiny still draws nothing at all. The one
+/// exception is colors being read in behind a guess, see
+/// `highlight::Resume::behind`: they are drawn again until they are exact,
+/// and then that stops too.
+///
+/// `ratatui::restore` in the caller runs whether or not this returns an error,
+/// so a failure in here still gives the terminal back.
 fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
     let mut looked = std::time::Instant::now();
+    app.input_waiting = || event::poll(Duration::ZERO).unwrap_or(false);
+    // Whether the next frame is drawn only for colors still to read.
+    let mut reading = false;
     // What the cursor was last set to, so it is only said again when a
     // setting changes it. Nothing yet: the terminal's own is what it has.
     let mut cursor = (CursorShape::Default, true);
@@ -352,19 +358,31 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             cursor = wanted;
             let _ = execute!(std::io::stdout(), cursor_style(&app.config));
         }
+        app.reading_colors = reading;
         terminal.draw(|f| ui::draw(f, app))?;
+        app.reading_colors = false;
+        reading = false;
         if app.should_quit {
             return Ok(());
         }
         loop {
             // A shell writes whenever it likes, and there is no telling the
             // terminal to wake us when it does, so while there is one it is
-            // looked at every tick.
-            let wait = if app.has_terminal() { TICK } else { IDLE };
+            // looked at every tick. Colors still being read in behind a
+            // guess are drawn again the moment nothing else is happening,
+            // see `highlight::Resume::behind`.
+            let wait = if app.colors_behind {
+                Duration::ZERO
+            } else if app.has_terminal() {
+                TICK
+            } else {
+                IDLE
+            };
             if !event::poll(wait)? {
                 let shell = app.poll_terminal();
+                reading = app.colors_behind;
                 if looked.elapsed() < IDLE {
-                    if shell {
+                    if shell || reading {
                         break;
                     }
                     continue;
@@ -377,7 +395,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                 let git = app.poll_git_job();
                 let disk = app.rescan_disk();
                 let update = app.poll_update();
-                if shell || git || disk || update {
+                if shell || git || disk || update || reading {
                     break;
                 }
                 continue;
@@ -392,6 +410,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
         // project, waits for `settle` and happens once for the lot.
         while !app.should_quit && event::poll(Duration::ZERO)? {
             dispatch(app, event::read()?);
+            // Someone is waiting on this frame after all.
+            reading = false;
         }
         app.settle();
     }

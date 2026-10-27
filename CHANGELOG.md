@@ -3,6 +3,22 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.6.2 - 2026-10-27
+
+- **Colors in files of any length.** A file past 20,000 lines used to show
+  no colors at all, and the first jump to the end of a long one could hold
+  tiny up for a second or more. Now every file has its colors, however
+  long, and a jump anywhere in it shows them at once.
+- **Resize with the mouse.** Drag the border between any two parts of the
+  window: the browser's edge, the border between two panes or above the
+  terminal, and in the git window the list's edge and the border between the
+  halves of a diff. The parts always fill the window, and neither gets
+  smaller than leaves room for what it holds.
+- **Smaller and quicker.** About a tenth smaller to download, and a key
+  reaches the screen a little sooner, now that the program is optimized as
+  one piece. A long file's colors keep one copy of each state the parser
+  comes back to, rather than one every fifty lines.
+
 ## 0.6.1 - 2026-10-23
 
 - **The mouse.** A click puts the cursor anywhere and a drag selects. A

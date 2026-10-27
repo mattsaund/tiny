@@ -12,13 +12,19 @@
 //! goes for the git window's rows and buttons and the map's boxes. A double
 //! click is two clicks, so it opens.
 //!
+//! A drag on a line where two parts meet moves it: the browser's edge, the
+//! line between two panes or above the terminal, and in the git window the
+//! edge of the list and the line between a diff's halves. The parts on
+//! either side always fill the space between them, and neither is made
+//! smaller than leaves room for what it holds.
+//!
 //! # Knowing what is where
 //!
 //! Only `ui` knows where anything was drawn, so every frame it writes down
 //! what each part of the screen held: the browser's rows, each pane's lines
-//! (see [`TextHits`]), the search results, the map's boxes and the git
-//! window's rows. A click is read against the last frame, which is the one
-//! that was being looked at.
+//! (see [`TextHits`]), the search results, the map's boxes, the git window's
+//! rows and the lines between parts (see [`Divider`]). A click is read
+//! against the last frame, which is the one that was being looked at.
 //!
 //! # The terminal
 //!
@@ -37,10 +43,12 @@ use crate::text::editor::{Editor, Pos, Unit};
 use crate::text::tabs;
 
 use super::App;
+use super::actions::{TREE_WIDTH_MAX, TREE_WIDTH_MIN};
 use super::mode::{Focus, Mode, Window};
 use super::parts::display_name;
 use super::preview::Preview;
 use super::source::GitFocus;
+use super::split::PaneLine;
 
 /// How soon a second press on the same cell counts as a double click.
 const DOUBLE: Duration = Duration::from_millis(400);
@@ -78,6 +86,60 @@ pub struct GitHit {
     pub y: u16,
     pub row: usize,
     pub buttons: Vec<(u16, u16, usize)>,
+}
+
+/// A line where two parts of the window meet, which a drag moves, as the
+/// last frame drew it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Divider {
+    /// What moving it resizes.
+    pub moves: Moves,
+    /// The two borders that meet there, either of which takes hold of it.
+    pub hit: Rect,
+    /// Whether the two parts are side by side, so it moves across, rather
+    /// than one above the other.
+    pub across: bool,
+    /// Where the second part begins, and the first and the last place it
+    /// may begin.
+    pub at: u16,
+    pub range: (u16, u16),
+}
+
+/// What a [`Divider`] resizes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Moves {
+    /// The browser's share of `area`, the main window, with the browser on
+    /// the `right` of it or the left.
+    Browser { area: Rect, right: bool },
+    /// The terminal's share of `area`: the panes, and it under them.
+    Terminal { area: Rect },
+    /// Two panes side by side, or one above the other.
+    Panes(PaneLine),
+    /// The git window's list, its share of `area`.
+    Changes { area: Rect },
+    /// A diff's first half, its share of `area`.
+    Halves { area: Rect },
+}
+
+impl Divider {
+    /// The line between two parts of `along`, side by side when `across`,
+    /// the second beginning at `at` and free to begin anywhere in `range`.
+    pub fn new(moves: Moves, along: Rect, across: bool, at: u16, range: (u16, u16)) -> Self {
+        let hit = if across {
+            Rect::new(at.saturating_sub(1), along.y, 2, along.height)
+        } else {
+            Rect::new(along.x, at.saturating_sub(1), along.width, 2)
+        };
+        Divider {
+            moves,
+            hit,
+            across,
+            at,
+            // Where it is now is always somewhere it may be, even in a
+            // window too small for both parts' least.
+            range: (range.0.min(at), range.1.max(at)),
+        }
+    }
 }
 
 /// A drag going on in a file: what the press selected, and by what.
@@ -142,8 +204,13 @@ impl App {
         let (Some(area), Some(shell)) = (self.last_term_inner, self.term.as_mut()) else {
             return false;
         };
-        // A drag that began in a file stays the file's, wherever it goes.
-        if !area.contains(at) || self.drag.is_some() || self.window != Window::Main {
+        // A drag that began in a file, or on a divider, stays its own,
+        // wherever it goes.
+        if !area.contains(at)
+            || self.drag.is_some()
+            || self.resizing.is_some()
+            || self.window != Window::Main
+        {
             return false;
         }
         if !matches!(self.mode, Mode::Normal) {
@@ -176,6 +243,7 @@ impl App {
     fn press(&mut self, at: Position, mods: KeyModifiers) {
         let count = self.count_press(at);
         self.drag = None;
+        self.resizing = None;
         // What is over the window gets the click first.
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => {}
@@ -210,6 +278,14 @@ impl App {
                 self.mode = other;
                 return;
             }
+        }
+        // A line between two parts, before either part: its borders are
+        // where it is taken hold of.
+        if let Some(d) = self.last_dividers.iter().find(|d| d.hit.contains(at)) {
+            let from = if d.across { at.x } else { at.y };
+            let grab = i32::from(d.at) - i32::from(from);
+            self.resizing = Some((d.clone(), grab));
+            return;
         }
         match self.window {
             Window::Map => self.press_map(at),
@@ -305,9 +381,16 @@ impl App {
         self.drag = Some(Drag { origin, unit });
     }
 
-    /// The left button moving while down: the selection, in the pane the
-    /// press was in, follows it.
+    /// The left button moving while down: the divider it took hold of, or
+    /// the selection in the pane the press was in, follows it.
     fn drag_to(&mut self, at: Position) -> bool {
+        if let Some((d, grab)) = self.resizing.take() {
+            let from = i32::from(if d.across { at.x } else { at.y });
+            let to = (from + grab).clamp(i32::from(d.range.0), i32::from(d.range.1));
+            self.move_divider(&d, to as u16);
+            self.resizing = Some((d, grab));
+            return true;
+        }
         let Some(drag) = self.drag else {
             return false;
         };
@@ -328,9 +411,48 @@ impl App {
         true
     }
 
+    /// Move `d` so the second of its two parts begins at `to`.
+    ///
+    /// Shares, not lengths, are what is kept, so a window made wider or
+    /// narrower afterwards keeps the proportions and still has no part left
+    /// over.
+    fn move_divider(&mut self, d: &Divider, to: u16) {
+        let share = |part: u16, of: u16| f32::from(part) / f32::from(of.max(1));
+        match &d.moves {
+            Moves::Browser { area, right } => {
+                let width = if *right {
+                    area.right() - to
+                } else {
+                    to - area.x
+                };
+                let width = share(width, area.width);
+                self.config.tree_width = width.clamp(TREE_WIDTH_MIN, TREE_WIDTH_MAX);
+                self.status = format!(
+                    "browser {}% of the window",
+                    (self.config.tree_width * 100.0).round()
+                );
+            }
+            Moves::Terminal { area } => self.term_share = share(area.bottom() - to, area.height),
+            Moves::Panes(line) => {
+                if let Some(split) = &mut self.split {
+                    split.layout.move_line(line, to);
+                }
+            }
+            Moves::Changes { area } => {
+                self.config.tree_width = share(to - area.x, area.width);
+                self.status = format!(
+                    "changes {}% of the window",
+                    (self.config.tree_width * 100.0).round()
+                );
+            }
+            Moves::Halves { area } => self.diff_share = share(to - area.x, area.width),
+        }
+    }
+
     /// The left button coming up: the end of a drag, and a click that moved
     /// nowhere selects nothing.
     fn release(&mut self) {
+        self.resizing = None;
         if self.drag.take().is_some()
             && let Some(ed) = self.active_buffer_mut()
             && ed.anchor == Some(ed.pos())

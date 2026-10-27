@@ -60,7 +60,8 @@ cursors. `Ctrl+R` records keys, `Ctrl+P` plays them.
 
 ![three panes, side by side and stacked](docs/split.png)
 
-`Ctrl+W` next pane. `*split`, `*split down`, `*close`.
+`Ctrl+W` next pane. `*split`, `*split down`, `*close`. Drag a border between
+any two parts to resize them.
 
 ## Terminal
 
@@ -108,6 +109,7 @@ audio and PDFs open in your own viewer.
 | `Ctrl+G`, `Ctrl+L` | git, map |
 | `Ctrl+W`, `Ctrl+O` | next pane, terminal |
 | `Ctrl+T`, `<` `>` | hide the browser, its width |
+| drag a border | resize |
 | `Ctrl+N` | another tiny window |
 | `Ctrl+Q` | quit |
 
