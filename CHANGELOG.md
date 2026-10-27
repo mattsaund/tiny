@@ -3,6 +3,14 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.6.3 - 2026-10-27
+
+- **Typing is many times quicker.** Each key used to color every line on
+  screen over again, and up to fifty lines above them. Now it colors the
+  line it changed, and the lines after it only as far as the change reaches.
+  In a file of Rust a key now reaches the screen in about a quarter of a
+  millisecond, where it took 2 to 4, and sooner than in micro.
+
 ## 0.6.2 - 2026-10-27
 
 - **Colors in files of any length.** A file past 20,000 lines used to show
