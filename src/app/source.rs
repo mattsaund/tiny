@@ -9,7 +9,7 @@
 //! Nothing here watches anything. [`App::refresh_git`] asks git what has
 //! changed, and the answer is held until something asks again, which is every
 //! time the window is switched to, and after every action that could have
-//! changed it. That is the same bargain the project map makes, and for the same
+//! changed it. That is the same bargain the map makes, and for the same
 //! reason: a repository is cheap to re-read and expensive to keep in step.
 //!
 //! # One job at a time
@@ -555,7 +555,7 @@ impl App {
     /// already running.
     pub(super) fn start_git_job(&mut self, what: &str, steps: &[&[&str]]) {
         let Some(repo) = self.git.repo.clone() else {
-            self.status = "not a git repository".into();
+            self.status = crate::git::NO_REPOSITORY.into();
             return;
         };
         if let Some(job) = &self.git.job {

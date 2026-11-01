@@ -202,6 +202,42 @@ impl Diff {
     }
 }
 
+/// What the git window says when the project is in no repository at all:
+/// that, and nothing else. git's own message for it names a `.git` folder and
+/// its parents, which is more than anyone opening the window needs.
+pub const NO_REPOSITORY: &str = "no git repository";
+
+/// What git leaves out of the repository `dir` is in, as `.gitignore` and
+/// the rest of its rules say: the folders it ignores whole, and the files.
+/// Nothing at all when `dir` is in no repository, or there is no git.
+///
+/// git's own answer rather than a reading of `.gitignore` here: its rules
+/// have patterns, exceptions, a file in every folder and one for the whole
+/// machine, and git already knows every one of them.
+pub fn ignored(dir: &Path) -> crate::text::search::Skip {
+    let mut skip = crate::text::search::Skip::default();
+    let Ok(out) = run::git(
+        dir,
+        &[
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        ],
+    ) else {
+        return skip;
+    };
+    for entry in out.split('\0').filter(|e| !e.is_empty()) {
+        match entry.strip_suffix('/') {
+            Some(folder) => skip.dirs.insert(dir.join(folder)),
+            None => skip.files.insert(dir.join(entry)),
+        };
+    }
+    skip
+}
+
 /// The repository a project sits in.
 #[derive(Debug, Clone)]
 pub struct Repo {
@@ -211,12 +247,20 @@ pub struct Repo {
 }
 
 impl Repo {
-    /// Find the repository `dir` is in, or say why there is not one.
+    /// Find the repository `dir` is in, or say why there is not one:
+    /// [`NO_REPOSITORY`] when there is none, and git's own words for anything
+    /// else, git not being installed say.
     pub fn find(dir: &Path) -> Result<Self> {
-        let top = run::git(dir, &["rev-parse", "--show-toplevel"])?;
+        let top = match run::git_in_english(dir, &["rev-parse", "--show-toplevel"]) {
+            Ok(top) => top,
+            Err(e) if format!("{e:#}").contains("not a git repository") => {
+                return Err(anyhow!(NO_REPOSITORY));
+            }
+            Err(e) => return Err(e),
+        };
         let top = top.trim();
         if top.is_empty() {
-            return Err(anyhow!("not a git repository"));
+            return Err(anyhow!(NO_REPOSITORY));
         }
         Ok(Self {
             root: PathBuf::from(top),

@@ -40,15 +40,49 @@ pub(super) fn clip(s: &str, max_w: usize) -> String {
     out
 }
 
-/// Put a token on the line, into the last span when it has the same style:
-/// a sentence in one style is one span, not one per word and space. Spans
-/// before `keep` are the line's prefix and are never added to.
-fn push_token(cur: &mut Vec<Span<'static>>, keep: usize, style: Style, tok: &str) {
+/// Put a token on the line, into the last span when it has the same style
+/// and is part of the same link: a sentence in one style is one span, not one
+/// per word and space. Spans before `keep` are the line's prefix and are never
+/// added to.
+fn push_token(
+    cur: &mut Vec<Span<'static>>,
+    ids: &mut Vec<Option<usize>>,
+    keep: usize,
+    (style, id): (Style, Option<usize>),
+    tok: &str,
+) {
     let ours = cur.len() > keep;
     match cur.last_mut() {
-        Some(last) if ours && last.style == style => last.content.to_mut().push_str(tok),
-        _ => cur.push(Span::styled(tok.to_string(), style)),
+        Some(last) if ours && last.style == style && ids.last() == Some(&id) => {
+            last.content.to_mut().push_str(tok)
+        }
+        _ => {
+            cur.push(Span::styled(tok.to_string(), style));
+            ids.push(id);
+        }
     }
+}
+
+/// Where one link landed on a wrapped line: the first column, the column
+/// past its end, and which link it is.
+pub(super) type LinkCols = (u16, u16, usize);
+
+/// Where the links on a finished line are: the columns each covers, and which
+/// link it is, from the link each span was part of.
+fn spots_of(spans: &[Span<'static>], ids: &[Option<usize>]) -> Vec<LinkCols> {
+    let mut out: Vec<LinkCols> = Vec::new();
+    let mut col = 0u16;
+    for (span, id) in spans.iter().zip(ids) {
+        let w = span.content.width() as u16;
+        if let Some(id) = *id {
+            match out.last_mut() {
+                Some(last) if last.2 == id && last.1 == col => last.1 = col + w,
+                _ => out.push((col, col + w, id)),
+            }
+        }
+        col += w;
+    }
+    out
 }
 
 /// Push a wrapped line, dropping whitespace that ran off the end of it.
@@ -102,46 +136,79 @@ pub(super) fn wrap(
     first_prefix: Vec<Span<'static>>,
     cont_prefix: Vec<Span<'static>>,
 ) -> Vec<Line<'static>> {
+    let ids = vec![None; spans.len()];
+    wrap_linked(spans, &ids, width, first_prefix, cont_prefix)
+        .into_iter()
+        .map(|(line, _)| line)
+        .collect()
+}
+
+/// [`wrap`], with `ids` saying which link each span is part of, if any, and
+/// each line handed back with where its links landed: the columns each one
+/// covers, and which link it is. A link wrapped onto two lines is on both.
+pub(super) fn wrap_linked(
+    spans: &[Span<'static>],
+    ids: &[Option<usize>],
+    width: usize,
+    first_prefix: Vec<Span<'static>>,
+    cont_prefix: Vec<Span<'static>>,
+) -> Vec<(Line<'static>, Vec<LinkCols>)> {
     let first_w = spans_width(&first_prefix);
     let cont_w = spans_width(&cont_prefix);
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut lines = Vec::new();
     let mut keep = first_prefix.len();
+    let mut cur_ids = vec![None; first_prefix.len()];
     let mut cur = first_prefix;
     let mut cur_w = first_w;
     let mut indent_w = first_w;
+    let fresh = |cont: &Vec<Span<'static>>| (cont.clone(), vec![None; cont.len()]);
 
-    // Flatten into whitespace/word tokens, carrying each token's style.
-    let mut tokens: Vec<(Style, String)> = Vec::new();
-    for s in spans {
+    // Flatten into whitespace/word tokens, carrying each token's style and
+    // link.
+    let mut tokens: Vec<((Style, Option<usize>), String)> = Vec::new();
+    for (s, id) in spans.iter().zip(ids.iter().chain(std::iter::repeat(&None))) {
         let mut buf = String::new();
         let mut buf_space = false;
         for c in s.content.chars() {
             let is_space = c == ' ' || c == '\t';
             if !buf.is_empty() && is_space != buf_space {
-                tokens.push((s.style, std::mem::take(&mut buf)));
+                tokens.push(((s.style, *id), std::mem::take(&mut buf)));
             }
             buf_space = is_space;
             buf.push(c);
         }
         if !buf.is_empty() {
-            tokens.push((s.style, buf));
+            tokens.push(((s.style, *id), buf));
         }
     }
 
-    for (style, tok) in tokens {
+    let finish = |lines: &mut Vec<_>, spans: Vec<Span<'static>>, ids: Vec<Option<usize>>| {
+        let mut done = Vec::new();
+        push_trimmed(&mut done, spans);
+        let line = done.pop().unwrap_or_default();
+        let spots = spots_of(&line.spans, &ids[..line.spans.len().min(ids.len())]);
+        lines.push((line, spots));
+    };
+
+    for (look, tok) in tokens {
         let tw = tok.width();
         let is_space = tok.starts_with(' ') || tok.starts_with('\t');
         if is_space {
             // Never start a wrapped line with the space that caused the break,
             // and never let a trailing space push the line past the width.
             if cur_w > indent_w && cur_w + tw <= width {
-                push_token(&mut cur, keep, style, &tok);
+                push_token(&mut cur, &mut cur_ids, keep, look, &tok);
                 cur_w += tw;
             }
             continue;
         }
         if cur_w + tw > width && cur_w > indent_w {
-            push_trimmed(&mut lines, std::mem::replace(&mut cur, cont_prefix.clone()));
+            let (next, next_ids) = fresh(&cont_prefix);
+            finish(
+                &mut lines,
+                std::mem::replace(&mut cur, next),
+                std::mem::replace(&mut cur_ids, next_ids),
+            );
             keep = cur.len();
             cur_w = cont_w;
             indent_w = cont_w;
@@ -157,19 +224,24 @@ pub(super) fn wrap(
                 }
                 cur_w += chunk.width();
                 rest = &rest[chunk.len()..];
-                push_token(&mut cur, keep, style, &chunk);
+                push_token(&mut cur, &mut cur_ids, keep, look, &chunk);
                 if !rest.is_empty() {
-                    push_trimmed(&mut lines, std::mem::replace(&mut cur, cont_prefix.clone()));
+                    let (next, next_ids) = fresh(&cont_prefix);
+                    finish(
+                        &mut lines,
+                        std::mem::replace(&mut cur, next),
+                        std::mem::replace(&mut cur_ids, next_ids),
+                    );
                     keep = cur.len();
                     cur_w = cont_w;
                     indent_w = cont_w;
                 }
             }
         } else {
-            push_token(&mut cur, keep, style, &tok);
+            push_token(&mut cur, &mut cur_ids, keep, look, &tok);
             cur_w += tw;
         }
     }
-    push_trimmed(&mut lines, cur);
+    finish(&mut lines, cur, cur_ids);
     lines
 }

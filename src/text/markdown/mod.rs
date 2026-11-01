@@ -10,9 +10,10 @@
 //!
 //! # Two entry points
 //!
-//! - [`render()`]: full markdown. The two top heading levels get a rule and
-//!   the deeper ones fade, lists get bullets, tables get drawn, fenced code is
-//!   syntax-highlighted via `highlight`.
+//! - [`render_linked`]: full markdown. The two top heading levels get a rule
+//!   and the deeper ones fade, lists get bullets, tables get drawn, fenced
+//!   code is syntax-highlighted via `highlight`. Where each link was drawn
+//!   comes back with the lines, so a click on one can follow it.
 //! - [`render_plain`]: `.txt` and friends. Wraps long lines and picks out
 //!   wikilinks and URLs, and does nothing else. A `#` at the start of a line in
 //!   a text file is a hash, not a heading; a plain-text file that silently
@@ -89,7 +90,7 @@ pub fn is_markdown(path: &std::path::Path) -> bool {
 /// Duplicates are kept; callers that want unique edges can dedupe.
 ///
 /// This is how `graph` finds the wikilinks in a file, so the renderer and the
-/// project map agree on what counts as one.
+/// map agree on what counts as one.
 pub fn wikilinks(source: &str) -> Vec<String> {
     let mut out = Vec::new();
     for (_, _, target) in scan_wikilinks(source) {
@@ -409,7 +410,7 @@ fn is_atx_heading(line: &str) -> bool {
 
 /// Render one block of source, as [`blocks`] carved it out.
 ///
-/// A blank-line block renders to nothing ([`render()`] trims trailing blanks)
+/// A blank-line block renders to nothing ([`render_linked`] trims trailing blanks)
 /// so it comes back as one empty line instead, because the gap between two
 /// paragraphs is a row on the screen and has to stay one.
 ///
@@ -426,12 +427,118 @@ pub fn render_block(
     hl: &Highlighter,
     labels: &[(String, String)],
     top: bool,
-) -> Vec<Line<'static>> {
-    let made = render_with(&lines.join("\n"), width, pal, hl, labels, top);
+) -> Rendered {
+    let (made, spots) = render_with(&lines.join("\n"), width, pal, hl, labels, top);
     if made.is_empty() {
-        return vec![Line::default()];
+        return (vec![Line::default()], spots);
     }
-    made
+    (made, spots)
+}
+
+/// Where a link in a note goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// A web address, or anything else with a scheme: what a browser opens.
+    Web(String),
+    /// A path, the way a markdown link writes one, relative to its note.
+    Path(String),
+    /// A `[[wikilink]]`: a note's name, wherever in the project it is.
+    Wiki(String),
+}
+
+impl Target {
+    /// What a markdown link's destination is: a web address when it starts
+    /// with a scheme, `https:` or `mailto:`, and otherwise a path.
+    pub fn of(dest: &str) -> Self {
+        let scheme = dest.split_once(':').is_some_and(|(scheme, _)| {
+            scheme.len() > 1
+                && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+        });
+        if scheme {
+            Target::Web(dest.to_string())
+        } else {
+            Target::Path(dest.to_string())
+        }
+    }
+}
+
+/// A note, or a block of one, as drawn: its rows, and where its links are.
+pub type Rendered = (Vec<Line<'static>>, Vec<Spot>);
+
+/// Where one link was drawn: the line, the columns on it, and where it goes.
+/// A link wrapped onto two lines is two of these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spot {
+    pub line: usize,
+    pub cols: std::ops::Range<u16>,
+    pub target: Target,
+}
+
+/// The links in one line of text as it is written, not drawn: the bytes each
+/// covers and where it goes. What a click on the text of a file being edited
+/// finds: `[text](path)`, `[[wikilinks]]`, `<https://...>` and web addresses
+/// written on their own, in a note or anywhere else.
+pub fn links_in(line: &str) -> Vec<(std::ops::Range<usize>, Target)> {
+    let mut out: Vec<(std::ops::Range<usize>, Target)> = Vec::new();
+    for (s, e, target) in scan_wikilinks(line) {
+        if let Some(target) = target {
+            out.push((s..e, Target::Wiki(target)));
+        }
+    }
+    let taken = |out: &[(std::ops::Range<usize>, Target)], at: usize| {
+        out.iter().any(|(r, _)| r.contains(&at))
+    };
+    // `[text](dest)`: from its `[` to its `)`.
+    let mut from = 0;
+    while let Some(seam) = line[from..].find("](") {
+        let seam = from + seam;
+        from = seam + 2;
+        let Some(close) = line[seam + 2..].find(')') else {
+            break;
+        };
+        let end = seam + 2 + close + 1;
+        let Some(open) = line[..seam].rfind('[') else {
+            continue;
+        };
+        let dest = line[seam + 2..end - 1].trim();
+        let dest = dest
+            .strip_prefix('<')
+            .and_then(|d| d.strip_suffix('>'))
+            .unwrap_or_else(|| dest.split_whitespace().next().unwrap_or(""));
+        if !dest.is_empty() && !taken(&out, open) {
+            // A picture's `!` is part of it.
+            let open = if line[..open].ends_with('!') {
+                open - 1
+            } else {
+                open
+            };
+            out.push((open..end, Target::of(dest)));
+        }
+        from = end;
+    }
+    // Web addresses on their own, and in `<...>`.
+    for scheme in ["https://", "http://"] {
+        let mut from = 0;
+        while let Some(at) = line[from..].find(scheme) {
+            let at = from + at;
+            let rest = &line[at..];
+            let len = rest
+                .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '`'))
+                .unwrap_or(rest.len());
+            // What a sentence puts after an address is not part of it.
+            let url = rest[..len]
+                .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '\'', '*', '_']);
+            if url.len() > scheme.len() && !taken(&out, at) {
+                out.push((at..at + url.len(), Target::Web(url.to_string())));
+            }
+            from = at + len.max(1);
+        }
+    }
+    out.sort_by_key(|(r, _)| r.start);
+    out
 }
 
 /// Every link reference definition in a note, `[1]: https://...`: its label
@@ -468,7 +575,14 @@ fn same_label(label: &str) -> String {
         .to_lowercase()
 }
 
-/// Render markdown to styled lines fitted to `width`.
+/// [`render_linked`], without the links: what the tests look at.
+#[cfg(test)]
+pub fn render(source: &str, width: usize, pal: &Palette, hl: &Highlighter) -> Vec<Line<'static>> {
+    render_with(source, width, pal, hl, &[], true).0
+}
+
+/// Render markdown to styled lines fitted to `width`, and say where each
+/// link was drawn.
 ///
 /// The enabled extensions are strikethrough, tables, task lists and footnotes:
 /// GitHub-flavored markdown minus the parts with no sensible terminal
@@ -476,11 +590,11 @@ fn same_label(label: &str) -> String {
 ///
 /// Trailing blank lines are trimmed so a note does not open with dead space at
 /// the bottom of the pane.
-pub fn render(source: &str, width: usize, pal: &Palette, hl: &Highlighter) -> Vec<Line<'static>> {
+pub fn render_linked(source: &str, width: usize, pal: &Palette, hl: &Highlighter) -> Rendered {
     render_with(source, width, pal, hl, &[], true)
 }
 
-/// [`render()`], with link labels defined somewhere else in the note, see
+/// [`render_linked`], with link labels defined somewhere else in the note, see
 /// [`render_block`].
 fn render_with(
     source: &str,
@@ -489,7 +603,7 @@ fn render_with(
     hl: &Highlighter,
     labels: &[(String, String)],
     top: bool,
-) -> Vec<Line<'static>> {
+) -> Rendered {
     let width = width.max(8);
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_STRIKETHROUGH);
@@ -523,12 +637,12 @@ fn render_with(
     for event in TextMergeStream::new(parser) {
         r.event(event);
     }
-    let mut out = r.finish();
+    let (mut out, spots) = r.finish();
     // Trim trailing blank lines so the pane does not open with dead space.
     while out.last().is_some_and(is_blank) {
         out.pop();
     }
-    out
+    (out, spots)
 }
 
 /// The YAML front matter at the top of a note, and the rest of it.
@@ -673,7 +787,7 @@ mod tests {
             [("1".to_string(), "https://example.com".to_string())]
         );
         let linked = |labels: &[(String, String)]| -> Vec<String> {
-            render_block(&note[..1], 40, &pal, &hl, labels, false)[0]
+            render_block(&note[..1], 40, &pal, &hl, labels, false).0[0]
                 .spans
                 .iter()
                 .filter(|s| s.style == pal.text.patch(pal.link))
@@ -690,7 +804,7 @@ mod tests {
         let hl = Highlighter::new();
         let note = lines_of("![d][d]\n\n[d]: <docs/d.png> \"title\"");
         let labels = link_labels(&note);
-        let out = render_block(&note[..1], 40, &pal, &hl, &labels, true);
+        let out = render_block(&note[..1], 40, &pal, &hl, &labels, true).0;
         let text: String = out[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("[image: docs/d.png]"), "{text}");
     }
@@ -709,12 +823,12 @@ mod tests {
         let note = lines_of("---\ntitle: x\n\n# a comment\ntags: [a]\n---\n\nBody");
         let got = blocks(&note);
         assert_eq!(got[0], Block { start: 0, end: 6 }, "{got:?}");
-        let top = render_block(&note[0..6], 40, &pal, &hl, &[], true);
+        let top = render_block(&note[0..6], 40, &pal, &hl, &[], true).0;
         assert_eq!(text(&top)[0], "---", "drawn as written: {:?}", text(&top));
         // Further down, the same three lines are a rule and a heading, the
         // way the whole note renders them.
         let mid = lines_of("---\nStatus: done\n---");
-        let alone = text(&render_block(&mid, 40, &pal, &hl, &[], false));
+        let alone = text(&render_block(&mid, 40, &pal, &hl, &[], false).0);
         let whole = text(&render("Intro\n\n---\nStatus: done\n---", 40, &pal, &hl));
         assert!(whole.ends_with(&alone), "{whole:?} vs {alone:?}");
     }
@@ -730,7 +844,7 @@ mod tests {
     fn a_blank_line_block_still_renders_as_a_row() {
         let pal = Palette::default();
         let hl = Highlighter::new();
-        let out = render_block(&[String::new()], 40, &pal, &hl, &[], false);
+        let out = render_block(&[String::new()], 40, &pal, &hl, &[], false).0;
         assert_eq!(out.len(), 1, "the gap between paragraphs is a row");
     }
 
@@ -749,8 +863,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let whole = render("# Title\n\n- a\n- b\n", 40, &pal, &hl);
-        let heading = render_block(&lines_of("# Title"), 40, &pal, &hl, &[], true);
-        let list = render_block(&lines_of("- a\n- b"), 40, &pal, &hl, &[], false);
+        let heading = render_block(&lines_of("# Title"), 40, &pal, &hl, &[], true).0;
+        let list = render_block(&lines_of("- a\n- b"), 40, &pal, &hl, &[], false).0;
         assert_eq!(
             text(&heading),
             text(&whole)[..2],
@@ -859,5 +973,164 @@ mod tests {
     fn wikilink_text_survives_rendering() {
         let out = plain("Go to [[design]] now.", 40);
         assert!(out.iter().any(|l| l.contains("[[design]]")));
+    }
+
+    /// What [`links_in`] found, as the text each covers and where it goes.
+    fn found(line: &str) -> Vec<(&str, Target)> {
+        links_in(line)
+            .into_iter()
+            .map(|(r, t)| (&line[r], t))
+            .collect()
+    }
+
+    #[test]
+    fn links_in_text_as_written_cover_the_whole_link() {
+        let line =
+            "see [the plan](docs/plan.md), [[design|the design]] and <https://example.com/a?b=1>.";
+        assert_eq!(
+            found(line),
+            [
+                (
+                    "[the plan](docs/plan.md)",
+                    Target::Path("docs/plan.md".into())
+                ),
+                ("[[design|the design]]", Target::Wiki("design".into())),
+                (
+                    "https://example.com/a?b=1",
+                    Target::Web("https://example.com/a?b=1".into())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_picture_and_an_address_with_a_scheme_are_links_too() {
+        assert_eq!(
+            found("![shot](img/a.png) and [mail](mailto:me@example.com)"),
+            [
+                ("![shot](img/a.png)", Target::Path("img/a.png".into())),
+                (
+                    "[mail](mailto:me@example.com)",
+                    Target::Web("mailto:me@example.com".into())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_address_in_a_link_is_not_found_twice() {
+        let line = "[site](https://example.com) then https://example.org/x.";
+        assert_eq!(
+            found(line),
+            [
+                (
+                    "[site](https://example.com)",
+                    Target::Web("https://example.com".into())
+                ),
+                (
+                    "https://example.org/x",
+                    Target::Web("https://example.org/x".into())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn brackets_that_are_not_a_link_are_not_one() {
+        assert!(found("an array[i] and a call f(x)").is_empty());
+        assert!(found("unclosed [text](nowhere").is_empty());
+        assert!(found("we discussed http and https").is_empty());
+    }
+
+    #[test]
+    fn a_windows_drive_is_a_path_and_a_scheme_is_a_web_address() {
+        assert_eq!(
+            Target::of("C:/notes/a.md"),
+            Target::Path("C:/notes/a.md".into())
+        );
+        assert_eq!(
+            Target::of("notes/a.md#top"),
+            Target::Path("notes/a.md#top".into())
+        );
+        assert_eq!(
+            Target::of("https://x.org"),
+            Target::Web("https://x.org".into())
+        );
+        assert_eq!(Target::of("ftp://x.org"), Target::Web("ftp://x.org".into()));
+    }
+
+    /// Where the renderer drew each link: the text under it on its line.
+    fn drawn(source: &str, width: usize) -> Vec<(usize, String, Target)> {
+        let pal = Palette::default();
+        let hl = Highlighter::new();
+        let (lines, spots) = render_linked(source, width, &pal, &hl);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        spots
+            .into_iter()
+            .map(|s| {
+                let under: String = text[s.line]
+                    .chars()
+                    .skip(s.cols.start as usize)
+                    .take((s.cols.end - s.cols.start) as usize)
+                    .collect();
+                (s.line, under, s.target)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_drawn_link_is_where_its_text_is() {
+        let spots = drawn("Read [the plan](plan.md) first.", 40);
+        assert_eq!(
+            spots,
+            [(0, "the plan".to_string(), Target::Path("plan.md".into()))]
+        );
+    }
+
+    #[test]
+    fn a_link_wrapped_onto_two_lines_is_clickable_on_both() {
+        let spots = drawn("Some words [a link with a long text](far.md) after.", 20);
+        assert!(spots.len() >= 2, "{spots:?}");
+        assert!(
+            spots
+                .iter()
+                .all(|(_, _, t)| *t == Target::Path("far.md".into()))
+        );
+        let lines: Vec<usize> = spots.iter().map(|(l, _, _)| *l).collect();
+        assert!(
+            lines.windows(2).all(|w| w[0] < w[1]),
+            "one spot per line: {lines:?}"
+        );
+        let words: String = spots
+            .iter()
+            .map(|(_, text, _)| text.trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(words, "a link with a long text");
+    }
+
+    #[test]
+    fn wikilinks_and_bare_addresses_are_drawn_as_links() {
+        let spots = drawn("Go to [[design]] or <https://example.com>.", 60);
+        let targets: Vec<&Target> = spots.iter().map(|(_, _, t)| t).collect();
+        assert_eq!(
+            targets,
+            [
+                &Target::Wiki("design".into()),
+                &Target::Web("https://example.com".into())
+            ]
+        );
+        assert!(spots[0].1.contains("design"), "{spots:?}");
+        assert!(spots[1].1.contains("example.com"), "{spots:?}");
+    }
+
+    #[test]
+    fn a_link_in_a_list_or_quote_is_found_past_the_bullet() {
+        let spots = drawn("- see [here](a.md)\n\n> and [there](b.md)", 40);
+        let under: Vec<&str> = spots.iter().map(|(_, t, _)| t.as_str()).collect();
+        assert_eq!(under, ["here", "there"], "{spots:?}");
     }
 }

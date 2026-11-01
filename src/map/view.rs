@@ -1,4 +1,4 @@
-//! The project map: what is on it, and what the keyboard does to it.
+//! The map: what is on it, and what the keyboard does to it.
 //!
 //! Every file in the project is a box with its name in it, and the connections
 //! between them are lines, the way anyone would draw this on paper. This half
@@ -19,7 +19,7 @@
 //! [`super::graph`] decides *what connects to what*; this module decides
 //! *what you can see and do*; [`super::layout`] decides *where it sits*. The
 //! `Graph` itself is never mutated after construction; filtering happens by
-//! asking [`ProjectMap::node_visible`] and [`ProjectMap::edge_visible`] at
+//! asking [`Map::node_visible`] and [`Map::edge_visible`] at
 //! draw time, so toggling an edge kind is instant and reversible.
 //!
 //! # Every frame is per file, never per file per edge
@@ -44,6 +44,7 @@ use std::path::{Path, PathBuf};
 use crate::config::keys::Action;
 use crate::map::graph::{self, Edge, EdgeKind, Graph, Node};
 use crate::map::layout::{self, Link};
+use crate::text::highlight::Highlighter;
 
 /// What a keypress asked the app to do. Named for the request rather than
 /// the key, since `keys::Action` is now what a key resolves to.
@@ -59,13 +60,13 @@ pub enum Intent {
     /// Open this file in the editor, closing the map.
     Open(PathBuf),
     /// Read the project again and draw a fresh map of it, kept as it was
-    /// being looked at (see [`ProjectMap::carry_over`]): what this is for is
+    /// being looked at (see [`Map::carry_over`]): what this is for is
     /// picking up files and links that changed on disk.
     Rebuild,
 }
 
 /// The link graph plus everything about how it is currently being looked at.
-pub struct ProjectMap {
+pub struct Map {
     /// Built once and never modified. All filtering is applied at read time.
     pub graph: Graph,
     /// The project folder the map is of. Nothing above it is ever walked, so
@@ -74,15 +75,15 @@ pub struct ProjectMap {
     /// Laid-out position of each node, parallel to `graph.nodes`.
     pub pos: Vec<(f64, f64)>,
     /// Index of the node under the cursor. May point at something currently
-    /// filtered out, which is why [`ProjectMap::selected_node`] checks
-    /// visibility and [`ProjectMap::ensure_selection`] repairs it.
+    /// filtered out, which is why [`Map::selected_node`] checks
+    /// visibility and [`Map::ensure_selection`] repairs it.
     pub selected: usize,
-    /// Which edge kinds to draw: wikilink, link, call. Indexed by
-    /// [`kind_index`], and bound to the `1`-`3` keys.
-    pub kinds: [bool; 3],
+    /// Which edge kinds to draw: wikilink, link, call, reference. Indexed by
+    /// [`kind_index`], and bound to the `1`-`4` keys.
+    pub kinds: [bool; 4],
     /// Substring matched against each node's relative path, case-insensitively.
     /// Empty means no filtering. Changed only through
-    /// [`ProjectMap::set_filter`], which keeps `shown` in step with it.
+    /// [`Map::set_filter`], which keeps `shown` in step with it.
     filter: String,
     /// Whether each node passes the filter, parallel to `graph.nodes`.
     shown: Vec<bool>,
@@ -104,13 +105,14 @@ pub struct ProjectMap {
     pub(super) folders: Vec<String>,
 }
 
-/// Position of an edge kind in [`ProjectMap::kinds`], and in the `1`-`3` key
+/// Position of an edge kind in [`Map::kinds`], and in the `1`-`4` key
 /// bindings. `pub` because `ui` needs it to draw the toggle row.
 pub fn kind_index(kind: EdgeKind) -> usize {
     match kind {
         EdgeKind::Wikilink => 0,
         EdgeKind::Link => 1,
         EdgeKind::Call => 2,
+        EdgeKind::Reference => 3,
     }
 }
 
@@ -145,7 +147,7 @@ fn short_names(nodes: &[Node]) -> Vec<String> {
         .collect()
 }
 
-impl ProjectMap {
+impl Map {
     /// Shorten every name to fit its box again, cut with `ellipsis`: the
     /// glyph set's, so a map drawn in ASCII has nothing else in it either.
     /// Labels are as long either way, so nothing has to be laid out again.
@@ -164,8 +166,8 @@ impl ProjectMap {
     ///
     /// Everything expensive happens here, synchronously; this is what
     /// opening the map costs.
-    pub fn build(root: &Path, opts: &graph::Options, ellipsis: &str) -> Self {
-        let graph = graph::build(root, opts);
+    pub fn build(root: &Path, opts: &graph::Options, ellipsis: &str, hl: &Highlighter) -> Self {
+        let graph = graph::build(root, opts, hl);
         let mut touching = vec![Vec::new(); graph.nodes.len()];
         for (n, e) in graph.edges.iter().enumerate() {
             touching[e.from].push(n);
@@ -179,7 +181,7 @@ impl ProjectMap {
             graph,
             root: root.to_path_buf(),
             selected: 0,
-            kinds: [true; 3],
+            kinds: [true; 4],
             filter: String::new(),
             touching,
             labels: Vec::new(),
@@ -205,7 +207,7 @@ impl ProjectMap {
     /// Only the bar's filter can hide one. A file that links to nothing is still
     /// part of the project; it is filed under its own heading rather than
     /// left out, because a map that quietly omits things is a map you cannot
-    /// trust to tell you what is there. See [`ProjectMap::connected`].
+    /// trust to tell you what is there. See [`Map::connected`].
     pub fn node_visible(&self, i: usize) -> bool {
         self.shown.get(i).copied().unwrap_or(false)
     }
@@ -230,7 +232,7 @@ impl ProjectMap {
     /// same file if it is still there. What `r` does after reading the
     /// project again, so a rebuilt map is the old one brought up to date
     /// rather than a fresh one.
-    pub fn carry_over(&mut self, old: &ProjectMap) {
+    pub fn carry_over(&mut self, old: &Map) {
         self.kinds = old.kinds;
         self.set_filter(&old.filter);
         if let Some(rel) = old.selected_node().map(|n| &n.rel)
@@ -454,6 +456,7 @@ impl ProjectMap {
             Action::MapWikilinks => self.toggle_kind(0),
             Action::MapLinks => self.toggle_kind(1),
             Action::MapCalls => self.toggle_kind(2),
+            Action::MapReferences => self.toggle_kind(3),
             Action::Refresh => return Intent::Rebuild,
             _ => {}
         }
@@ -477,7 +480,7 @@ impl ProjectMap {
     }
 
     /// Turn one kind of connection on or off. No file is hidden by it (see
-    /// [`ProjectMap::node_visible`]), so the cursor stays where it is.
+    /// [`Map::node_visible`]), so the cursor stays where it is.
     fn toggle_kind(&mut self, i: usize) {
         self.kinds[i] = !self.kinds[i];
         self.recount();

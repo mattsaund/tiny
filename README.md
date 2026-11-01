@@ -1,7 +1,7 @@
 # tiny
 
 Tiny is an IDE, text editor, personal knowledge management system, and file
-browser that lives in the terminal. Search, git, a project map, a terminal and
+browser that lives in the terminal. Search, git, a map, a terminal and
 plugins are built in. Plain files in plain folders; nothing proprietary.
 
 **Full installation size:**\
@@ -75,12 +75,13 @@ any two parts to resize them.
 
 `Ctrl+G`. `Enter` stages, `commit` commits, with the git you already have.
 
-## Project map
+## Map
 
-![the project map](docs/map.png)
+![the map](docs/map.png)
 
-`Ctrl+L`. Wikilinks, markdown links and calls between files: green reaches
-this file, red is what it reaches.
+`Ctrl+L`. How the files of a project link to each other, in any language:
+wikilinks, markdown links, calls, and paths one file names in another. Green
+reaches this file, red is what it reaches.
 
 ## Notes, pictures, PDFs
 
@@ -88,7 +89,8 @@ this file, red is what it reaches.
 
 Markdown renders as you read it; `Enter` edits. Headings at every level,
 tables, fenced code with syntax colors, quotes and task lists. Pictures, video,
-audio and PDFs open in your own viewer.
+audio and PDFs open in your own viewer. Click a link to follow it: web
+addresses open in your browser, links to files open in tiny.
 
 ## Keys
 
@@ -101,6 +103,7 @@ audio and PDFs open in your own viewer.
 | `Ctrl+S` | save (on a folder, all of it) |
 | `/`, `Ctrl+F` | search |
 | click, drag | place the cursor, select |
+| `Ctrl` and a click | follow a link |
 | `Shift` and a move, `Ctrl+A` | select, select all |
 | `Tab` | finish a word, or a command |
 | `Ctrl+C`, `Ctrl+X`, `Ctrl+V` | copy, cut, paste |

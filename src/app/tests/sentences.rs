@@ -107,6 +107,26 @@ fn goto_function_finds_the_definition() {
 }
 
 #[test]
+fn goto_function_finds_it_in_any_language() {
+    let (td, mut app) = project();
+    fs::write(
+        td.path().join("src/engine.go"),
+        "package engine\n\n// Start it.\nfunc Start() {\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        td.path().join("src/view.kt"),
+        "class View {\n    fun draw() {}\n}\n",
+    )
+    .unwrap();
+    command(&mut app, "reload");
+    command(&mut app, "goto function Start");
+    assert_eq!(at(&app), ("engine.go".into(), 4));
+    command(&mut app, "goto function draw");
+    assert_eq!(at(&app), ("view.kt".into(), 2));
+}
+
+#[test]
 fn goto_word_looks_through_the_project_and_again_goes_on_to_the_next() {
     let (_td, mut app) = project();
     command(&mut app, "goto word widget");

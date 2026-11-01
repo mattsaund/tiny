@@ -1,4 +1,4 @@
-//! The project map.
+//! The map.
 //!
 //! What ends up on it, what the filters take off it, where the cursor starts,
 //! and what the detail strip says. The geometry of the lines between the boxes
@@ -51,7 +51,7 @@ fn the_map_draws_every_file_in_a_box() {
     let (_td, mut app) = linked_fixture();
     open_map(&mut app);
     let out = screen(&mut app, 100, 34).join("\n");
-    assert!(out.contains("PROJECT MAP"), "{out}");
+    assert!(out.contains("MAP"), "{out}");
     // Names sit inside boxes, so the borders are right beside them.
     assert!(
         out.contains("│design.md│"),
@@ -116,7 +116,7 @@ fn the_map_draws_the_cursors_connections_and_nobody_elses() {
     // Walk to the lonely file. It is under its own heading at the end.
     for _ in 0..12 {
         app.on_key(k(KeyCode::Tab));
-        let map = app.project_map.as_ref().expect("the map is open");
+        let map = app.map.as_ref().expect("the map is open");
         if map
             .selected_node()
             .is_some_and(|n| n.rel.ends_with("lonely.md"))
@@ -124,7 +124,7 @@ fn the_map_draws_the_cursors_connections_and_nobody_elses() {
             break;
         }
     }
-    let map = app.project_map.as_ref().expect("the map is open");
+    let map = app.map.as_ref().expect("the map is open");
     assert!(
         map.selected_node()
             .is_some_and(|n| n.rel.ends_with("lonely.md")),
@@ -186,7 +186,7 @@ fn drawn_in(app: &mut App, color: Color) -> String {
 
 /// Put the map's cursor on a named file without walking there.
 fn cursor_on(app: &mut App, name: &str) {
-    let map = app.project_map.as_mut().expect("the map is open");
+    let map = app.map.as_mut().expect("the map is open");
     map.selected = map
         .graph
         .nodes
@@ -313,7 +313,7 @@ fn typing_in_the_bar_narrows_the_map_as_it_goes() {
     app.on_key(ch('/'));
     type_str(&mut app, "src");
 
-    let view = app.project_map.as_ref().unwrap();
+    let view = app.map.as_ref().unwrap();
     assert_eq!(view.filter(), "src");
     let shown: Vec<&str> = view
         .visible_indices()
@@ -337,7 +337,7 @@ fn enter_keeps_the_filter_and_escape_takes_it_off() {
 
     assert!(matches!(app.mode, Mode::Normal), "the bar is put away");
     assert_eq!(
-        app.project_map.as_ref().unwrap().filter(),
+        app.map.as_ref().unwrap().filter(),
         "src",
         "the filter stays"
     );
@@ -347,7 +347,7 @@ fn enter_keeps_the_filter_and_escape_takes_it_off() {
     type_str(&mut app, "notes");
     app.on_key(k(KeyCode::Esc));
     assert!(
-        app.project_map.as_ref().unwrap().filter().is_empty(),
+        app.map.as_ref().unwrap().filter().is_empty(),
         "escape clears it"
     );
 }
@@ -363,7 +363,7 @@ fn a_command_still_runs_from_over_the_map() {
     app.on_key(k(KeyCode::Enter));
 
     assert!(
-        app.project_map.as_ref().unwrap().filter().is_empty(),
+        app.map.as_ref().unwrap().filter().is_empty(),
         "a command never filtered anything"
     );
     assert!(joined(&mut app).contains("fromthemap.md") || app.window == Window::Main);
@@ -448,12 +448,12 @@ fn r_reads_the_project_again_and_keeps_how_it_was_being_looked_at() {
     app.on_key(ch('/'));
     type_str(&mut app, "notes");
     app.on_key(k(KeyCode::Enter));
-    let before = app.project_map.as_ref().unwrap();
+    let before = app.map.as_ref().unwrap();
     let (kinds, filter) = (before.kinds, before.filter().to_string());
     let on = before.selected_node().map(|n| n.rel.clone());
 
     app.on_key(ch('r'));
-    let after = app.project_map.as_ref().unwrap();
+    let after = app.map.as_ref().unwrap();
     assert_eq!(after.kinds, kinds, "the kinds switched off stay off");
     assert_eq!(after.filter(), filter, "the filter stays");
     assert_eq!(
@@ -472,7 +472,7 @@ fn files_that_share_a_name_are_told_apart_in_the_detail_strip() {
     }
     command(&mut app, "reload");
     open_map(&mut app);
-    let view = app.project_map.as_ref().unwrap();
+    let view = app.map.as_ref().unwrap();
     let names: Vec<&str> = (0..view.graph.nodes.len())
         .filter(|i| view.graph.nodes[*i].name == "mod.md")
         .map(|i| view.short_name(i))

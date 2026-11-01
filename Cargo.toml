@@ -1,6 +1,6 @@
 [package]
 name = "tiny"
-version = "0.6.3"
+version = "0.6.4"
 edition = "2024"
 # Let-chains, which this uses throughout, landed in 1.88.
 rust-version = "1.88"
@@ -74,8 +74,8 @@ panic = "abort"
 # Optimized for size rather than speed: code nobody waits on. Reading the
 # config, running a plugin's Lua, starting the shell in the terminal pane and
 # describing an error each run when asked, not while anything is drawn. The
-# grammars behind the project map are not here: the map is built while you
-# wait, and at this setting it took 40% longer. Together, 0.16 MB.
+# grammars behind the map are not here: the map is built while you wait, and
+# at this setting it took 40% longer. Together, 0.16 MB.
 [profile.release.package.toml]
 opt-level = "s"
 [profile.release.package.toml_parser]

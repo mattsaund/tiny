@@ -125,6 +125,7 @@ mod bar;
 mod clip;
 mod command;
 mod fileops;
+mod follow;
 mod input;
 mod macros;
 mod mode;
@@ -147,7 +148,7 @@ pub use self::bar::completion_for;
 pub use self::mode::{
     BUTTONS, Bar, ConfirmKind, Focus, KEYBIND_BUTTONS, Keybinds, Mode, Settings, Window,
 };
-pub use self::mouse::{Divider, GitHit, Moves, PaneHit, TextHits};
+pub use self::mouse::{Divider, GitHit, LinkHit, Moves, PaneHit, TextHits, link_area};
 pub use self::preview::{Preview, TextKind};
 pub use self::source::{BUTTONS as GIT_BUTTONS, GitFocus, GitPane, Row as GitRow};
 pub use self::split::{MIN_PANE_HEIGHT, MIN_PANE_WIDTH, Split};
@@ -166,7 +167,7 @@ use crate::files::project;
 use crate::files::size::Size;
 use crate::files::tree::{Row, Tree};
 use crate::map::graph;
-use crate::map::view::ProjectMap;
+use crate::map::view::Map;
 use crate::text::editor::Editor;
 use crate::text::highlight::{Highlighter, Resume};
 use crate::text::search::{self};
@@ -245,9 +246,9 @@ pub struct App {
     pub window: Window,
     /// Everything the source-control window draws, see [`source`].
     pub git: GitPane,
-    /// The project map, built when [`Window::Map`] is switched to and kept
+    /// The map, built when [`Window::Map`] is switched to and kept
     /// until the next time it is.
-    pub project_map: Option<ProjectMap>,
+    pub map: Option<Map>,
     /// What `Ctrl+C` picked up, waiting for a `Ctrl+V`. A path, not a copy of
     /// the bytes: the file is read at paste time, so editing it in between
     /// pastes what is there now rather than a stale snapshot.
@@ -310,7 +311,7 @@ pub struct App {
     /// typed in rather than the whole note again. Written by `ui` while
     /// drawing, like the highlighting; emptied when a setting changes how
     /// anything is drawn.
-    pub block_rows: std::cell::RefCell<HashMap<u64, Vec<ratatui::text::Line<'static>>>>,
+    pub block_rows: std::cell::RefCell<HashMap<u64, crate::text::markdown::Rendered>>,
     /// Which pane had the keyboard when the tree was folded away, so unfolding
     /// puts it back and the key is a true toggle.
     focus_before_hide: Focus,
@@ -358,6 +359,8 @@ pub struct App {
     pub last_map_boxes: Vec<(ratatui::layout::Rect, usize)>,
     /// The lines where parts of the last frame met, which a drag moves.
     pub last_dividers: Vec<Divider>,
+    /// The links the last frame drew, which a click follows.
+    pub last_links: Vec<LinkHit>,
     /// A drag going on in a file, and the last press, for double clicks.
     drag: Option<mouse::Drag>,
     press: Option<mouse::Press>,
@@ -436,7 +439,7 @@ impl App {
             input_waiting: || false,
             window: Window::Main,
             git: GitPane::default(),
-            project_map: None,
+            map: None,
             clipboard: None,
             text_clipboard: crate::clipboard::Clipboard::new(false),
             recording: None,
@@ -480,6 +483,7 @@ impl App {
             last_results: None,
             last_map_boxes: Vec::new(),
             last_dividers: Vec::new(),
+            last_links: Vec::new(),
             drag: None,
             press: None,
             resizing: None,
@@ -645,13 +649,18 @@ impl App {
     fn open_map(&mut self) {
         let root = self.root().to_path_buf();
         let options = self.graph_options();
-        let view = ProjectMap::build(&root, &options, self.palette.glyphs.ellipsis);
+        let view = Map::build(
+            &root,
+            &options,
+            self.palette.glyphs.ellipsis,
+            &self.highlighter,
+        );
         self.status = if view.graph.nodes.is_empty() {
             "nothing on the map yet".into()
         } else {
-            format!("project map: {}", view.summary())
+            format!("map: {}", view.summary())
         };
-        self.project_map = Some(view);
+        self.map = Some(view);
     }
 
     /// Move the cursor to a path and start editing it. Used when leaving the

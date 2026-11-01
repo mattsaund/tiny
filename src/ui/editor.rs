@@ -33,7 +33,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::parts::{FORMAT_LIMIT, digits, mark_query};
 
-use crate::app::{App, TextHits, TextKind};
+use crate::app::{App, LinkHit, TextHits, TextKind, link_area};
 use crate::config::Palette;
 use crate::text::editor::Editor;
 use crate::text::markdown;
@@ -177,7 +177,43 @@ pub(super) fn draw_editor(
 
     let mut lines: Vec<Line> = Vec::with_capacity(height);
     let mut cursor_row = None;
+    let mut links: Vec<LinkHit> = Vec::new();
+    let text_x = inner.x + gutter as u16;
     for (i, row) in rows.iter().skip(top).take(height).enumerate() {
+        // Where its links are, for a click to follow: in a formatted row as
+        // the renderer drew them, in a raw one wherever the text has one.
+        let y = inner.y + i as u16;
+        let mut link = |cols: std::ops::Range<u16>, target: &markdown::Target, raw: bool| {
+            if let Some(area) = link_area(text_x, y, cols, text_w as u16) {
+                links.push(LinkHit {
+                    area,
+                    target: target.clone(),
+                    from: path.to_path_buf(),
+                    raw,
+                });
+            }
+        };
+        match row {
+            Row::Raw(n) => {
+                let text = ed.lines().get(*n).map_or("", String::as_str);
+                for (bytes, target) in markdown::links_in(text) {
+                    // Held at the most a column can be: on a line longer
+                    // than that, wrapping round would put a link on screen
+                    // where there is none.
+                    let col = |b: usize| {
+                        let chars = text[..b].chars().count();
+                        let at = tabs::column(text, chars, tab_width).saturating_sub(scroll_x);
+                        at.min(u16::MAX as usize) as u16
+                    };
+                    link(col(bytes.start)..col(bytes.end), &target, true);
+                }
+            }
+            Row::Made { links: made, .. } => {
+                for (cols, target) in made {
+                    link(cols.clone(), target, false);
+                }
+            }
+        }
         let mut spans: Vec<Span> = Vec::new();
         if gutter > 0 {
             // A formatted block wears its first source line and nothing else:
@@ -218,6 +254,7 @@ pub(super) fn draw_editor(
         lines.push(Line::from(spans));
     }
     f.render_widget(Paragraph::new(lines).style(pal.text), inner);
+    app.last_links.extend(links);
     let hits = TextHits {
         area: Rect {
             x: inner.x + gutter as u16,
@@ -277,6 +314,8 @@ enum Row {
         end: usize,
         nth: usize,
         content: Line<'static>,
+        /// The links drawn on it: the columns each covers, and where it goes.
+        links: Vec<(std::ops::Range<u16>, markdown::Target)>,
     },
 }
 
@@ -365,15 +404,22 @@ fn live_rows(
         if b.start >= scroll_y && top.is_none() {
             // Part way down this block, if that is where the pane began.
             let down = if b.start == scroll_y { scroll_rows } else { 0 };
-            top = Some(rows.len() + down.min(made.len().saturating_sub(1)));
+            top = Some(rows.len() + down.min(made.0.len().saturating_sub(1)));
         }
+        let (made, spots) = made;
         for (i, content) in made.into_iter().enumerate() {
+            let links = spots
+                .iter()
+                .filter(|s| s.line == i)
+                .map(|s| (s.cols.clone(), s.target.clone()))
+                .collect();
             rows.push(Row::Made {
                 line: (i == 0).then_some(b.start),
                 block: b.start,
                 end: b.end,
                 nth: i,
                 content,
+                links,
             });
         }
     }
@@ -504,7 +550,7 @@ fn block_rows(
     width: usize,
     labels: &[(String, String)],
     top: bool,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<markdown::Spot>) {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     lines.hash(&mut h);

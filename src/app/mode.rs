@@ -36,7 +36,7 @@ pub enum Window {
     Main,
     /// Git, and what has changed.
     Source,
-    /// The project map.
+    /// The map.
     Map,
 }
 

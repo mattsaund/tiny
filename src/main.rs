@@ -108,7 +108,7 @@ page, no dotfiles, no per-project settings.
 KEYS:
     ?                   every key and command, from inside the app
     /                   the bar: searches, or `*` first for a command
-    Ctrl+G  Ctrl+L      source control, the project map
+    Ctrl+G  Ctrl+L      source control, the map
     Ctrl+W  Ctrl+O      the next pane, the terminal
 
 `man tiny` has every key.

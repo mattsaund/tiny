@@ -26,8 +26,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-use super::scan_wikilinks;
-use super::wrap::{clip, spans_width, wrap};
+use super::wrap::{clip, spans_width, wrap_linked};
+use super::{Spot, Target, scan_wikilinks};
 use crate::config::Palette;
 use crate::text::highlight::Highlighter;
 use crate::text::tabs;
@@ -92,6 +92,13 @@ pub(super) struct Renderer<'a> {
     /// quote's first line or after its last it does not, and at the very end
     /// it is never drawn at all.
     blank_due: Option<usize>,
+    /// Where each link goes, in the order they came, and the one open now.
+    links: Vec<Target>,
+    link: Option<usize>,
+    /// Which link each span in `spans` is part of, if any, one for each.
+    ids: Vec<Option<usize>>,
+    /// Where the links drawn so far landed, a link at a time.
+    pub(super) spots: Vec<Spot>,
 }
 
 /// How a heading of each level is drawn.
@@ -137,16 +144,26 @@ impl<'a> Renderer<'a> {
             table: None,
             in_html: false,
             blank_due: None,
+            links: Vec::new(),
+            link: None,
+            ids: Vec::new(),
+            spots: Vec::new(),
         }
+    }
+
+    /// Add to the inline run, as part of the link open now, if there is one.
+    fn push(&mut self, span: Span<'static>) {
+        self.spans.push(span);
+        self.ids.push(self.link);
     }
 
     /// Everything rendered so far, with the last inline run flushed out.
     ///
     /// Takes `self` because there is nothing sensible to do with a renderer
     /// afterwards: the buffers it was accumulating into are now the answer.
-    pub(super) fn finish(mut self) -> Vec<Line<'static>> {
+    pub(super) fn finish(mut self) -> super::Rendered {
         self.flush();
-        self.out
+        (self.out, self.spots)
     }
 
     /// YAML front matter, drawn as it was written and dim: it is the note's
@@ -273,10 +290,19 @@ impl Renderer<'_> {
             return;
         }
         let spans = std::mem::take(&mut self.spans);
+        let ids = std::mem::take(&mut self.ids);
         let first = self.prefix(true);
         let cont = self.prefix(false);
-        for line in wrap(&spans, self.width, first, cont) {
+        for (line, spots) in wrap_linked(&spans, &ids, self.width, first, cont) {
             self.push_line(line);
+            let at = self.out.len() - 1;
+            for (from, to, link) in spots {
+                self.spots.push(Spot {
+                    line: at,
+                    cols: from..to,
+                    target: self.links[link].clone(),
+                });
+            }
         }
     }
 
@@ -315,9 +341,9 @@ impl Renderer<'_> {
                 } else {
                     format!("`{t}`")
                 };
-                self.spans.push(Span::styled(shown, style));
+                self.push(Span::styled(shown, style));
             }
-            Event::SoftBreak => self.spans.push(Span::styled(" ".to_string(), self.style())),
+            Event::SoftBreak => self.push(Span::styled(" ".to_string(), self.style())),
             // The line ends here; the rest of the paragraph goes on under it,
             // lined up with the text it continues.
             Event::HardBreak => self.flush(),
@@ -336,11 +362,11 @@ impl Renderer<'_> {
             Event::TaskListMarker(done) => {
                 let glyph = if done { "[x] " } else { "[ ] " };
                 let style = if done { self.pal.dim } else { self.pal.text };
-                self.spans.push(Span::styled(glyph.to_string(), style));
+                self.push(Span::styled(glyph.to_string(), style));
             }
             Event::FootnoteReference(name) => {
                 let style = self.style().patch(self.pal.link);
-                self.spans.push(Span::styled(format!("[^{name}]"), style));
+                self.push(Span::styled(format!("[^{name}]"), style));
             }
             // Raw HTML is shown as written rather than silently dropped. A
             // block of it keeps its own lines, so a `<!-- toc -->` does not
@@ -356,8 +382,7 @@ impl Renderer<'_> {
             }
             Event::Html(t) | Event::InlineHtml(t) => {
                 let style = self.pal.dim;
-                self.spans
-                    .push(Span::styled(t.trim_end().to_string(), style));
+                self.push(Span::styled(t.trim_end().to_string(), style));
             }
             _ => {}
         }
@@ -371,11 +396,15 @@ impl Renderer<'_> {
         for (s, e, target) in scan_wikilinks(text) {
             let slice = &text[s..e];
             match target {
-                Some(_) => {
+                Some(target) => {
                     let style = base.patch(self.pal.link);
-                    self.spans.push(Span::styled(slice.to_string(), style));
+                    // A wikilink is its own link, inside another or not.
+                    let open = self.link.replace(self.links.len());
+                    self.links.push(Target::Wiki(target.to_string()));
+                    self.push(Span::styled(slice.to_string(), style));
+                    self.link = open;
                 }
-                None => self.spans.push(Span::styled(slice.to_string(), base)),
+                None => self.push(Span::styled(slice.to_string(), base)),
             }
         }
     }
@@ -458,15 +487,16 @@ impl Renderer<'_> {
             Tag::Emphasis => self.push_style(|s| s.add_modifier(Modifier::ITALIC)),
             Tag::Strong => self.push_style(|s| s.add_modifier(Modifier::BOLD)),
             Tag::Strikethrough => self.push_style(|s| s.add_modifier(Modifier::CROSSED_OUT)),
-            Tag::Link { .. } => {
+            Tag::Link { dest_url, .. } => {
+                self.link = Some(self.links.len());
+                self.links.push(Target::of(&dest_url));
                 let link = self.pal.link;
                 self.push_style(move |s| s.patch(link));
             }
             Tag::Image { dest_url, .. } => {
                 // Terminals cannot show it inline; name it so the note still reads.
                 let style = self.pal.dim;
-                self.spans
-                    .push(Span::styled(format!("[image: {dest_url}] "), style));
+                self.push(Span::styled(format!("[image: {dest_url}] "), style));
             }
             Tag::Table(align) => {
                 self.flush();
@@ -568,10 +598,15 @@ impl Renderer<'_> {
                 self.close();
                 self.blank();
             }
-            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+            TagEnd::Link => {
+                self.link = None;
                 self.pop_style()
             }
+            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => self.pop_style(),
             TagEnd::TableCell => {
+                // A link in a table goes where the table is drawn rather
+                // than where its cells are, so it is not one to click.
+                self.ids.clear();
                 let cell = std::mem::take(&mut self.spans);
                 if let Some(t) = &mut self.table
                     && let Some(row) = t.rows.last_mut()

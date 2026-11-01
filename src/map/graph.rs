@@ -1,19 +1,22 @@
 //! The link graph: what in this project points at what.
 //!
-//! Two kinds of connection, built the same way and drawn together:
+//! Three kinds of connection, built the same way and drawn together:
 //!
 //!   - **Notes.** `[[wikilinks]]` and relative markdown links, resolved
 //!     against the files in the project.
 //!   - **Code.** Calls, matched by name: if one file calls `load_config` and
-//!     another defines it, that is an edge. Definitions and references come
-//!     from tree-sitter's tags queries, so this works the same way for every
-//!     language that ships one.
+//!     another defines it, that is an edge. Definitions and calls come from
+//!     tree-sitter for Python, Rust and JavaScript, and for every other
+//!     language from the grammar it is colored with, see `scan`.
+//!   - **References.** A file naming another by its path, in any language:
+//!     `#include "x.h"`, `import './x'`, `src="app.js"`.
 //!
-//! Both are connections you can point at in the text. An `import` on its own
-//! is not: it says a file is *available*, not that anything in it is used, and
-//! wiring every module to every module it merely mentions is what turned this
-//! picture into a hairball. Import a module and call nothing from it and the
-//! map stays quiet.
+//! Each is a connection you can point at in the text. An `import` of a module
+//! by name is not: it says a file is *available*, not that anything in it is
+//! used, and wiring every module to every module it merely mentions is what
+//! turned this picture into a hairball. Import a module and call nothing from
+//! it and the map stays quiet. One imported by its path names the file, and
+//! is a reference.
 //!
 //! Call matching is a heuristic and behaves like one. A name defined in many
 //! files is ambiguous (`new`, `main`, `get`) so past `max_ambiguity`
@@ -25,7 +28,8 @@
 //! [`build`] is one pass over the project, then one pass over what it found:
 //!
 //! 1. **Walk.** `search::walk` lists the files: the same traversal search
-//!    uses, so the two always agree on what the project contains.
+//!    uses, leaving out besides what git ignores, see `git::ignored`. A build
+//!    folder, or a library downloaded into one, is not the project.
 //! 2. **Collect.** Each file becomes a [`Node`] plus a private `Facts` record:
 //!    what it defines, what it calls, and what it links to. Notes are
 //!    scanned for links; source is parsed for symbols. Files are independent
@@ -62,13 +66,15 @@
 //!
 //! # Adding a language
 //!
-//! Three steps: add the `tree-sitter-*` crate, add a `LazyLock<Option<...>>`
-//! beside `scan::PYTHON`, and add a `scan::Lang` variant with its extensions in
-//! `scan::lang_of` and a `scan::tags_for` arm. Nothing on screen lists the
-//! languages, so there is no fourth place to remember.
+//! Nothing to do: a language with a grammar for its colors is read with it.
+//! tree-sitter, which is quicker and exact about calls, is worth adding for a
+//! language people use a lot, at the cost of its grammar's size in the
+//! binary: add the `tree-sitter-*` crate, a `LazyLock<Option<...>>` beside
+//! `scan::PYTHON`, a `scan::Lang` variant with its extensions in
+//! `scan::lang_of`, and a `scan::tags_for` arm.
 //!
-//! A language with no tags query still appears in the graph as a node; it
-//! just has no call edges. That is what `scan::is_sourcelike` is for.
+//! A language with no grammar at all still appears in the graph as a node;
+//! it just has no call edges. That is what `scan::is_sourcelike` is for.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -77,6 +83,7 @@ use super::scan::{Facts, Index, facts_of, node_kind, resolve_link};
 use tree_sitter_tags::TagsContext;
 
 use crate::parallel::par_map;
+use crate::text::highlight::Highlighter;
 use crate::text::search;
 
 /// What a file is, which decides how it is scanned and how it is labeled.
@@ -101,6 +108,8 @@ pub enum EdgeKind {
     Link,
     /// One source file calling a function another defines.
     Call,
+    /// A file naming another by its path: `#include "x.h"`, `src="app.js"`.
+    Reference,
 }
 
 /// One file in the graph. Nodes are identified by their index into
@@ -133,7 +142,7 @@ pub struct Edge {
     pub count: usize,
 }
 
-/// The finished graph. Immutable once built: `ProjectMap` filters what is
+/// The finished graph. Immutable once built: `Map` filters what is
 /// drawn without ever changing this.
 #[derive(Debug, Clone)]
 pub struct Graph {
@@ -212,13 +221,16 @@ impl Default for Options {
 /// repeats merge into a count rather than stacking up as duplicate lines,
 /// and so the output order is deterministic, which keeps the layout stable
 /// between runs however the work was shared out.
-pub fn build(root: &Path, opts: &Options) -> Graph {
+pub fn build(root: &Path, opts: &Options, hl: &Highlighter) -> Graph {
     let walk_opts = search::Opts {
         max_results: usize::MAX,
         ignore: opts.ignore.clone(),
         show_hidden: opts.show_hidden,
     };
-    let walked = search::walk_up_to(root, &walk_opts, MAX_FILES);
+    // What git ignores is not the project: a build folder, or a library
+    // downloaded into one, is its own code to read and somebody else's.
+    let skip = crate::git::ignored(root);
+    let walked = search::walk_up_to(root, &walk_opts, MAX_FILES, &skip);
     let files = walked.files;
     let rels: Vec<String> = files
         .iter()
@@ -232,10 +244,10 @@ pub fn build(root: &Path, opts: &Options) -> Graph {
 
     let kinds: Vec<NodeKind> = files
         .iter()
-        .map(|path| node_kind(path, &opts.prose_extensions))
+        .map(|path| node_kind(path, &opts.prose_extensions, hl))
         .collect();
     let mut facts: Vec<Facts> = par_map(&files, TagsContext::new, |ctx, i, path| {
-        facts_of(ctx, path, &rels[i], kinds[i])
+        facts_of(ctx, hl, path, &rels[i], kinds[i])
     });
     forget_test_modules(&rels, &mut facts);
 
@@ -397,7 +409,11 @@ mod tests {
     }
 
     fn graph(td: &tempfile::TempDir) -> Graph {
-        build(td.path(), &Options::default())
+        build(
+            td.path(),
+            &Options::default(),
+            crate::map::testing::highlighter(),
+        )
     }
 
     /// Edges as `("from", "to", kind, "label")`, for readable assertions.
@@ -857,7 +873,11 @@ mod tests {
         let root = td.path().join("tests").join("app");
         write(&root, "lib.py", "def compute():\n    return 1\n");
         write(&root, "main.py", "compute()\n");
-        let g = build(&root, &Options::default());
+        let g = build(
+            &root,
+            &Options::default(),
+            crate::map::testing::highlighter(),
+        );
         assert!(
             has(&g, "main.py", "lib.py", EdgeKind::Call),
             "{:?}",
@@ -1027,6 +1047,200 @@ mod tests {
             1,
             "{:?}",
             g.nodes.iter().map(|n| &n.rel).collect::<Vec<_>>()
+        );
+    }
+
+    // ---- every other language, read with its grammar -------------------
+
+    #[test]
+    fn a_call_is_an_edge_in_every_language_with_a_grammar() {
+        // A file that defines `compute` and one that calls it, each written
+        // the way its language writes them.
+        let pairs: &[(&str, &str, &str, &str)] = &[
+            (
+                "lib.c",
+                "int compute(int x) {\n    return x;\n}\n",
+                "main.c",
+                "int main(void) {\n    return compute(2);\n}\n",
+            ),
+            (
+                "lib.go",
+                "package lib\n\nfunc compute() int {\n\treturn 1\n}\n",
+                "main.go",
+                "package main\n\nfunc main() {\n\t_ = lib.compute()\n}\n",
+            ),
+            (
+                "Lib.java",
+                "public class Lib {\n    public int compute() { return 1; }\n}\n",
+                "App.java",
+                "public class App {\n    void run(Lib l) {\n        l.compute();\n    }\n}\n",
+            ),
+            (
+                "lib.rb",
+                "def compute\n  1\nend\n",
+                "main.rb",
+                "puts compute()\n",
+            ),
+            (
+                "lib.lua",
+                "function compute()\n  return 1\nend\n",
+                "main.lua",
+                "print(compute())\n",
+            ),
+            (
+                "lib.sh",
+                "compute() {\n  echo 1\n}\n",
+                "main.sh",
+                "compute\n",
+            ),
+            (
+                "lib.ts",
+                "export function compute(x: number): number {\n  return x;\n}\n",
+                "main.ts",
+                "const y: number = compute(2);\n",
+            ),
+            (
+                "lib.php",
+                "<?php\nfunction compute($x) {\n    return $x;\n}\n",
+                "main.php",
+                "<?php\necho compute(2);\n",
+            ),
+            (
+                "Lib.kt",
+                "fun compute(): Int {\n    return 1\n}\n",
+                "App.kt",
+                "fun main() {\n    println(compute())\n}\n",
+            ),
+            (
+                "Lib.swift",
+                "func compute() -> Int {\n    return 1\n}\n",
+                "App.swift",
+                "let x = compute()\n",
+            ),
+        ];
+        for (lib, lib_text, caller, caller_text) in pairs {
+            let td = tempfile::tempdir().unwrap();
+            write(td.path(), lib, lib_text);
+            write(td.path(), caller, caller_text);
+            let g = graph(&td);
+            assert!(
+                has(&g, caller, lib, EdgeKind::Call),
+                "{caller}: {:?}",
+                edges(&g)
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_naming_another_by_its_path_is_a_reference() {
+        let td = tempfile::tempdir().unwrap();
+        write(
+            td.path(),
+            "index.html",
+            "<link href=\"css/site.css\" rel=\"stylesheet\">\n<script src=\"/js/app.js\"></script>\n",
+        );
+        write(td.path(), "css/site.css", "@import \"base.css\";\n");
+        write(td.path(), "css/base.css", "p {}\n");
+        write(td.path(), "js/app.js", "import { tick } from './clock';\n");
+        write(td.path(), "js/clock.ts", "export const tick = 1;\n");
+        write(td.path(), "src/lib.h", "int f(void);\n");
+        write(
+            td.path(),
+            "src/lib.c",
+            "#include \"lib.h\"\n#include <stdio.h>\n",
+        );
+        write(td.path(), "run.sh", "source ./env.sh\n. env.sh\n");
+        write(td.path(), "env.sh", "X=1\n");
+        write(
+            td.path(),
+            "src/main.rs",
+            "const MAN: &str = include_str!(\"../docs/tiny.1\");\n",
+        );
+        write(td.path(), "docs/tiny.1", ".TH TINY 1\n");
+        let g = graph(&td);
+        for (from, to) in [
+            ("index.html", "css/site.css"),
+            ("index.html", "js/app.js"),
+            ("css/site.css", "css/base.css"),
+            ("js/app.js", "js/clock.ts"),
+            ("src/lib.c", "src/lib.h"),
+            ("run.sh", "env.sh"),
+            ("src/main.rs", "docs/tiny.1"),
+        ] {
+            assert!(
+                has(&g, from, to, EdgeKind::Reference),
+                "{from} to {to}: {:?}",
+                edges(&g)
+            );
+        }
+    }
+
+    #[test]
+    fn a_quoted_word_that_names_no_file_here_is_nothing() {
+        let td = tempfile::tempdir().unwrap();
+        write(
+            td.path(),
+            "app.js",
+            "fetch('https://example.com/data.json');\nconst s = \"not.a/file\";\nimport x from 'react';\nconst g = '../outside.js';\n",
+        );
+        write(td.path(), "data.json", "{}\n");
+        let g = graph(&td);
+        assert!(
+            !g.edges.iter().any(|e| e.kind == EdgeKind::Reference),
+            "{:?}",
+            edges(&g)
+        );
+    }
+
+    #[test]
+    fn what_git_ignores_is_not_on_the_map() {
+        let td = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("git")
+            .current_dir(td.path())
+            .args(["init", "--quiet"])
+            .output()
+            .expect("git is installed");
+        assert!(out.status.success());
+        write(td.path(), ".gitignore", "build/\n*.log\n");
+        write(td.path(), "src/main.c", "int main(void) { return 0; }\n");
+        write(td.path(), "build/gen.c", "int gen(void) { return 1; }\n");
+        write(td.path(), "run.log", "noise\n");
+        let g = graph(&td);
+        let rels: Vec<&str> = g.nodes.iter().map(|n| n.rel.as_str()).collect();
+        assert!(rels.contains(&"src/main.c"), "{rels:?}");
+        assert!(
+            !rels
+                .iter()
+                .any(|r| r.starts_with("build/") || r.ends_with(".log")),
+            "{rels:?}"
+        );
+    }
+
+    #[test]
+    fn a_file_changed_since_it_was_last_read_is_read_again() {
+        let td = tempfile::tempdir().unwrap();
+        write(
+            td.path(),
+            "lib.go",
+            "package lib\n\nfunc compute() int { return 1 }\n",
+        );
+        write(td.path(), "main.go", "package main\n\nfunc main() {}\n");
+        assert!(!has(&graph(&td), "main.go", "lib.go", EdgeKind::Call));
+        // Longer, so its size says it changed whatever the clock can tell.
+        write(
+            td.path(),
+            "main.go",
+            "package main\n\nfunc main() {\n\t_ = compute()\n}\n",
+        );
+        let g = graph(&td);
+        assert!(
+            has(&g, "main.go", "lib.go", EdgeKind::Call),
+            "{:?}",
+            edges(&g)
+        );
+        assert!(
+            has(&graph(&td), "main.go", "lib.go", EdgeKind::Call),
+            "and remembered as it is now"
         );
     }
 

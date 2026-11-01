@@ -308,7 +308,7 @@ fn a_click_on_the_map_picks_a_box_and_a_second_opens_it() {
     let (_td, mut app) = fixture();
     app.on_key(ctrl('l'));
     screen(&mut app, 120, 40);
-    let selected = app.project_map.as_ref().unwrap().selected;
+    let selected = app.map.as_ref().unwrap().selected;
     let &(area, node) = app
         .last_map_boxes
         .iter()
@@ -316,7 +316,7 @@ fn a_click_on_the_map_picks_a_box_and_a_second_opens_it() {
         .expect("more than one box");
     let at = (area.x + 1, area.y + 1);
     click(&mut app, at);
-    assert_eq!(app.project_map.as_ref().unwrap().selected, node);
+    assert_eq!(app.map.as_ref().unwrap().selected, node);
     click(&mut app, at);
     assert_eq!(app.window, Window::Main, "the second click opens it");
 }

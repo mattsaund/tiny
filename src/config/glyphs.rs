@@ -28,7 +28,7 @@
 //!
 //! [`Palette`](super::Palette) carries the active set, so everything that
 //! draws already has it: pane borders, the browser's folder markers, the
-//! project map, markdown's bullets, rules, gutters and tables, and the arrows
+//! map, markdown's bullets, rules, gutters and tables, and the arrows
 //! and ellipses in the status line and the git window. A test renders every
 //! screen with `ascii` and checks that nothing outside ASCII reaches it, which
 //! is what keeps a new screen from quietly drawing a character the set does
@@ -134,7 +134,7 @@ pub struct Glyphs {
     pub continued: &'static str,
     /// Between a picture's width and height.
     pub times: &'static str,
-    /// The project map's lines, indexed by the direction bits a line leaves a
+    /// The map's lines, indexed by the direction bits a line leaves a
     /// cell by: up 1, down 2, left 4, right 8.
     pub map_lines: [char; 16],
     /// A map box's corners, clockwise from the top left. Rounded where the

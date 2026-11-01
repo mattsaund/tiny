@@ -36,7 +36,7 @@ pub struct Theme {
     pub link: String,
     pub code: String,
     pub marker: String,
-    /// The project map's two directions: files that reach the selected one,
+    /// The map's two directions: files that reach the selected one,
     /// and files it reaches. The only colors tiny ships with, see [`Theme`]'s
     /// default for why they are the exception.
     pub map_in: String,

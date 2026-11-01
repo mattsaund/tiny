@@ -1,6 +1,6 @@
 //! Where every box goes.
 //!
-//! Given a [`ProjectMap`] and a width, this decides the whole picture: which
+//! Given a [`Map`] and a width, this decides the whole picture: which
 //! heading each file sits under, which slot in the grid it occupies, and which
 //! rows and columns are left clear for lines to travel in.
 //!
@@ -39,7 +39,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use super::graph::Node;
-use super::view::ProjectMap;
+use super::view::Map;
 
 /// Where one file's box goes on the character grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +80,7 @@ impl Placed {
 /// nothing to say about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Group {
-    /// An index into `ProjectMap::folders`, which is in path order, so
+    /// An index into `Map::folders`, which is in path order, so
     /// ordering by index is ordering by path.
     Folder(usize),
     /// Files nothing drawn reaches. Kept on screen (a map that omits files is
@@ -230,12 +230,12 @@ struct Unbounded<T> {
     group: usize,
 }
 
-impl ProjectMap {
+impl Map {
     /// Lay the visible files out on the pane and say where every box goes.
     ///
     /// Files are grouped by the folder they live in, and the folders run down
     /// the pane in path order: root first, then alphabetically. That is the
-    /// whole layout: no simulation, no settling, no seed. A project map is
+    /// whole layout: no simulation, no settling, no seed. A map is
     /// something you consult, and you consult it by name, so a file's position
     /// should be predictable from the tree you already know rather than from
     /// wherever a force converged.
@@ -579,7 +579,12 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         write(td.path(), "design.md", "see [[architecture]]\n");
         write(td.path(), "architecture.md", "back to [[design]]\n");
-        let mut view = ProjectMap::build(td.path(), &graph::Options::default(), "…");
+        let mut view = Map::build(
+            td.path(),
+            &graph::Options::default(),
+            "…",
+            crate::map::testing::highlighter(),
+        );
         let place = view.place(90, 40);
         let root = td.path().file_name().unwrap().to_string_lossy().to_string();
         assert_eq!(
@@ -597,7 +602,12 @@ mod tests {
     fn root_files_come_before_the_folders() {
         let (td, _) = fixture();
         write(td.path(), "README.md", "see [[design]]\n");
-        let mut view = ProjectMap::build(td.path(), &graph::Options::default(), "…");
+        let mut view = Map::build(
+            td.path(),
+            &graph::Options::default(),
+            "…",
+            crate::map::testing::highlighter(),
+        );
         let place = view.place(90, 40);
         let labels: Vec<&str> = place.folders.iter().map(|g| g.label.as_str()).collect();
         assert!(
@@ -619,7 +629,12 @@ mod tests {
         );
         write(&root, "inside.md", "see [[notes]]\n");
 
-        let mut view = ProjectMap::build(&root, &graph::Options::default(), "…");
+        let mut view = Map::build(
+            &root,
+            &graph::Options::default(),
+            "…",
+            crate::map::testing::highlighter(),
+        );
         for n in &view.graph.nodes {
             assert!(
                 root.join(&n.rel).starts_with(&root),
@@ -689,7 +704,7 @@ mod tests {
     ///
     /// Each note links to the next, which is what puts them all in folder
     /// groups rather than in the unconnected pile.
-    fn tall_fixture() -> (tempfile::TempDir, ProjectMap) {
+    fn tall_fixture() -> (tempfile::TempDir, Map) {
         let td = tempfile::tempdir().unwrap();
         for i in 0..12 {
             write(
@@ -699,7 +714,12 @@ mod tests {
             );
             write(td.path(), &format!("d{i:02}/note{i}.md", i = i), "a note\n");
         }
-        let view = ProjectMap::build(td.path(), &graph::Options::default(), "…");
+        let view = Map::build(
+            td.path(),
+            &graph::Options::default(),
+            "…",
+            crate::map::testing::highlighter(),
+        );
         (td, view)
     }
 
@@ -780,7 +800,12 @@ mod tests {
     #[test]
     fn the_layout_is_the_same_every_time() {
         let (td, mut a) = fixture();
-        let mut b = ProjectMap::build(td.path(), &graph::Options::default(), "…");
+        let mut b = Map::build(
+            td.path(),
+            &graph::Options::default(),
+            "…",
+            crate::map::testing::highlighter(),
+        );
         let (pa, pb) = (a.place(90, 40), b.place(90, 40));
         assert_eq!(pa, pb, "the same project draws the same picture");
         assert_eq!(a.pos, b.pos);
@@ -818,7 +843,12 @@ mod tests {
     fn a_single_file_project_lays_out_without_trouble() {
         let td = tempfile::tempdir().unwrap();
         write(td.path(), "only.md", "alone\n");
-        let mut view = ProjectMap::build(td.path(), &graph::Options::default(), "…");
+        let mut view = Map::build(
+            td.path(),
+            &graph::Options::default(),
+            "…",
+            crate::map::testing::highlighter(),
+        );
         assert_eq!(view.pos.len(), 1);
         let placed = view.place(60, 20).boxes;
         assert_eq!(placed.len(), 1);
@@ -828,7 +858,12 @@ mod tests {
     #[test]
     fn an_empty_project_does_not_panic() {
         let td = tempfile::tempdir().unwrap();
-        let mut view = ProjectMap::build(td.path(), &graph::Options::default(), "…");
+        let mut view = Map::build(
+            td.path(),
+            &graph::Options::default(),
+            "…",
+            crate::map::testing::highlighter(),
+        );
         assert!(view.graph.nodes.is_empty());
         assert!(view.visible_indices().is_empty());
         assert_eq!(view.place(60, 20), Placement::default());

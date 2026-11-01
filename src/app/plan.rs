@@ -645,7 +645,7 @@ impl App {
             let code = names
                 .files
                 .iter()
-                .filter(|p| scan::lang_of(p).is_some())
+                .filter(|p| scan::readable_code(p, &self.highlighter))
                 .count();
             // Too many to read on a pause in typing; Enter reads them.
             if code > MAX_PREVIEW_CODE_FILES && self.planning_for_preview {
@@ -660,18 +660,16 @@ impl App {
         Ok(named(all.unwrap_or_default(), name))
     }
 
-    /// Every definition in `files`, by tree-sitter (the same reading the map
-    /// does) from the open buffer where there is one, unsaved edits and all.
+    /// Every definition in `files`, read the way the map reads them, from
+    /// the open buffer where there is one, unsaved edits and all.
     fn read_definitions(&self, files: &[PathBuf]) -> Vec<(String, Hit)> {
+        let hl = &self.highlighter;
         let code: Vec<&PathBuf> = files
             .iter()
-            .filter(|p| scan::lang_of(p).is_some())
+            .filter(|p| scan::readable_code(p, hl))
             .collect();
         let buffers = &self.buffers;
         par_map(&code, tree_sitter_tags::TagsContext::new, |ctx, _, path| {
-            let Some(lang) = scan::lang_of(path) else {
-                return Vec::new();
-            };
             let text = match buffers.get(*path) {
                 Some(ed) => ed.to_text(),
                 None => match scan::read_text(path) {
@@ -680,7 +678,7 @@ impl App {
                 },
             };
             let lines: Vec<&str> = text.lines().collect();
-            scan::definitions(ctx, lang, &text)
+            scan::definitions_of(ctx, hl, path, &text)
                 .into_iter()
                 .map(|(n, line, col)| {
                     let hit = spot(path, line, col, lines.get(line).copied().unwrap_or(""));
@@ -877,7 +875,7 @@ impl App {
             Plan::Reveal(p) => format!("shows the folder {}/", self.rel(p)),
             Plan::Window(w) => match w {
                 Window::Browser => "goes back to the browser".into(),
-                Window::Map => "opens the project map".into(),
+                Window::Map => "opens the map".into(),
                 Window::Git => "opens git".into(),
                 Window::Help => "shows every key and command".into(),
                 Window::Settings => "opens the settings".into(),

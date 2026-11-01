@@ -30,6 +30,7 @@ mod editing;
 mod fileops;
 mod glyphs;
 mod layout;
+mod links;
 mod map;
 mod mouse;
 mod navigation;

@@ -104,6 +104,11 @@ impl Tiny {
         .unwrap();
         std::fs::write(p.join("notes.md"), "# Notes\n\nfirst line\n").unwrap();
         std::fs::write(p.join("README.md"), "# Hello\n\nThe readme.\n").unwrap();
+        std::fs::write(
+            p.join("links.md"),
+            "# Links\n\nSee [the notes](notes.md) first.\n",
+        )
+        .unwrap();
 
         // `XDG_CONFIG_HOME` comes first wherever tiny looks for its config,
         // Windows included. No update check: nothing here should touch the
@@ -506,6 +511,35 @@ fn a_click_puts_the_cursor_where_it_lands_and_a_drag_selects() {
 }
 
 #[test]
+fn a_click_on_a_link_opens_the_note_it_names() {
+    let mut tiny = Tiny::start("xterm-256color", 100, 30);
+    tiny.wait_for("README.md");
+    // Read beside the browser, where the link is drawn as its text.
+    while tiny.on() != "links.md" {
+        tiny.move_off("\x1b[B");
+    }
+    tiny.wait_for("See the notes first.");
+    let link = tiny.find("the notes").expect("the link on screen");
+    tiny.click((link.0 + 2, link.1));
+    tiny.wait_until("the notes to open", |t| t.on() == "notes.md");
+    tiny.wait_for("first line");
+    tiny.quit();
+}
+
+#[test]
+fn outside_a_repository_the_git_window_says_so() {
+    let mut tiny = Tiny::start("xterm-256color", 100, 30);
+    tiny.wait_for("README.md");
+    tiny.send("\x07");
+    tiny.wait_for("no git repository");
+    tiny.send("\x1b");
+    tiny.wait_until("the git window to close", |t| {
+        !t.text().contains("SOURCE CONTROL")
+    });
+    tiny.quit();
+}
+
+#[test]
 fn the_terminal_runs_a_shell_in_the_project() {
     let mut tiny = Tiny::start("xterm-256color", 100, 30);
     tiny.wait_for("README.md");
@@ -569,13 +603,14 @@ fn the_function_and_control_keys_open_what_they_should() {
             tiny.wait_until("the help to close", |t| !t.text().contains(help));
         }
     }
-    // Ctrl+L, the project map, which also takes Shift+Tab as a terminal
-    // sends it.
+    // Ctrl+L, the map, which also takes Shift+Tab as a terminal sends it.
+    // Its title at the corner of its border: a bare "MAP" could be anywhere.
+    let map = "\u{250c} MAP ";
     tiny.send("\x0c");
-    tiny.wait_for("PROJECT MAP");
+    tiny.wait_for(map);
     tiny.send("\x1b[Z");
     tiny.send("\x1b");
-    tiny.wait_until("the map to close", |t| !t.text().contains("PROJECT MAP"));
+    tiny.wait_until("the map to close", |t| !t.text().contains(map));
     // Ctrl+W, two panes: two titles beside the browser's.
     tiny.send("\x17");
     tiny.wait_until("two panes", |t| t.row(0).matches('\u{250c}').count() == 3);

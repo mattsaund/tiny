@@ -1,4 +1,4 @@
-//! The project map pane: boxes for files, lines for connections.
+//! The map pane: boxes for files, lines for connections.
 //!
 //! Composed onto an [`super::ink`] grid rather than emitted as spans directly,
 //! which is what lets a line and a box overlap sensibly: lines go down first,
@@ -24,9 +24,9 @@ use super::ink::{Ink, InkStyle, route};
 use crate::app::App;
 use crate::map::graph::EdgeKind;
 use crate::map::layout::Placed;
-use crate::map::view::ProjectMap;
+use crate::map::view::Map;
 
-/// The project map: every file as a box, every connection as a line, and a
+/// The map: every file as a box, every connection as a line, and a
 /// detail strip underneath.
 ///
 /// Drawn by composing an [`Ink`] grid rather than by emitting spans directly.
@@ -38,7 +38,7 @@ use crate::map::view::ProjectMap;
 /// and where, `route` draws the lines from the file under the cursor to each
 /// file it connects to, and then the boxes are stamped over the top.
 pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
-    if app.project_map.is_none() {
+    if app.map.is_none() {
         return;
     }
     let pal = app.palette;
@@ -77,11 +77,11 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     // the frame around it is read-only. The one-way rule bends exactly as far
     // as `last_tree_cols` already bends it.
     let placement = app
-        .project_map
+        .map
         .as_mut()
         .expect("checked above")
         .place(inner.width, inner.height);
-    let view = app.project_map.as_ref().expect("checked above");
+    let view = app.map.as_ref().expect("checked above");
     let selected = view.selected;
     // Which side of the cursor every connected file is on. The picture cannot
     // say which way a line runs (the lines share a trunk, so a colored line
@@ -95,7 +95,7 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
         .border_style(pal.border_focus)
         .title(Line::from(vec![
             Span::raw(" "),
-            Span::styled("PROJECT MAP", pal.text.add_modifier(Modifier::BOLD)),
+            Span::styled("MAP", pal.text.add_modifier(Modifier::BOLD)),
             Span::styled(format!("  {}", view.summary()), pal.dim),
             Span::raw(" "),
         ]));
@@ -222,6 +222,7 @@ fn kind_word(kind: EdgeKind) -> &'static str {
         EdgeKind::Wikilink => "wikilink",
         EdgeKind::Link => "link",
         EdgeKind::Call => "call",
+        EdgeKind::Reference => "reference",
     }
 }
 
@@ -237,7 +238,7 @@ const MORE_WIDTH: usize = 10;
 /// This is where direction lives. The picture draws a plain line between two
 /// files and says nothing about which way it runs (see [`super::ink::route`]),
 /// so `out:` and `in:` are the answer, in words, with the files named.
-fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
+fn draw_map_detail(f: &mut Frame, app: &App, view: &Map, area: Rect) {
     let pal = app.palette;
     let Some(node) = view.selected_node() else {
         f.render_widget(
@@ -248,18 +249,23 @@ fn draw_map_detail(f: &mut Frame, app: &App, view: &ProjectMap, area: Rect) {
     };
     let (out, incoming) = view.connections(view.selected);
 
-    // Which edge kinds are switched on, as the 1-3 keys see them.
-    let toggles: Vec<Span> = [EdgeKind::Wikilink, EdgeKind::Link, EdgeKind::Call]
-        .iter()
-        .enumerate()
-        .flat_map(|(i, k)| {
-            let on = view.kinds[crate::map::view::kind_index(*k)];
-            [Span::styled(
-                format!("{}:{} ", i + 1, kind_word(*k)),
-                if on { pal.text } else { pal.dim },
-            )]
-        })
-        .collect();
+    // Which edge kinds are switched on, as the 1-4 keys see them.
+    let toggles: Vec<Span> = [
+        EdgeKind::Wikilink,
+        EdgeKind::Link,
+        EdgeKind::Call,
+        EdgeKind::Reference,
+    ]
+    .iter()
+    .enumerate()
+    .flat_map(|(i, k)| {
+        let on = view.kinds[crate::map::view::kind_index(*k)];
+        [Span::styled(
+            format!("{}:{} ", i + 1, kind_word(*k)),
+            if on { pal.text } else { pal.dim },
+        )]
+    })
+    .collect();
 
     // Every file on one side of the cursor, named, filling the row and then
     // stopping. A count on its own says how connected a file is; the names are

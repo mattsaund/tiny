@@ -343,7 +343,7 @@ impl App {
         // Resolved here rather than inside the view: the map does not need to
         // know how a key becomes an action, only which one it was.
         let action = self.keymap.find(KeyContext::Map, &key);
-        let intent = match self.project_map.as_mut() {
+        let intent = match self.map.as_mut() {
             Some(view) => view.on_key(action),
             None => return,
         };
@@ -361,18 +361,18 @@ impl App {
             Intent::Rebuild => {
                 // Read the project again, and keep looking at it the way it
                 // was being looked at.
-                let old = self.project_map.take();
+                let old = self.map.take();
                 self.open_map();
-                if let (Some(old), Some(view)) = (old, &mut self.project_map) {
+                if let (Some(old), Some(view)) = (old, &mut self.map) {
                     view.carry_over(&old);
-                    self.status = format!("project map: {}", view.summary());
+                    self.status = format!("map: {}", view.summary());
                 }
                 return;
             }
         }
         // The counts move as filters change, so keep them in front of you.
-        if let Some(view) = self.project_map.as_ref() {
-            self.status = format!("project map: {}", view.summary());
+        if let Some(view) = self.map.as_ref() {
+            self.status = format!("map: {}", view.summary());
         }
     }
 

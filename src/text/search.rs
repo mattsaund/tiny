@@ -756,13 +756,22 @@ pub struct Walked {
 /// [`walk`], keeping the folders: what a command looks a name up in, since
 /// `goto folder notes` has to find a folder with nothing in it too.
 pub fn walk_all(root: &Path, opts: &Opts) -> Walked {
-    walk_up_to(root, opts, usize::MAX)
+    walk_up_to(root, opts, usize::MAX, &Skip::default())
 }
 
-/// [`walk_all`], stopping once it has found `max_files` files: for the map,
-/// which reads every one of them while the user waits, and opened on a home
-/// folder would otherwise read everything in it.
-pub fn walk_up_to(root: &Path, opts: &Opts, max_files: usize) -> Walked {
+/// Folders and files a walk leaves out besides the ones [`Opts`] names: for
+/// the map, what git ignores, see `git::ignored`.
+#[derive(Debug, Default)]
+pub struct Skip {
+    pub dirs: std::collections::HashSet<PathBuf>,
+    pub files: std::collections::HashSet<PathBuf>,
+}
+
+/// [`walk_all`], stopping once it has found `max_files` files, and leaving
+/// out what `skip` names: for the map, which reads every one of them while
+/// the user waits, and opened on a home folder would otherwise read
+/// everything in it.
+pub fn walk_up_to(root: &Path, opts: &Opts, max_files: usize, skip: &Skip) -> Walked {
     let mut out = Walked::default();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -787,10 +796,13 @@ pub fn walk_up_to(root: &Path, opts: &Opts, max_files: usize) -> Walked {
             if ft.is_symlink() {
                 continue;
             }
+            let path = entry.path();
             if ft.is_dir() {
-                dirs.push(entry.path());
-            } else {
-                files.push(entry.path());
+                if !skip.dirs.contains(&path) {
+                    dirs.push(path);
+                }
+            } else if !skip.files.contains(&path) {
+                files.push(path);
             }
         }
         files.sort();

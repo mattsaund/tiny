@@ -273,6 +273,48 @@ pub fn open_with_desktop(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Hand a web address to the desktop's browser, or a `mailto:` to its mail
+/// program. Anything else is refused: a link in a note is not a way to start
+/// whatever program some other scheme would.
+pub fn open_url(url: &str) -> Result<()> {
+    let web = ["https://", "http://", "mailto:"]
+        .iter()
+        .any(|scheme| url.len() > scheme.len() && url[..scheme.len()].eq_ignore_ascii_case(scheme));
+    if !web || url.contains(char::is_control) {
+        anyhow::bail!("{url} is not a web address");
+    }
+    if cfg!(test) {
+        opened::record(Path::new(url));
+        return Ok(());
+    }
+    let child = url_launcher(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("could not open {url}"))?;
+    keep_until_done(child);
+    Ok(())
+}
+
+/// The platform's way to open a web address. On Windows not through `cmd`,
+/// as a file is: it would take an `&` in the address for the end of one
+/// command and the start of another. `rundll32` hands it to the browser as it
+/// is.
+fn url_launcher(url: &str) -> Command {
+    let mut cmd = if cfg!(target_os = "macos") {
+        Command::new("open")
+    } else if cfg!(target_os = "windows") {
+        let mut cmd = Command::new("rundll32");
+        cmd.arg("url.dll,FileProtocolHandler");
+        cmd
+    } else {
+        Command::new("xdg-open")
+    };
+    cmd.arg(url);
+    cmd
+}
+
 /// Hold on to a program tiny started and does not wait for, so that it is
 /// reaped once it finishes rather than lingering, see [`LAUNCHED`]. The
 /// desktop's viewers come through here, and so do the windows `Ctrl+N` opens.
@@ -356,6 +398,38 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, v).unwrap();
         path
+    }
+
+    #[test]
+    fn only_web_and_mail_addresses_are_opened() {
+        for url in [
+            "https://example.com/a?b=1&c=2",
+            "HTTP://x.org",
+            "mailto:me@example.com",
+        ] {
+            assert!(open_url(url).is_ok(), "{url}");
+        }
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "ssh://host",
+            "https://",
+            "https://x.org/\nrm -rf",
+            "notes/a.md",
+        ] {
+            assert!(open_url(url).is_err(), "{url} must be refused");
+        }
+        opened::take();
+    }
+
+    #[test]
+    fn an_address_goes_to_the_browser_as_one_argument() {
+        let cmd = url_launcher("https://example.com/?a=1&b=2");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args.last().unwrap().to_str(),
+            Some("https://example.com/?a=1&b=2")
+        );
     }
 
     #[test]

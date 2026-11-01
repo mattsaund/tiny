@@ -6,6 +6,20 @@
 //! what a link and a call look like in each language; the other half is
 //! bookkeeping over the answers.
 //!
+//! # Every language
+//!
+//! Python, Rust and JavaScript are read with tree-sitter, whose grammars are
+//! compiled in for them: quick, and exact about what is a call. Every other
+//! language is read with the grammar the editor colors it with (see
+//! `highlight::Highlighter::names`), which is 213 of them and costs nothing
+//! more to carry: those grammars already mark a function's name where it is
+//! defined and where it is called. Slower to read than tree-sitter, so a long
+//! file is read for its first [`GRAMMAR_LINES`] lines.
+//!
+//! And whatever the language, a file that names another one by its path
+//! (`#include "x.h"`, `import './x'`, `src="app.js"`, `source ./env.sh`) is
+//! connected to it, see [`collect_references`].
+//!
 //! # The budget
 //!
 //! Building the graph reads every file it can find something in, while the
@@ -31,9 +45,33 @@ use std::sync::LazyLock;
 use tree_sitter_tags::{TagsConfiguration, TagsContext};
 
 use crate::map::graph::{EdgeKind, NodeKind};
+use crate::text::highlight::{Highlighter, Role};
 
 /// Source files past this size are not parsed for symbols.
 pub(super) const MAX_PARSE_BYTES: u64 = 1024 * 1024;
+
+/// How much of a file a grammar reads for what it defines and calls. The
+/// slowest grammar here, TypeScript's, reads a few thousand lines a second,
+/// and the map is built while you wait.
+pub(super) const GRAMMAR_LINES: usize = 10_000;
+
+/// A file's size and when it last changed: what says a reading of it is
+/// still good.
+type Stamp = (u64, Option<std::time::SystemTime>);
+
+/// What each file read with a grammar said, by path, with its [`Stamp`] then.
+///
+/// Reading with a grammar is the slow part of building the map, which is
+/// built again every time it is opened, and between two openings most files
+/// have not changed: 77,000 lines of C++ took 0.65 seconds the first time,
+/// on twenty cores. tree-sitter's languages are quick enough to read again.
+static READ_BEFORE: LazyLock<std::sync::Mutex<HashMap<PathBuf, (Stamp, Facts)>>> =
+    LazyLock::new(Default::default);
+
+fn stamp_of(path: &Path) -> Option<Stamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()))
+}
 
 // ---- language support -----------------------------------------------------
 
@@ -107,7 +145,7 @@ pub(super) fn tags_for(lang: Lang) -> Option<&'static TagsConfiguration> {
 ///
 /// Kept separate from [`super::graph::Node`] because it is scratch: the resolution pass
 /// consumes it and only `defines` survives onto the node, for the tooltip.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct Facts {
     /// Symbols defined here.
     pub(super) defines: BTreeSet<String>,
@@ -140,19 +178,22 @@ impl Facts {
 
 /// Classify a file. Order matters: markdown is checked before the prose list
 /// because it is usually *in* that list but has a link syntax of its own.
-pub(super) fn node_kind(path: &Path, prose_exts: &[String]) -> NodeKind {
+///
+/// Code is anything in a language with things to define and call, by its
+/// name alone: nothing is opened to decide.
+pub(super) fn node_kind(path: &Path, prose_exts: &[String], hl: &Highlighter) -> NodeKind {
     if crate::text::markdown::is_markdown(path) {
         return NodeKind::Note;
     }
-    match path
+    let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-    {
+        .map(str::to_ascii_lowercase);
+    match ext {
         Some(e) if prose_exts.iter().any(|p| p.eq_ignore_ascii_case(&e)) => NodeKind::Prose,
-        Some(_) if lang_of(path).is_some() => NodeKind::Code,
-        // Source in a language tiny cannot parse still shows, it just has no
-        // outgoing call edges.
+        _ if lang_of(path).is_some() || hl.code_syntax(path, "").is_some() => NodeKind::Code,
+        // Source in a language no grammar here knows still shows, it just
+        // has no outgoing call edges.
         Some(e) if is_sourcelike(&e) => NodeKind::Code,
         _ => NodeKind::Other,
     }
@@ -186,37 +227,136 @@ pub(super) fn is_sourcelike(ext: &str) -> bool {
 }
 
 /// What one file contributes, read only when there is something to find in
-/// it: links in prose, definitions and calls in a language with a grammar.
-/// Everything else is a node and nothing more, so it is never opened:
-/// reading every picture in a folder to throw it away was most of what a
-/// media-heavy project cost the map.
+/// it: links in prose, definitions and calls in code, and in either, and in a
+/// format like HTML or JSON, the files it names. Everything else is a node
+/// and nothing more, so it is never opened: reading every picture in a
+/// folder to throw it away was most of what a media-heavy project cost the
+/// map.
 ///
 /// `rel` is the path inside the project, which is what says whether a file
 /// is a test: a project kept in a folder called `tests` is not all tests.
-pub(super) fn facts_of(ctx: &mut TagsContext, path: &Path, rel: &str, kind: NodeKind) -> Facts {
+pub(super) fn facts_of(
+    ctx: &mut TagsContext,
+    hl: &Highlighter,
+    path: &Path,
+    rel: &str,
+    kind: NodeKind,
+) -> Facts {
     let mut f = Facts::default();
     match kind {
         NodeKind::Note | NodeKind::Prose => {
             if let Some(text) = read_text(path) {
                 collect_links(&text, kind, &mut f);
+                collect_references(&text, &mut f);
             }
         }
         NodeKind::Code => {
-            if let Some(lang) = lang_of(path)
-                && !is_test_file(rel)
+            if !is_test_file(rel)
                 && let Some(text) = read_text(path)
             {
-                let (body, test_modules) = strip_tests(lang, &text);
-                f.test_modules = test_modules;
-                collect_symbols(ctx, lang, &body, &mut f);
-                if lang == Lang::Rust {
-                    collect_path_calls(&body, &mut f);
+                if let Some(lang) = lang_of(path) {
+                    let (body, test_modules) = strip_tests(lang, &text);
+                    f.test_modules = test_modules;
+                    collect_symbols(ctx, lang, &body, &mut f);
+                    if lang == Lang::Rust {
+                        collect_path_calls(&body, &mut f);
+                    }
+                    collect_references(&body, &mut f);
+                } else {
+                    let stamp = stamp_of(path);
+                    let before = READ_BEFORE.lock().ok().and_then(|read| {
+                        read.get(path)
+                            .filter(|(then, _)| stamp.is_some() && Some(*then) == stamp)
+                            .map(|(_, facts)| facts.clone())
+                    });
+                    if let Some(facts) = before {
+                        return facts;
+                    }
+                    let first = text.lines().next().unwrap_or_default();
+                    if let Some(syntax) = hl.code_syntax(path, first) {
+                        collect_named(hl, syntax, &text, &mut f);
+                    }
+                    collect_references(&text, &mut f);
+                    if let (Some(stamp), Ok(mut read)) = (stamp, READ_BEFORE.lock()) {
+                        read.insert(path.to_path_buf(), (stamp, f.clone()));
+                    }
                 }
             }
         }
-        NodeKind::Other => {}
+        // A format with a grammar, HTML or JSON or a config file, names files
+        // without defining anything.
+        NodeKind::Other => {
+            if !hl.syntax_for_path(path, "").name.eq("Plain Text")
+                && !is_test_file(rel)
+                && let Some(text) = read_text(path)
+            {
+                collect_references(&text, &mut f);
+            }
+        }
     }
     f
+}
+
+/// Definitions and calls as the file's grammar names them, for a language
+/// tree-sitter is not compiled in for. See the module docs.
+pub(super) fn collect_named(
+    hl: &Highlighter,
+    syntax: &syntect::parsing::SyntaxReference,
+    text: &str,
+    f: &mut Facts,
+) {
+    for named in hl.names(syntax, text, GRAMMAR_LINES) {
+        match named.role {
+            Role::Defined => {
+                f.defines.insert(named.name);
+            }
+            Role::Called => f.call(&named.name, named.qualified),
+        }
+    }
+}
+
+/// The paths a file names, in quotes the way code, configuration and markup
+/// all write them, and after `source`, `.` or `include` starting a line, the
+/// way shells and makefiles do. Only those that turn out to be files in the
+/// project come to anything: see [`resolve_reference`].
+pub(super) fn collect_references(text: &str, f: &mut Facts) {
+    let mut push = |s: &str| {
+        if looks_like_path(s) {
+            f.links.push((s.to_string(), EdgeKind::Reference));
+        }
+    };
+    for line in text.lines() {
+        let start = line.trim_start();
+        for word in ["source ", ". ", "include "] {
+            if let Some(rest) = start.strip_prefix(word)
+                && let Some(path) = rest.split_whitespace().next()
+            {
+                push(path.trim_matches(['"', '\'']));
+            }
+        }
+        let mut rest = line;
+        while let Some(open) = rest.find(['"', '\'', '`']) {
+            let quote = rest[open..].chars().next().unwrap_or('"');
+            let after = &rest[open + 1..];
+            let Some(close) = after.find(quote) else {
+                break;
+            };
+            push(&after[..close]);
+            rest = &after[close + 1..];
+        }
+    }
+}
+
+/// Whether quoted text could be a path: short, with a folder or an extension
+/// in it, and none of what a sentence, a pattern, a format string or a web
+/// address has. Whether it is one is for [`resolve_reference`] to find out.
+fn looks_like_path(s: &str) -> bool {
+    (3..=200).contains(&s.len())
+        && (s.contains('/') || s.contains('.'))
+        && !s.contains("://")
+        && !s.contains(char::is_whitespace)
+        && !s.contains(['*', '<', '>', '|', '{', '}', '(', ')', '=', ',', ';', '\\'])
+        && !s.starts_with(['#', '-', '$', '%', '@'])
 }
 
 /// Read a file if it is small enough and looks like text. Deliberately a
@@ -297,7 +437,7 @@ fn link_destination(raw: &str) -> Option<String> {
 
 /// `%20` and its like turned back into the bytes they stand for; anything that
 /// does not decode to text is left as it was written.
-fn percent_decoded(s: &str) -> String {
+pub(crate) fn percent_decoded(s: &str) -> String {
     if !s.contains('%') {
         return s.to_string();
     }
@@ -584,6 +724,35 @@ pub(crate) fn definitions(
         .collect()
 }
 
+/// Whether `path` is code `goto function` can read for its definitions:
+/// tree-sitter's or a grammar's.
+pub(crate) fn readable_code(path: &Path, hl: &Highlighter) -> bool {
+    lang_of(path).is_some() || hl.code_syntax(path, "").is_some()
+}
+
+/// Every callable thing defined in `text`, the file at `path`, as its name,
+/// line and character column, read by tree-sitter where it is compiled in
+/// for the language and by the file's grammar where it is not.
+pub(crate) fn definitions_of(
+    ctx: &mut TagsContext,
+    hl: &Highlighter,
+    path: &Path,
+    text: &str,
+) -> Vec<(String, usize, usize)> {
+    if let Some(lang) = lang_of(path) {
+        return definitions(ctx, lang, text);
+    }
+    let first = text.lines().next().unwrap_or_default();
+    let Some(syntax) = hl.code_syntax(path, first) else {
+        return Vec::new();
+    };
+    hl.names(syntax, text, usize::MAX)
+        .into_iter()
+        .filter(|n| n.role == Role::Defined)
+        .map(|n| (n.name, n.line, n.col))
+        .collect()
+}
+
 /// Rust calls written through a path: `helpers::compute()`, `Config::load()`,
 /// `parse::<u8>()`.
 ///
@@ -680,6 +849,59 @@ pub(super) struct Index {
 /// What a link written without an extension may leave off: a note's.
 const NOTE_EXTENSIONS: &[&str] = &["md", "markdown", "txt"];
 
+/// What an import from a relative path may leave off, in JavaScript and the
+/// languages that import the way it does: `./utils` is `./utils.ts`, or the
+/// `index` in a folder called `utils`.
+const MODULE_ENDINGS: &[&str] = &[
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".vue",
+    ".svelte",
+    ".json",
+    "/index.js",
+    "/index.ts",
+    "/index.tsx",
+    "/index.jsx",
+];
+
+/// The file a path a file names is, when it is one in the project: beside
+/// the file first, then from the project's top, which is also where a path
+/// starting with `/` begins. Only ever a path: unlike a wikilink, a name on
+/// its own is not looked for anywhere else.
+pub(super) fn resolve_reference(
+    target: &str,
+    root: &Path,
+    from_dir: Option<&Path>,
+    index: &Index,
+) -> Option<usize> {
+    let target = target.split(['?', '#']).next()?;
+    let target = percent_decoded(target);
+    let module = target.starts_with("./") || target.starts_with("../");
+    let mut candidates = vec![target.clone()];
+    if module {
+        candidates.extend(MODULE_ENDINGS.iter().map(|e| format!("{target}{e}")));
+    }
+    for cand in &candidates {
+        if let Some(dir) = from_dir {
+            let joined = normalize(&dir.join(cand));
+            if let Ok(rel) = joined.strip_prefix(root) {
+                let key = rel.to_string_lossy().replace('\\', "/");
+                if let Some(&id) = index.by_rel.get(&key) {
+                    return Some(id);
+                }
+            }
+        }
+        if !module && let Some(&id) = index.by_rel.get(cand.trim_start_matches('/')) {
+            return Some(id);
+        }
+    }
+    None
+}
+
 /// Turn a written target into a file. Tries, in order: the path as given,
 /// with a note's extension if it has none, relative to the linking file, then
 /// relative to the root; then, for a wikilink or a bare name, the file of that
@@ -705,6 +927,9 @@ pub(super) fn resolve_link(
     from_dir: Option<&Path>,
     index: &Index,
 ) -> Option<usize> {
+    if kind == EdgeKind::Reference {
+        return resolve_reference(target, root, from_dir, index);
+    }
     let target = target.trim().trim_start_matches("./");
     if target.is_empty() {
         return None;
@@ -775,7 +1000,7 @@ pub(super) fn resolve_link(
 /// that do not exist, and a syscall per candidate per link would be slow. Note
 /// that `pop` on an empty buffer is a no-op, so `../..` from the root cannot
 /// escape upwards; it just flattens.
-pub(super) fn normalize(path: &Path) -> PathBuf {
+pub(crate) fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {
         match c {

@@ -365,12 +365,12 @@ impl App {
     /// they are one field in one place; which one the typing reaches is
     /// decided by the window the bar is drawn over, not by a second key.
     pub(super) fn filter_map(&mut self, query: &str) {
-        let Some(view) = self.project_map.as_mut() else {
+        let Some(view) = self.map.as_mut() else {
             return;
         };
         view.set_filter(query);
         let summary = view.summary();
-        self.status = format!("project map: {summary}");
+        self.status = format!("map: {summary}");
     }
 
     /// Keys for the search and command bar.

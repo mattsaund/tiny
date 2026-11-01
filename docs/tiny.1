@@ -5,7 +5,7 @@
 .\"
 .\" A test in src/main.rs reads this against the keymap and the options, so a
 .\" key or an option that changes without changing here fails the build.
-.TH TINY 1 2026-10-27 "tiny 0.6.3" "User Commands"
+.TH TINY 1 2026-10-31 "tiny 0.6.4" "User Commands"
 .SH NAME
 tiny \- an IDE, text editor, knowledge manager and file browser in the \%terminal
 .SH SYNOPSIS
@@ -94,7 +94,7 @@ Every key and command.
 The git window, and back.
 .TP
 .B Ctrl+L
-The project map, and back.
+The map, and back.
 .TP
 .B Ctrl+T
 Hide or show the browser.
@@ -257,7 +257,12 @@ the list's edge and the border between the two halves of a diff.
 Neither part is made smaller than leaves room for what it holds.
 The wheel scrolls whatever it is over.
 A program in the terminal that asks for the mouse gets it there.
-.SS The project map
+.PP
+A click on a link follows it: a web address opens in your browser, and a
+link to a file, or a wikilink, opens that file in tiny.
+In text being edited a click places the cursor, so there it is Ctrl and a
+click.
+.SS The map
 .TP
 .B "Up, Down, Left, Right, i, k, j, l"
 Move to the nearest file that way.
@@ -268,8 +273,8 @@ The next and the previous file.
 .B Enter
 Edit the file.
 .TP
-.B "1, 2, 3"
-Show or hide wikilinks, links and calls.
+.B "1, 2, 3, 4"
+Show or hide wikilinks, links, calls and references.
 .TP
 .B r
 Read the project again.

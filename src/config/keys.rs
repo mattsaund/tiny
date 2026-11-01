@@ -15,7 +15,7 @@
 //! `Enter` and `Tab` move and edit text while you are typing into it, and
 //! rebinding those would leave a keyboard that cannot type.
 //!
-//! Everything else (the browser, a note being read, the project map, the git
+//! Everything else (the browser, a note being read, the map, the git
 //! window, and every chord that reaches out of the pane you are in) is
 //! bindable.
 //!
@@ -266,12 +266,13 @@ pub enum Action {
     EditorCursorDown,
     MacroRecord,
     MacroPlay,
-    // The project map
+    // The map
     MapNext,
     MapPrevious,
     MapWikilinks,
     MapLinks,
     MapCalls,
+    MapReferences,
     // Source control
     SourceOpen,
 }
@@ -330,7 +331,7 @@ const TABLE: &[Row] = &[
         Action::WindowMap,
         &[Context::Global],
         "map",
-        "project map",
+        "map",
         "ctrl+l",
     ),
     (
@@ -625,6 +626,13 @@ const TABLE: &[Row] = &[
         "map.calls",
         "show or hide",
         "3",
+    ),
+    (
+        Action::MapReferences,
+        &[Context::Map],
+        "map.references",
+        "show or hide",
+        "4",
     ),
     (
         Action::SourceOpen,

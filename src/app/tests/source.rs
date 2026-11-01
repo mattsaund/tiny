@@ -635,16 +635,17 @@ fn the_angle_brackets_size_the_change_list_without_folding_it() {
 }
 
 #[test]
-fn a_project_that_is_not_a_repository_says_so_rather_than_looking_broken() {
+fn a_project_that_is_not_a_repository_simply_says_so() {
     let (_td, mut app) = fixture();
     app.on_key(ctrl('g'));
     assert_eq!(app.window, Window::Source);
 
     let out = joined(&mut app);
-    assert!(
-        out.to_lowercase().contains("not a git repository"),
-        "it says why there is nothing:\n{out}"
-    );
+    assert!(out.contains("no git repository"), "{out}");
+    for gone in ["fatal", ".git", "UNSTAGED", "before", "stage"] {
+        assert!(!out.contains(gone), "and nothing else, no {gone:?}:\n{out}");
+    }
+    assert_eq!(app.status, "no git repository");
 }
 
 /// Put the cursor on the commit button and press it.

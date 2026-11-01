@@ -22,7 +22,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use super::editor::draw_editor;
 use super::parts::{FORMAT_LIMIT, label, mark_query, pane};
 
-use crate::app::{App, Focus, Mode, PaneHit, Preview, TextHits, TextKind};
+use crate::app::{App, Focus, LinkHit, Mode, PaneHit, Preview, TextHits, TextKind, link_area};
 use crate::text::markdown;
 use crate::text::search::Matcher;
 use crate::text::tabs;
@@ -335,6 +335,20 @@ fn draw_reading(
     let height = inner.height as usize;
     app.last_edit_height = height;
 
+    // Where the links drawn are, for a click to follow: as the renderer drew
+    // them, or for a file shown as it is written, wherever its text has one.
+    let mut links: Vec<LinkHit> = Vec::new();
+    let mut link = |row: usize, cols: std::ops::Range<u16>, target: markdown::Target| {
+        if let Some(area) = link_area(inner.x, inner.y + row as u16, cols, inner.width) {
+            links.push(LinkHit {
+                area,
+                target,
+                from: path.to_path_buf(),
+                raw: false,
+            });
+        }
+    };
+
     // Past the ceiling, formatting the whole file on every frame is what would
     // make a keystroke slow, so the file is shown as itself and only the rows
     // on screen are built. One source line is one row, which is what makes the
@@ -349,7 +363,15 @@ fn draw_reading(
             .iter()
             .skip(scroll)
             .take(height)
-            .map(|l| {
+            .enumerate()
+            .map(|(row, l)| {
+                for (bytes, target) in markdown::links_in(l) {
+                    let col = |b: usize| {
+                        let at = tabs::column(l, l[..b].chars().count(), tab_width);
+                        at.min(u16::MAX as usize) as u16
+                    };
+                    link(row, col(bytes.start)..col(bytes.end), target);
+                }
                 let l = tabs::expand(l, tab_width, 0);
                 Line::from(Span::styled(clip_to(&l, width), pal.text))
             })
@@ -359,13 +381,21 @@ fn draw_reading(
         // Render from the buffer, not from disk, so unsaved edits show up the
         // moment you step back out of the editor.
         let source = ed.to_text();
-        let rows = match kind {
-            TextKind::Markdown => markdown::render(&source, width, &pal, &app.highlighter),
+        let (rows, spots) = match kind {
+            TextKind::Markdown => markdown::render_linked(&source, width, &pal, &app.highlighter),
             // Prose keeps the author's line structure and wraps what is long.
-            _ => markdown::render_plain(&source, width, &pal, tab_width),
+            _ => (
+                markdown::render_plain(&source, width, &pal, tab_width),
+                Vec::new(),
+            ),
         };
         app.preview_len = rows.len();
         let scroll = app.preview_scroll.min(rows.len().saturating_sub(height));
+        for spot in spots {
+            if (scroll..scroll + height).contains(&spot.line) {
+                link(spot.line - scroll, spot.cols, spot.target);
+            }
+        }
         (
             rows.into_iter()
                 .skip(scroll)
@@ -387,6 +417,7 @@ fn draw_reading(
         })
         .collect();
     f.render_widget(Paragraph::new(view).style(pal.text), inner);
+    app.last_links.extend(links);
 
     // Scroll position, on the bottom border so it never covers a line of text.
     // The guard decides whether to draw at all, so `checked_div` would not

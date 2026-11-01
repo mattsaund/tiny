@@ -44,6 +44,14 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
     run(dir, args, &[])
 }
 
+/// [`git`], with git's messages in English whatever language the system
+/// speaks: for a caller that reads a message to tell one failure from
+/// another, rather than showing it. git translates them, and a test for
+/// "not a git repository" would miss "Kein Git-Repository".
+pub fn git_in_english(dir: &Path, args: &[&str]) -> Result<String> {
+    run(dir, args, &[("LC_ALL", "C"), ("LANGUAGE", "")])
+}
+
 /// [`git`], with `env` set as well.
 fn run(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
     let out = Command::new("git")

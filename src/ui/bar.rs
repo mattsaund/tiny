@@ -187,11 +187,13 @@ fn hints(app: &App) -> String {
         (Mode::Settings(_) | Mode::Keybinds(_) | Mode::Help(_), _) => String::new(),
         (Mode::Bar(_), _) => format!("{} close", key(Action::Back)),
         (_, Window::Map) => format!(
-            "arrows move | {} open | 1-3 kinds | {} filter | {} back",
+            "arrows move | {} open | 1-4 kinds | {} filter | {} back",
             key(Action::Open),
             key(Action::Bar),
             key(Action::Back)
         ),
+        // With no repository there is nothing to stage or open.
+        (_, Window::Source) if app.git.error.is_some() => format!("{} back", key(Action::Back)),
         // What the arrows do in git depends on which half has them, and a
         // hint naming the other half's keys is worse than none.
         (_, Window::Source) => match app.git.focus {

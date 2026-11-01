@@ -88,6 +88,24 @@ pub struct GitHit {
     pub buttons: Vec<(u16, u16, usize)>,
 }
 
+/// A link as the last frame drew it: the cells it covered, where it goes,
+/// the file it is in, and whether it is in text being edited, where a plain
+/// click places the cursor and it takes Ctrl and a click to follow it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkHit {
+    pub area: Rect,
+    pub target: crate::text::markdown::Target,
+    pub from: std::path::PathBuf,
+    pub raw: bool,
+}
+
+/// The cells on screen row `y` between display columns `cols` of text drawn
+/// from `x`, as far as `width` lets them: where a link is, in a pane.
+pub fn link_area(x: u16, y: u16, cols: std::ops::Range<u16>, width: u16) -> Option<Rect> {
+    let end = cols.end.min(width);
+    (end > cols.start).then(|| Rect::new(x + cols.start, y, end - cols.start, 1))
+}
+
 /// A line where two parts of the window meet, which a drag moves, as the
 /// last frame drew it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,6 +305,16 @@ impl App {
             self.resizing = Some((d.clone(), grab));
             return;
         }
+        // A link, before what it is drawn on: a plain click follows one in
+        // text drawn formatted, and Ctrl and a click one in text being
+        // edited, where a plain click places the cursor.
+        if let Some(link) = self.last_links.iter().find(|l| l.area.contains(at))
+            && (!link.raw || mods.contains(KeyModifiers::CONTROL))
+        {
+            let link = link.clone();
+            self.follow(&link);
+            return;
+        }
         match self.window {
             Window::Map => self.press_map(at),
             Window::Source => self.press_git(at),
@@ -466,12 +494,12 @@ impl App {
         let Some(&(_, node)) = self.last_map_boxes.iter().find(|(r, _)| r.contains(at)) else {
             return;
         };
-        let Some(view) = self.project_map.as_mut() else {
+        let Some(view) = self.map.as_mut() else {
             return;
         };
         if view.selected != node {
             view.selected = node;
-            self.status = format!("project map: {}", view.summary());
+            self.status = format!("map: {}", view.summary());
             return;
         }
         if let Some(path) = view.selected_node().map(|n| n.path.clone()) {

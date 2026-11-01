@@ -82,6 +82,7 @@ const KEYS: &[KeyRow] = &[
     Heading("EDIT"),
     Fixed("shift+move", "select"),
     Fixed("click, drag", "place, select"),
+    Fixed("ctrl+click", "follow a link"),
     Fixed("tab", "finish a word"),
     Bound(&[Action::EditorSelectAll], "select all"),
     Bound(
@@ -121,7 +122,12 @@ const KEYS: &[KeyRow] = &[
     Merged(&[Action::SourceOpen, Action::MapNext], "edit, next file"),
     Bound(&[Action::Refresh], "refresh"),
     Merged(
-        &[Action::MapWikilinks, Action::MapLinks, Action::MapCalls],
+        &[
+            Action::MapWikilinks,
+            Action::MapLinks,
+            Action::MapCalls,
+            Action::MapReferences,
+        ],
         "link kinds",
     ),
 ];

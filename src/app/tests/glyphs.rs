@@ -113,7 +113,7 @@ fn every_screen(app: &mut App) -> Vec<(&'static str, String)> {
     app.on_key(k(KeyCode::Esc));
 
     app.on_key(ctrl('l'));
-    shot("the project map", app);
+    shot("the map", app);
     app.on_key(k(KeyCode::Esc));
 
     app.on_key(ctrl('g'));
@@ -190,7 +190,7 @@ fn with_ascii_glyphs_the_structure_is_still_drawn() {
         assert!(note.contains(glyph), "{what} ({glyph:?}):\n{note}");
     }
 
-    let map = frame("the project map");
+    let map = frame("the map");
     assert!(map.contains("..."), "a long name cut short:\n{map}");
     let git = frame("git");
     assert!(git.contains("old.md -> new.md"), "a rename:\n{git}");

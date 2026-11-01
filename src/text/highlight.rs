@@ -86,7 +86,7 @@ use ratatui::style::{Color, Modifier, Style};
 use syntect::highlighting::{
     FontStyle, HighlightIterator, HighlightState, Highlighter as SynHighlighter, Theme, ThemeSet,
 };
-use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
+use syntect::parsing::{ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxReference, SyntaxSet};
 
 /// A single highlighted run of text within a line.
 ///
@@ -724,6 +724,234 @@ impl Highlighter {
         let n = lines.len();
         self.highlight_window(&lines, syntax, 0, n)
     }
+}
+
+/// What a grammar says a word is, for the map and for `goto function`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// The name of something being defined: a function, a class, a type.
+    Defined,
+    /// The name of something being called, or a class being used.
+    Called,
+}
+
+/// One word a grammar gave a [`Role`], and where it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Named {
+    pub role: Role,
+    pub name: String,
+    /// Whether it was reached through something, `obj.load()` or
+    /// `helpers::load()`, rather than on its own.
+    pub qualified: bool,
+    /// Its line, and its column on it in characters.
+    pub line: usize,
+    pub col: usize,
+}
+
+/// The scopes the grammars name things with. Sublime's grammars, and the
+/// TextMate ones converted alongside them, mostly agree on these: a
+/// definition's name is `entity.name.function`, `entity.name.class` and their
+/// kind, and a call is `variable.function`, or in the TextMate ones an
+/// `entity.name.function` inside `meta.function-call`. A class used rather
+/// than defined is `support.class`, or `entity.other.inherited-class` after
+/// an `extends`.
+///
+/// Where a grammar marks no calls at all, as Kotlin's, Ruby's and Swift's do
+/// not, a plain word just before a `(` is one; a grammar always marks the
+/// keywords that come before one, `if (` and its kind, so they are not.
+struct Scopes {
+    defined: Vec<Scope>,
+    called: Vec<Scope>,
+    function: Scope,
+    in_call: Scope,
+    /// What a word with nothing more particular to say about it is in.
+    plain: Vec<Scope>,
+}
+
+static SCOPES: std::sync::LazyLock<Scopes> = std::sync::LazyLock::new(|| {
+    let all = |names: &[&str]| names.iter().filter_map(|n| Scope::new(n).ok()).collect();
+    Scopes {
+        defined: all(&[
+            "entity.name.function",
+            "entity.name.method",
+            "entity.name.class",
+            "entity.name.struct",
+            "entity.name.enum",
+            "entity.name.interface",
+            "entity.name.trait",
+            "entity.name.type",
+            "entity.name.union",
+            "entity.name.constructor",
+            // Swift's grammar says it its own way.
+            "entity.type.function",
+        ]),
+        called: all(&[
+            "variable.function",
+            "support.class",
+            "entity.other.inherited-class",
+        ]),
+        function: Scope::new("entity.name.function").expect("a scope"),
+        in_call: Scope::new("meta.function-call").expect("a scope"),
+        plain: all(&["meta", "variable.other", "source"]),
+    }
+});
+
+/// Formats with nothing in them to define or call: read for the files they
+/// name (see `map::scan`), never with their grammar.
+const NOTHING_TO_CALL: &[&str] = &[
+    "Plain Text",
+    "JSON",
+    "YAML",
+    "TOML",
+    "XML",
+    "HTML",
+    "CSS",
+    "SCSS",
+    "Sass",
+    "LESS",
+    "INI",
+    "CSV",
+    "TSV",
+    "Markdown",
+    "MultiMarkdown",
+    "reStructuredText",
+    "Git Ignore",
+    "Git Attributes",
+    "Diff",
+];
+
+impl Highlighter {
+    /// The grammar to read `path` with for what it defines and calls, when it
+    /// is in a language that has those at all: not plain text, and not a
+    /// format like JSON or HTML.
+    pub fn code_syntax(&self, path: &Path, first_line: &str) -> Option<&SyntaxReference> {
+        let syntax = self.syntax_for_path(path, first_line);
+        (!NOTHING_TO_CALL.contains(&syntax.name.as_str())).then_some(syntax)
+    }
+
+    /// Read `text` with `syntax`'s grammar, its first `most` lines, and hand
+    /// back every word it named as defined or called, in order.
+    ///
+    /// The same parse that colors the file, without the coloring: for every
+    /// language tiny has a grammar for, which is 213 of them, rather than the
+    /// few tree-sitter is compiled in for. A line too long to color is skipped
+    /// here too, and one the grammar will not parse ends the reading.
+    pub fn names(&self, syntax: &SyntaxReference, text: &str, most: usize) -> Vec<Named> {
+        let scopes = &*SCOPES;
+        let mut parse = ParseState::new(syntax);
+        let mut stack = ScopeStack::new();
+        let mut out = Vec::new();
+        let mut buf = String::new();
+        for (n, line) in text.lines().take(most).enumerate() {
+            if line.len() > MAX_HIGHLIGHT_LINE {
+                continue;
+            }
+            buf.clear();
+            buf.push_str(line);
+            buf.push('\n');
+            let Ok(ops) = parse.parse_line(&buf, &self.syntaxes) else {
+                break;
+            };
+            let mut from = 0;
+            for (at, op) in ops
+                .iter()
+                .map(|(at, op)| (*at, op))
+                .chain([(buf.len(), &ScopeStackOp::Noop)])
+            {
+                if at > from {
+                    names_in(scopes, &stack, &buf, from..at, n, &mut out);
+                    from = at;
+                }
+                // A grammar's ops may not balance; what is left is still the
+                // best idea of where the line is.
+                let _ = stack.apply(op);
+            }
+        }
+        out
+    }
+}
+
+/// The words in `span` of `line` that the scopes they sit in give a role.
+///
+/// A span is what the grammar scoped as one: a single name, when it said
+/// anything about it, or a run of text it said nothing about, which is where
+/// a call the grammar does not mark is looked for.
+fn names_in(
+    scopes: &Scopes,
+    stack: &ScopeStack,
+    line: &str,
+    span: std::ops::Range<usize>,
+    n: usize,
+    out: &mut Vec<Named>,
+) {
+    let all = stack.as_slice();
+    // A word's own scope is the innermost, or one in from it.
+    let own = &all[all.len().saturating_sub(2)..];
+    let has = |list: &[Scope]| own.iter().any(|s| list.iter().any(|p| p.is_prefix_of(*s)));
+    let plain = all
+        .last()
+        .is_none_or(|s| scopes.plain.iter().any(|p| p.is_prefix_of(*s)));
+    let in_call = all.iter().any(|s| scopes.in_call.is_prefix_of(*s));
+    let function = own.iter().any(|s| scopes.function.is_prefix_of(*s));
+    let text = &line[span.clone()];
+    // Every run of name characters in the span, found by character so that a
+    // wide one between two words cannot be cut in half.
+    let mut runs = Vec::new();
+    let mut began = None;
+    for (i, c) in text.char_indices().chain([(text.len(), ' ')]) {
+        match (is_name_char(c), began) {
+            (true, None) => began = Some(i),
+            (false, Some(b)) => {
+                runs.push(b..i);
+                began = None;
+            }
+            _ => {}
+        }
+    }
+    for run in runs {
+        let word = &text[run.clone()];
+        let start = span.start + run.start;
+        if word.starts_with(|c: char| c.is_ascii_digit()) {
+            continue;
+        }
+        let before = line[..start].trim_end();
+        let after = line[start + word.len()..].trim_start();
+        let opens = after.starts_with('(');
+        let role = if function && opens && in_expression(before) {
+            // A name being defined is not written in the middle of an
+            // expression: Dart's grammar marks its calls this way.
+            Role::Called
+        } else if in_call && function {
+            Role::Called
+        } else if has(&scopes.defined) {
+            Role::Defined
+        } else if has(&scopes.called) || (plain && opens) {
+            Role::Called
+        } else {
+            continue;
+        };
+        out.push(Named {
+            role,
+            name: word.to_string(),
+            qualified: before.ends_with('.')
+                || before.ends_with("::")
+                || before.ends_with("->")
+                || before.ends_with(':'),
+            line: n,
+            col: line[..start].chars().count(),
+        });
+    }
+}
+
+/// What a name in code is made of.
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '$'
+}
+
+/// Whether what comes before a name puts it in the middle of an expression,
+/// where only a call, not a definition, can be.
+fn in_expression(before: &str) -> bool {
+    before.ends_with(['(', '=', ',', '.', '!', '&', '|', '?', '+', '*', '['])
 }
 
 /// Where to start reading afresh for a window at `start`, too far below every

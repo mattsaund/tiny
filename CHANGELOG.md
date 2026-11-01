@@ -3,6 +3,23 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.6.4 - 2026-10-31
+
+- **The map reads any language.** It used to know the calls in Rust, Python
+  and JavaScript and nothing else. Now it finds them in C, C++, Go, Java,
+  C#, Ruby, PHP, Kotlin, Swift, Lua, shell and most other languages tiny
+  colors, and draws a fourth kind of link: a file that names another by its
+  path, as an include, an import, a stylesheet or a script does. `4` shows
+  or hides those. What `.gitignore` names is left out, and the map opens a
+  second time at once.
+- **It is called the map**, everywhere, rather than the project map.
+- **Links are clickable.** A click on a link in a note follows it: a web
+  address opens in your browser, and a link to a file, or a wikilink, opens
+  that file in tiny, at the heading it names. In text being edited, where a
+  click places the cursor, Ctrl and a click follows it.
+- **Outside a git repository**, the git window simply says "no git
+  repository".
+
 ## 0.6.3 - 2026-10-27
 
 - **Typing is many times quicker.** Each key used to color every line on

@@ -57,6 +57,30 @@ fn code_style(code: Code, pal: &Palette) -> Style {
 pub(super) fn draw_source(f: &mut Frame, app: &mut App, area: Rect) {
     let pal = app.palette;
 
+    // No repository, or no git: the window says so, in the middle of itself,
+    // and shows nothing else, there being nothing else to show.
+    if let Some(error) = &app.git.error {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_set(pal.glyphs.border)
+            .border_style(pal.border)
+            .title(Line::from(Span::styled(" SOURCE CONTROL ", pal.dim)));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        let [_, middle, _] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(inner);
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(error.clone(), pal.dim)))
+                .alignment(ratatui::layout::Alignment::Center),
+            middle,
+        );
+        return;
+    }
+
     // The map goes at the bottom and gives up its space first: on a short
     // window, what has changed matters more than what happened before.
     let graph_h = if area.height >= 20 && !app.git.graph.is_empty() {
@@ -145,17 +169,6 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
             Span::styled(after, pal.dim),
         ]));
     let inner = block.inner(area);
-
-    if let Some(error) = &git.error {
-        let lines = vec![
-            Line::from(Span::styled(format!("  {error}"), pal.marker)),
-            Line::from(""),
-            Line::from(Span::styled("  Esc back to the browser", pal.dim)),
-        ];
-        f.render_widget(block, area);
-        f.render_widget(Paragraph::new(lines), inner);
-        return;
-    }
 
     let mut lines: Vec<Line> = Vec::new();
     // Which row each line is of, and where its buttons are, for the mouse.

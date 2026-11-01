@@ -929,13 +929,13 @@ fn esc_leaves_a_window_for_the_main_one() {
 fn the_map_is_rebuilt_every_time_it_is_switched_to() {
     let (td, mut app) = fixture();
     open_map(&mut app);
-    let before = app.project_map.as_ref().expect("built").graph.nodes.len();
+    let before = app.map.as_ref().expect("built").graph.nodes.len();
 
     app.on_key(k(KeyCode::Esc));
     fs::write(td.path().join("late.md"), "# late\n").unwrap();
     open_map(&mut app);
 
-    let after = app.project_map.as_ref().expect("built").graph.nodes.len();
+    let after = app.map.as_ref().expect("built").graph.nodes.len();
     assert_eq!(after, before + 1, "the new file is on the map");
 }
 
