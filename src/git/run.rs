@@ -8,7 +8,7 @@
 //!
 //! Talking to a remote is neither. A push over a slow link is seconds at best,
 //! and a synchronous one would freeze the window with no way to say what it was
-//! doing: the worst possible moment to look broken. [`Job::start`] runs those
+//! doing: the worst possible moment to look broken. [`Job::start_programs`] runs those
 //! on a thread and hands back a receiver; the event loop already wakes twice a
 //! second for the disk watcher, and it collects finished jobs on the same tick.
 //!
@@ -28,6 +28,10 @@
 //! ssh runs in batch mode (unless you have set your own ssh command). Anything
 //! that needed asking fails instead, with git's own message: set up a
 //! credential helper or an ssh agent, and the buttons work.
+//!
+//! The one other program run here is GitHub's `gh`, by `*publish`, to make a
+//! repository on GitHub; it gets the same treatment, and with every question
+//! it could ask answered on its command line, it asks none.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -52,9 +56,40 @@ pub fn git_in_english(dir: &Path, args: &[&str]) -> Result<String> {
     run(dir, args, &[("LC_ALL", "C"), ("LANGUAGE", "")])
 }
 
+/// Whether `program` is on the PATH, to be run by name.
+pub fn on_path(program: &str) -> bool {
+    let names = [program.to_string(), format!("{program}.exe")];
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| names.iter().any(|n| dir.join(n).is_file()))
+    })
+}
+
 /// [`git`], with `env` set as well.
 fn run(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
-    let out = Command::new("git")
+    run_program("git", dir, args, env)
+}
+
+/// `program`, the way [`git`] is run.
+fn run_program(program: &str, dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
+    run_both(program, dir, args, env).map(|(out, _)| out)
+}
+
+/// What a step of a job said: what it wrote out, or with nothing there,
+/// what it wrote to its errors, which is where git says what a push or a
+/// clone did.
+fn run_said(program: &str, dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
+    run_both(program, dir, args, env)
+        .map(|(out, err)| if out.trim().is_empty() { err } else { out })
+}
+
+/// `program`, and both of what it wrote when it worked.
+fn run_both(
+    program: &str,
+    dir: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<(String, String)> {
+    let out = Command::new(program)
         .current_dir(dir)
         .stdin(Stdio::null())
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -63,8 +98,8 @@ fn run(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
         .args(args)
         .output()
         .with_context(|| match args.first() {
-            Some(a) => format!("cannot run git {a}"),
-            None => "cannot run git".to_string(),
+            Some(a) => format!("cannot run {program} {a}"),
+            None => format!("cannot run {program}"),
         })?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -72,13 +107,16 @@ fn run(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
         return Err(anyhow!(
             "{}",
             if message.is_empty() {
-                format!("git {} failed", args.first().unwrap_or(&""))
+                format!("{program} {} failed", args.first().unwrap_or(&""))
             } else {
                 message.to_string()
             }
         ));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok((
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
 }
 
 /// A git command running somewhere else, with its answer still to come.
@@ -100,19 +138,16 @@ impl std::fmt::Debug for Job {
 
 impl Job {
     /// Start each of `steps` in turn in `dir`, on a thread, and return at
-    /// once. A step that fails stops the ones after it, and what the last one
-    /// to run said is the answer.
+    /// once. Each step names its program first: `git`, or `gh` for GitHub.
+    /// A step that fails stops the ones after it, and what the last one to
+    /// run said is the answer.
     ///
     /// The thread is detached deliberately: if tiny exits while a push is in
     /// flight, the push is already git's business and killing it half way
     /// through would be worse than letting it finish.
-    pub fn start(dir: &Path, what: &str, steps: &[&[&str]]) -> Self {
+    pub fn start_programs(dir: &Path, what: &str, steps: Vec<Vec<String>>) -> Self {
         let (tx, done) = channel();
         let dir: PathBuf = dir.to_path_buf();
-        let steps: Vec<Vec<String>> = steps
-            .iter()
-            .map(|args| args.iter().map(|a| a.to_string()).collect())
-            .collect();
         std::thread::spawn(move || {
             // Batch mode, so ssh fails rather than asking for a passphrase or
             // about an unknown host on the terminal tiny is drawing on; but
@@ -125,9 +160,12 @@ impl Job {
                 &[]
             };
             let mut result = Ok(String::new());
-            for args in &steps {
+            for step in &steps {
+                let Some((program, args)) = step.split_first() else {
+                    continue;
+                };
                 let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
-                result = run(&dir, &borrowed, env).map_err(|e| format!("{e:#}"));
+                result = run_said(program, &dir, &borrowed, env).map_err(|e| format!("{e:#}"));
                 if result.is_err() {
                     break;
                 }
@@ -174,7 +212,11 @@ mod tests {
     #[test]
     fn a_job_that_finishes_reports_what_it_did() {
         let td = tempfile::tempdir().unwrap();
-        let job = Job::start(td.path(), "asking", &[&["--version"]]);
+        let job = Job::start_programs(
+            td.path(),
+            "asking",
+            vec![vec!["git".into(), "--version".into()]],
+        );
         // Give the thread a moment; this is the one place a test waits.
         let mut answer = None;
         for _ in 0..200 {

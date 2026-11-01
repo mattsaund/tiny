@@ -33,8 +33,10 @@
 //! | [`split`] | the panes, side by side and stacked |
 //! | [`term`] | the terminal under the panes |
 //! | [`mouse`] | the wheel, a click and a drag |
+//! | [`navigate`] | picking a window with the arrows, and going in |
 //! | [`source`] | the git window: what has changed, and what to do about it |
 //! | [`watch`] | noticing files another program changed |
+//! | [`marks`] | the browser's colors, from what git says about each file |
 //! | [`update`] | asking whether to install a newer tiny |
 //! | [`plugins`] | what plugins are shown, and doing what they ask |
 //!
@@ -48,7 +50,10 @@
 //! Almost every question about "why did that key do that" is answered by two
 //! independent pieces of state:
 //!
-//! - [`Focus`]: which pane the keyboard belongs to, `Tree` or `Editor`.
+//! - [`Focus`]: which part of the window is picked, `Tree`, `Editor` or
+//!   `Terminal`, and `entered`: whether the keyboard is in it (a green
+//!   outline) or the arrows are picking a part (a white one), see
+//!   [`navigate`].
 //! - [`Mode`]: what, if anything, is layered on top: a confirmation, the
 //!   search or command bar, the settings area, the keybinds window, the help
 //!   overlay, or `Normal` for none of them.
@@ -56,7 +61,7 @@
 //! [`App::handle_key`] asks three things in order. Is it a key that switches
 //! windows? Those work from everywhere. Is an overlay up? Then the overlay
 //! has it. Otherwise the window on screen does, and in the main window that
-//! means whichever pane `Focus` names.
+//! means the arrows picking a part, or the part that was gone into.
 //!
 //! # `i j k l` are the arrow keys
 //!
@@ -128,13 +133,16 @@ mod fileops;
 mod follow;
 mod input;
 mod macros;
+mod marks;
 mod mode;
 mod mouse;
+mod navigate;
 mod parts;
 mod plan;
 mod plugins;
 mod preview;
 mod prompt;
+mod publish;
 mod sentence;
 mod settings;
 mod source;
@@ -150,7 +158,7 @@ pub use self::mode::{
 };
 pub use self::mouse::{Divider, GitHit, LinkHit, Moves, PaneHit, TextHits, link_area};
 pub use self::preview::{Preview, TextKind};
-pub use self::source::{BUTTONS as GIT_BUTTONS, GitFocus, GitPane, Row as GitRow};
+pub use self::source::{Button as GitButton, GitFocus, GitPane, Row as GitRow};
 pub use self::split::{MIN_PANE_HEIGHT, MIN_PANE_WIDTH, Split};
 use self::watch::Watch;
 
@@ -186,6 +194,9 @@ pub struct App {
     /// is known.
     pub tree_scroll: usize,
     pub focus: Focus,
+    /// Whether the keyboard is in the part `focus` names, rather than the
+    /// arrows picking which part that is, see [`navigate`].
+    pub entered: bool,
     pub mode: Mode,
     /// What the right pane is showing for the current selection. Derived from
     /// the cursor by [`App::sync_preview`]; never set directly.
@@ -312,9 +323,10 @@ pub struct App {
     /// drawing, like the highlighting; emptied when a setting changes how
     /// anything is drawn.
     pub block_rows: std::cell::RefCell<HashMap<u64, crate::text::markdown::Rendered>>,
-    /// Which pane had the keyboard when the tree was folded away, so unfolding
-    /// puts it back and the key is a true toggle.
-    focus_before_hide: Focus,
+    /// Which pane had the keyboard when the tree was folded away, and whether
+    /// it was gone into, so unfolding puts it back and the key is a true
+    /// toggle.
+    focus_before_hide: (Focus, bool),
     /// The message on the status line. Every action sets this; it is the
     /// program's only channel for telling the user what just happened.
     pub status: String,
@@ -341,9 +353,9 @@ pub struct App {
     pub last_pinned: Vec<(usize, ratatui::layout::Rect)>,
     /// The shell in the terminal pane, while there is one. See [`term`].
     pub term: Option<crate::shell::Shell>,
-    /// Where the keyboard was before the terminal took it, so the key that
-    /// leaves can give it back.
-    focus_before_term: Focus,
+    /// Where the keyboard was before the terminal took it, and whether it
+    /// was in that part, so the key that leaves can give it back.
+    focus_before_term: (Focus, bool),
     /// Where the terminal was in the last frame, so the wheel can scroll it,
     /// and where its screen was inside the border, for a program in it that
     /// wants the mouse.
@@ -376,6 +388,9 @@ pub struct App {
     /// What the files and folders on screen looked like at the last scan,
     /// see [`watch`]. Nothing outside that module reads it.
     watch: Watch,
+    /// What git says about each file, for the browser's colors, see
+    /// [`marks`].
+    pub coloring: marks::Coloring,
 }
 
 /// The palette `config` draws with in a terminal that can show what `host`
@@ -420,6 +435,9 @@ impl App {
             selected: 0,
             tree_scroll: 0,
             focus: Focus::Tree,
+            // In the browser to begin with: the arrows move through the
+            // files, and Esc steps out to pick another part.
+            entered: true,
             mode: Mode::Normal,
             preview: Preview::Empty,
             preview_scroll: 0,
@@ -459,7 +477,7 @@ impl App {
             in_plugin_event: false,
             config_path: None,
             block_rows: Default::default(),
-            focus_before_hide: Focus::Tree,
+            focus_before_hide: (Focus::Tree, true),
             status: warning
                 .or(keys_warning)
                 .or(theme_warning)
@@ -474,7 +492,7 @@ impl App {
             last_live_area: ratatui::layout::Rect::new(0, 0, 1000, 1000),
             last_pinned: Vec::new(),
             term: None,
-            focus_before_term: Focus::Tree,
+            focus_before_term: (Focus::Tree, true),
             last_term_area: None,
             last_term_inner: None,
             last_panes: Vec::new(),
@@ -490,6 +508,7 @@ impl App {
             term_share: 0.4,
             diff_share: 0.5,
             watch: Watch::default(),
+            coloring: marks::Coloring::default(),
         };
         app.note_dirs();
         app.sync_preview();
@@ -628,6 +647,8 @@ impl App {
             // invalidation scheme would be simpler than building it again.
             Window::Map => self.open_map(),
             Window::Source => {
+                // In the list, ready to stage: the window is opened to be used.
+                self.git.entered = true;
                 self.refresh_git();
                 self.status = match &self.git.error {
                     Some(e) => e.clone(),

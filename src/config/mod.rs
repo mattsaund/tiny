@@ -312,7 +312,8 @@ impl Config {
             ("theme.text", ""),
             ("theme.dim", ""),
             ("theme.border", ""),
-            ("theme.border_focus", ""),
+            ("theme.border_focus", "the part the arrows picked"),
+            ("theme.border_entered", "the part the keyboard is in"),
             ("theme.selection", ""),
             ("theme.directory", ""),
             ("theme.heading", ""),
@@ -321,6 +322,10 @@ impl Config {
             ("theme.marker", "unsaved, and warnings"),
             ("theme.map_in", "map: what reaches it"),
             ("theme.map_out", "map: what it reaches"),
+            ("theme.git_modified", "browser: changed since the commit"),
+            ("theme.git_added", "browser: new"),
+            ("theme.git_ignored", "browser: left out by .gitignore"),
+            ("theme.git_conflict", "browser: a merge conflict"),
         ]
     }
 
@@ -368,6 +373,7 @@ impl Config {
             "theme.dim" => self.theme.dim.clone(),
             "theme.border" => self.theme.border.clone(),
             "theme.border_focus" => self.theme.border_focus.clone(),
+            "theme.border_entered" => self.theme.border_entered.clone(),
             "theme.selection" => self.theme.selection.clone(),
             "theme.directory" => self.theme.directory.clone(),
             "theme.heading" => self.theme.heading.clone(),
@@ -376,6 +382,10 @@ impl Config {
             "theme.marker" => self.theme.marker.clone(),
             "theme.map_in" => self.theme.map_in.clone(),
             "theme.map_out" => self.theme.map_out.clone(),
+            "theme.git_modified" => self.theme.git_modified.clone(),
+            "theme.git_added" => self.theme.git_added.clone(),
+            "theme.git_ignored" => self.theme.git_ignored.clone(),
+            "theme.git_conflict" => self.theme.git_conflict.clone(),
             _ => return None,
         })
     }
@@ -435,6 +445,7 @@ impl Config {
             "theme.dim" => self.theme.dim = v.to_string(),
             "theme.border" => self.theme.border = v.to_string(),
             "theme.border_focus" => self.theme.border_focus = v.to_string(),
+            "theme.border_entered" => self.theme.border_entered = v.to_string(),
             "theme.selection" => self.theme.selection = v.to_string(),
             "theme.directory" => self.theme.directory = v.to_string(),
             "theme.heading" => self.theme.heading = v.to_string(),
@@ -443,6 +454,10 @@ impl Config {
             "theme.marker" => self.theme.marker = v.to_string(),
             "theme.map_in" => self.theme.map_in = v.to_string(),
             "theme.map_out" => self.theme.map_out = v.to_string(),
+            "theme.git_modified" => self.theme.git_modified = v.to_string(),
+            "theme.git_added" => self.theme.git_added = v.to_string(),
+            "theme.git_ignored" => self.theme.git_ignored = v.to_string(),
+            "theme.git_conflict" => self.theme.git_conflict = v.to_string(),
             _ => return Err(anyhow!("unknown setting `{key}`")),
         }
         *self = std::mem::take(self).sanitized();

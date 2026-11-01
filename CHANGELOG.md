@@ -3,6 +3,31 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.6.5 - 2026-11-01
+
+- **Pick a part, then go in.** Esc steps out of the browser, a file or the
+  terminal, and the arrows pick another part, outlined in white; Enter goes
+  into it, and the outline turns green. Esc no longer quits; `Ctrl+Q` does.
+  A click goes straight into the part it lands on, and the wheel scrolls
+  whatever it is over. While picking, `/` searches and the new `*` starts a
+  command, whatever is picked. The git window's list and diff work the same
+  way, and both outline colors are settings: `theme.border_focus` and
+  `theme.border_entered`.
+- **Git in the browser.** In a repository, a file changed since the last
+  commit is yellow, a new one green, one `.gitignore` leaves out gray, and a
+  conflict red. A folder takes the color of what is inside it. These are
+  settings too.
+- **Initialize, publish, clone.** A project with no repository gets three
+  buttons in the git window. Initialize makes it one. Publish makes it one if
+  it is not, commits everything as the first commit, and pushes it: to a new
+  private GitHub repository, made with `gh` (`*publish public` for a public
+  one), or to any address typed after it. Clone brings a repository into the
+  project, or into a folder of its own if the project has files. A branch
+  with nowhere to push to yet gets a publish button too. `*init`,
+  `*publish` and `*clone` do the same from the bar.
+- In the terminal, Esc at the shell's prompt steps out, like everywhere
+  else; a program that takes the whole screen still gets it.
+
 ## 0.6.4 - 2026-10-31
 
 - **The map reads any language.** It used to know the calls in Rust, Python

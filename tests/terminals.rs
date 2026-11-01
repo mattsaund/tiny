@@ -527,6 +527,26 @@ fn a_click_on_a_link_opens_the_note_it_names() {
 }
 
 #[test]
+fn esc_steps_out_to_pick_a_part_and_never_quits() {
+    let mut tiny = Tiny::start("xterm-256color", 100, 30);
+    tiny.wait_for("README.md");
+    while tiny.on() != "README.md" {
+        tiny.move_off("\x1b[B");
+    }
+    // Out of the browser, to pick: it says so, and a second Esc is no exit.
+    tiny.send("\x1b");
+    tiny.wait_for("arrows pick");
+    tiny.send("\x1b");
+    tiny.wait_for("quits");
+    // Right picks the pane beside, and Enter goes into the file there.
+    tiny.send("\x1b[C");
+    tiny.wait_until("the pane picked", |t| t.text().contains("VIEW"));
+    tiny.send("\r");
+    tiny.wait_for("EDIT");
+    tiny.quit();
+}
+
+#[test]
 fn outside_a_repository_the_git_window_says_so() {
     let mut tiny = Tiny::start("xterm-256color", 100, 30);
     tiny.wait_for("README.md");

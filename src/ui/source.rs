@@ -23,9 +23,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use super::parts::highlight_row;
+use super::parts::{Outline, highlight_row};
 
-use crate::app::{App, Divider, GIT_BUTTONS, GitFocus, GitHit, GitRow, Moves};
+use crate::app::{App, Divider, GitButton, GitFocus, GitHit, GitRow, Moves};
 use crate::config::Palette;
 use crate::config::keys::Action;
 use crate::git::{Code, DiffLine, LineKind};
@@ -58,18 +58,27 @@ pub(super) fn draw_source(f: &mut Frame, app: &mut App, area: Rect) {
     let pal = app.palette;
 
     // No repository, or no git: the window says so, in the middle of itself,
-    // and shows nothing else, there being nothing else to show.
+    // with what can be done about it under that: make one, publish the
+    // project, or clone one into it.
     if let Some(error) = &app.git.error {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_set(pal.glyphs.border)
-            .border_style(pal.border)
-            .title(Line::from(Span::styled(" SOURCE CONTROL ", pal.dim)));
+            .border_style(pal.border_entered)
+            .title(Line::from(Span::styled(
+                " SOURCE CONTROL ",
+                pal.text.add_modifier(Modifier::BOLD),
+            )));
         let inner = block.inner(area);
         f.render_widget(block, area);
-        let [_, middle, _] = Layout::vertical([
+        let buttons = app.git.buttons();
+        let [_, middle, _, row, _, about, _] = Layout::vertical([
             Constraint::Fill(1),
             Constraint::Length(1),
+            Constraint::Length(u16::from(!buttons.is_empty())),
+            Constraint::Length(u16::from(!buttons.is_empty())),
+            Constraint::Length(u16::from(!buttons.is_empty())),
+            Constraint::Length(u16::from(!buttons.is_empty())),
             Constraint::Fill(1),
         ])
         .areas(inner);
@@ -77,6 +86,40 @@ pub(super) fn draw_source(f: &mut Frame, app: &mut App, area: Rect) {
             Paragraph::new(Line::from(Span::styled(error.clone(), pal.dim)))
                 .alignment(ratatui::layout::Alignment::Center),
             middle,
+        );
+        if let Some((line, spots)) = button_lines(&buttons, app.git.button, true, u16::MAX, &pal)
+            .into_iter()
+            .next()
+        {
+            let width = line.width() as u16;
+            let x = row.x + row.width.saturating_sub(width) / 2;
+            f.render_widget(
+                Paragraph::new(line),
+                Rect {
+                    x,
+                    width: width.min(row.width),
+                    ..row
+                },
+            );
+            app.git.list_cols = Some((row.x, row.right()));
+            app.git.list_hits.push(GitHit {
+                y: row.y,
+                row: 0,
+                buttons: spots.iter().map(|&(a, b, i)| (x + a, x + b, i)).collect(),
+            });
+        }
+        let what = match buttons.get(app.git.button) {
+            Some(GitButton::Init) => "make this folder a git repository",
+            Some(GitButton::Publish) => {
+                "make it one, commit it, and put it on GitHub or anywhere else"
+            }
+            Some(GitButton::Clone) => "bring a repository here, from GitHub or anywhere else",
+            _ => "",
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(what, pal.dim)))
+                .alignment(ratatui::layout::Alignment::Center),
+            about,
         );
         return;
     }
@@ -142,7 +185,9 @@ pub(super) fn draw_source(f: &mut Frame, app: &mut App, area: Rect) {
 /// row wraps to as many lines as the width needs.
 fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let git = &app.git;
-    let focused = git.focus == GitFocus::List;
+    let outline = Outline::of(git.focus == GitFocus::List, git.entered);
+    // The cursor's row is reversed only with the keyboard in the list.
+    let focused = outline == Outline::Entered;
     let after = match (&git.error, &git.job) {
         (Some(_), _) => String::new(),
         (_, Some(job)) => format!(" {}{} ", job.what, pal.glyphs.ellipsis),
@@ -151,21 +196,10 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(pal.glyphs.border)
-        .border_style(if focused {
-            pal.border_focus
-        } else {
-            pal.border
-        })
+        .border_style(outline.style(pal))
         .title(Line::from(vec![
             Span::raw(" "),
-            Span::styled(
-                "SOURCE CONTROL",
-                if focused {
-                    pal.text.add_modifier(Modifier::BOLD)
-                } else {
-                    pal.dim
-                },
-            ),
+            Span::styled("SOURCE CONTROL", outline.title(pal)),
             Span::styled(after, pal.dim),
         ]));
     let inner = block.inner(area);
@@ -180,7 +214,10 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
         let first = lines.len();
         match row {
             GitRow::Buttons => {
-                for (line, buttons) in button_lines(git.button, on && focused, inner.width, pal) {
+                let all = git.buttons();
+                for (line, buttons) in
+                    button_lines(&all, git.button, on && focused, inner.width, pal)
+                {
                     lines.push(line);
                     line_rows.push((i, buttons));
                 }
@@ -283,6 +320,7 @@ type Spots = Vec<(u16, u16, usize)>;
 /// far as the cursor is concerned, and left and right walk them however many
 /// lines they take to show.
 fn button_lines(
+    buttons: &[GitButton],
     selected: usize,
     on_row: bool,
     width: u16,
@@ -292,7 +330,7 @@ fn button_lines(
     let mut spans: Vec<Span> = Vec::new();
     let mut at: Spots = Vec::new();
     let mut used = 0usize;
-    for (i, button) in GIT_BUTTONS.iter().enumerate() {
+    for (i, button) in buttons.iter().enumerate() {
         let label = format!(" {} ", button.label());
         let w = label.chars().count() + 1;
         if used + w > width as usize && !spans.is_empty() {
@@ -389,12 +427,8 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
             format!(" {side}:{name}")
         };
         // The border says which half the arrow keys are in, the same way the
-        // two panes of the main window do.
-        let border = if git.focus == GitFocus::Diff {
-            pal.border_focus
-        } else {
-            pal.border
-        };
+        // parts of the main window do.
+        let border = Outline::of(git.focus == GitFocus::Diff, git.entered).style(pal);
         let block = Block::default()
             .borders(Borders::ALL)
             .border_set(pal.glyphs.border)
@@ -556,7 +590,8 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     // Put down with Esc, the box stays on screen with its text, and says how
     // to send it or go on with it, the way the list says it does not have
     // the keyboard: a dim border, a dim title, and no cursor.
-    let focused = app.git.focus == GitFocus::Message;
+    let outline = Outline::of(app.git.focus == GitFocus::Message, app.git.entered);
+    let focused = outline == Outline::Entered;
     let footer = if focused {
         format!(
             " {} commits | {} puts it down ",
@@ -566,7 +601,7 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     } else {
         format!(
             " the commit button sends it | {} to write more ",
-            app.key_name(Action::Right)
+            app.key_name(Action::Open)
         )
     };
     let Some(editor) = app.git.message.as_mut() else {
@@ -576,15 +611,11 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(pal.glyphs.border)
-        .border_style(if focused {
-            pal.border_focus
-        } else {
-            pal.border
-        })
+        .border_style(outline.style(pal))
         .title(Line::from(vec![
             Span::styled(
                 " commit message ",
-                if focused {
+                if outline != Outline::Plain {
                     pal.text.add_modifier(Modifier::BOLD)
                 } else {
                     pal.dim

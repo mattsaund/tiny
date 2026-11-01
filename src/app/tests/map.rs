@@ -258,8 +258,10 @@ fn the_two_directions_can_be_recolored_from_the_config() {
     let hex = drawn_in(&mut app, Color::Rgb(0x00, 0xcc, 0xff));
     assert!(hex.contains("main.py"), "the incoming color took:\n{hex}");
     assert!(
-        drawn_in(&mut app, Color::Green).trim().is_empty(),
-        "and the shipped green is gone"
+        !drawn_in(&mut app, Color::Green)
+            .chars()
+            .any(char::is_alphanumeric),
+        "and the shipped green is gone from the files, if not the outline"
     );
 
     cursor_on(&mut app, "main.py");

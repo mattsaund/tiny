@@ -30,6 +30,43 @@ use crate::app::App;
 use crate::config::Palette;
 use crate::text::search::Matcher;
 
+/// How a part of the window is outlined: not picked, picked by the arrows
+/// (white), or gone into, with the keyboard in it (green). See
+/// `app::navigate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Outline {
+    Plain,
+    Picked,
+    Entered,
+}
+
+impl Outline {
+    /// The outline of a part that is `picked`, and with `entered`, gone into.
+    pub(super) fn of(picked: bool, entered: bool) -> Self {
+        match (picked, entered) {
+            (false, _) => Outline::Plain,
+            (true, false) => Outline::Picked,
+            (true, true) => Outline::Entered,
+        }
+    }
+
+    pub(super) fn style(self, pal: &Palette) -> Style {
+        match self {
+            Outline::Plain => pal.border,
+            Outline::Picked => pal.border_focus,
+            Outline::Entered => pal.border_entered,
+        }
+    }
+
+    /// A title in bold, or dim: bold for a part that is picked or in.
+    pub(super) fn title(self, pal: &Palette) -> Style {
+        match self {
+            Outline::Plain => pal.dim,
+            _ => pal.text.add_modifier(Modifier::BOLD),
+        }
+    }
+}
+
 /// A pane frame. With borders off, the title is drawn on its own line and the
 /// box is dropped entirely: a quieter screen for people who want one.
 ///
@@ -43,15 +80,11 @@ pub(super) fn pane<'a>(
     f: &mut Frame,
     area: Rect,
     title: Vec<Span<'a>>,
-    focused: bool,
+    outline: Outline,
     app: &App,
 ) -> Rect {
     let pal = app.palette;
-    let style = if focused {
-        pal.border_focus
-    } else {
-        pal.border
-    };
+    let style = outline.style(&pal);
     if !app.config.borders {
         if area.height == 0 {
             return area;
@@ -92,15 +125,37 @@ pub(super) fn pane<'a>(
 /// An unfocused pane still shows its cursor, dimmed, so you can see where you
 /// will land when focus comes back.
 pub(super) fn highlight_row(spans: &mut Vec<Span>, width: usize, pal: Palette, focused: bool) {
+    highlight_row_in(spans, width, pal, focused, None);
+}
+
+/// [`highlight_row`], for a row whose name has a color of its own (the
+/// browser's, from git): the cursor's bar is drawn in it, so the color is
+/// still there on the row the cursor is on.
+pub(super) fn highlight_row_in(
+    spans: &mut Vec<Span>,
+    width: usize,
+    pal: Palette,
+    focused: bool,
+    tint: Option<Style>,
+) {
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
     if used < width {
         spans.push(Span::raw(" ".repeat(width - used)));
     }
     let style = if focused {
-        pal.text.patch(pal.selection)
+        pal.text
+            .patch(tint.unwrap_or_default())
+            .patch(pal.selection)
+    } else if pal.colors == crate::config::Colors::None {
+        // No bar to draw with: quiet, and underlined, so it is not taken for
+        // a name gone faint for another reason.
+        pal.text.patch(pal.dim).add_modifier(Modifier::UNDERLINED)
     } else {
-        // An unfocused pane still shows where the cursor is, but quietly.
-        pal.text.patch(pal.dim)
+        // An unfocused pane still shows where the cursor is, but quietly: the
+        // row in its own colors on a dim bar. Dim text alone would read as
+        // the gray of a file git ignores.
+        let bar = pal.dim.fg.unwrap_or(ratatui::style::Color::DarkGray);
+        pal.text.patch(tint.unwrap_or_default()).bg(bar)
     };
     for s in spans.iter_mut() {
         *s = Span::styled(s.content.clone(), style);

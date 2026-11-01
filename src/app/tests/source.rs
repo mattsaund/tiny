@@ -7,6 +7,7 @@
 //! before-and-after columns show the file as it was and as it is.
 
 use super::*;
+use crate::git::Mark;
 
 /// A repository with one commit, one modified file and one untracked one.
 ///
@@ -52,6 +53,53 @@ fn repo() -> (tempfile::TempDir, App) {
 
     let app = App::new(target(at, None), Config::default(), None).unwrap();
     (td, app)
+}
+
+#[test]
+fn the_browser_colors_each_name_by_what_git_says_about_it() {
+    let (td, mut app) = repo();
+    fs::create_dir_all(td.path().join("build")).unwrap();
+    fs::write(td.path().join("build/out.o"), "x").unwrap();
+    fs::write(td.path().join(".gitignore"), "build/\n").unwrap();
+    command(&mut app, "reload");
+    app.wait_for_colors();
+    let mark = |app: &App, name: &str| {
+        let row = app.rows.iter().find(|r| r.name == name).expect(name);
+        app.coloring.marks.of(&row.path, row.is_dir)
+    };
+    assert_eq!(mark(&app, "README.md"), Some(Mark::Modified));
+    assert_eq!(mark(&app, "scratch.txt"), Some(Mark::Added));
+    assert_eq!(mark(&app, "build"), Some(Mark::Ignored));
+    assert_eq!(mark(&app, "src"), None, "nothing changed in there");
+
+    // Drawn in those colors, away from the cursor's row.
+    select(&mut app, "src");
+    let mut t = Terminal::new(TestBackend::new(90, 20)).unwrap();
+    t.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+    let buf = t.backend().buffer().clone();
+    let color_of = |name: &str| {
+        (0..buf.area.height).find_map(|y| {
+            let row: String = (0..30).map(|x| buf[(x, y)].symbol().to_string()).collect();
+            row.find(name)
+                .map(|i| buf[(row[..i].chars().count() as u16, y)].fg)
+        })
+    };
+    assert_eq!(color_of("README.md"), Some(Color::Yellow));
+    assert_eq!(color_of("scratch.txt"), Some(Color::Green));
+    assert_eq!(color_of("build"), Some(Color::DarkGray));
+
+    // And again once the change is committed, git's index having moved.
+    std::process::Command::new("git")
+        .current_dir(td.path())
+        .args(["commit", "--quiet", "-am", "second"])
+        .output()
+        .unwrap();
+    app.wait_for_colors();
+    assert_eq!(
+        mark(&app, "README.md"),
+        None,
+        "committed, so nothing to say"
+    );
 }
 
 /// Switch to the source window the way `Ctrl+G` does.
@@ -653,7 +701,7 @@ fn press_commit(app: &mut App) {
     for _ in 0..10 {
         app.on_key(k(KeyCode::Up));
     }
-    for _ in 0..GIT_BUTTONS.len() {
+    for _ in 0..app.git.buttons().len() {
         app.on_key(k(KeyCode::Right));
     }
     app.on_key(k(KeyCode::Enter));
@@ -714,8 +762,10 @@ fn the_message_box_types_and_the_button_sends_it() {
     // Esc puts the box down without losing a word of it, and the button sends
     // it, which is the two-press shape the window promises.
     app.on_key(k(KeyCode::Esc));
-    assert_eq!(app.git.focus, GitFocus::List);
+    assert!(!app.git.entered, "put down");
     assert!(app.git.message.is_some(), "the message is kept");
+    app.on_key(k(KeyCode::Left));
+    app.on_key(k(KeyCode::Enter));
     press_commit(&mut app);
 
     assert!(
@@ -869,10 +919,48 @@ fn home_and_end_reach_both_ends_of_the_change_list() {
     app.on_key(k(KeyCode::Home));
     assert_eq!(app.git.selected, 0, "the buttons");
     let (rows, _) = change_list(&mut app, 100, 24);
+    let first = app.git.buttons()[0].label();
     assert!(
-        rows.iter().any(|r| r.contains("fetch")),
-        "{}",
+        rows.iter().any(|r| r.contains(first)),
+        "{first}:\n{}",
         rows.join("\n")
+    );
+}
+
+#[test]
+fn esc_steps_out_of_a_half_and_then_out_of_the_window() {
+    let (_td, mut app) = repo();
+    source(&mut app);
+    assert!(app.git.entered, "the window opens in the list");
+    app.on_key(k(KeyCode::Esc));
+    assert_eq!(
+        app.window,
+        Window::Source,
+        "out of the half, not the window"
+    );
+    assert!(!app.git.entered);
+    app.on_key(k(KeyCode::Right));
+    assert_eq!(
+        app.git.focus,
+        GitFocus::Diff,
+        "the arrows pick the other half"
+    );
+    app.on_key(k(KeyCode::Enter));
+    assert!(app.git.entered, "and Enter goes into it");
+    app.on_key(k(KeyCode::Esc));
+    app.on_key(k(KeyCode::Esc));
+    assert_eq!(app.window, Window::Main, "then out of the window");
+}
+
+#[test]
+fn a_branch_with_nowhere_to_go_yet_offers_to_publish() {
+    let (_td, mut app) = repo();
+    source(&mut app);
+    let labels: Vec<&str> = app.git.buttons().iter().map(|b| b.label()).collect();
+    assert_eq!(
+        labels,
+        ["publish", "commit"],
+        "no remote, so nothing to fetch or push"
     );
 }
 
@@ -995,7 +1083,7 @@ fn a_refresh_leaves_the_cursor_on_the_buttons() {
 }
 
 #[test]
-fn right_goes_back_into_a_message_that_was_put_down() {
+fn enter_goes_back_into_a_message_that_was_put_down() {
     let (_td, mut app) = repo();
     source(&mut app);
     cursor_on(&mut app, "README.md");
@@ -1003,16 +1091,27 @@ fn right_goes_back_into_a_message_that_was_put_down() {
     press_commit(&mut app);
     type_str(&mut app, "first");
     app.on_key(k(KeyCode::Esc));
-    assert_eq!(app.git.focus, GitFocus::List);
+    assert_eq!(app.git.focus, GitFocus::Message, "still picked");
+    assert!(!app.git.entered, "but put down");
     let out = joined(&mut app);
     assert!(out.contains("commit button sends it"), "{out}");
 
+    // Enter goes straight back into it.
+    app.on_key(k(KeyCode::Enter));
+    assert!(app.git.entered && app.git.focus == GitFocus::Message);
+    type_str(&mut app, " and more");
+
+    // And from the list, right on a file goes into it too.
+    app.on_key(k(KeyCode::Esc));
+    app.on_key(k(KeyCode::Left));
+    app.on_key(k(KeyCode::Enter));
+    assert_eq!(app.git.focus, GitFocus::List);
     cursor_on(&mut app, "README.md");
     app.on_key(k(KeyCode::Right));
     assert_eq!(app.git.focus, GitFocus::Message, "{}", app.status);
-    type_str(&mut app, " and more");
+    type_str(&mut app, " again");
     let text = app.git.message.as_ref().unwrap().to_text();
-    assert_eq!(text.trim_end(), "first and more");
+    assert_eq!(text.trim_end(), "first and more again");
 }
 
 #[test]
@@ -1035,7 +1134,9 @@ fn sync_pulls_and_then_pushes() {
     for _ in 0..10 {
         app.on_key(k(KeyCode::Up));
     }
-    let sync = GIT_BUTTONS
+    let sync = app
+        .git
+        .buttons()
         .iter()
         .position(|b| b.label() == "sync")
         .unwrap();
@@ -1185,4 +1286,207 @@ fn the_lines_in_the_git_window_move_with_the_mouse_too() {
         "the list's edge"
     );
     assert!(app.git.list_cols.unwrap().1 <= diff.x);
+}
+
+/// Wait for the job running in the git window to finish.
+fn finish_job(app: &mut App) {
+    for _ in 0..1000 {
+        if app.poll_git_job() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("the job never finished: {}", app.status);
+}
+
+/// git, configured the way the repository fixture is, in a folder with no
+/// repository in it yet: the identity a commit needs, and none of the
+/// settings a machine's own config could bring.
+fn quiet_git(dir: &Path) {
+    for (key, value) in [
+        ("user.email", "test@example.com"),
+        ("user.name", "Test"),
+        ("core.autocrlf", "false"),
+        ("core.safecrlf", "false"),
+        ("commit.gpgsign", "false"),
+    ] {
+        git_in(dir, &["config", key, value]);
+    }
+}
+
+#[test]
+fn a_project_with_no_repository_is_offered_one() {
+    let (td, mut app) = fixture();
+    source(&mut app);
+    let labels: Vec<&str> = app.git.buttons().iter().map(|b| b.label()).collect();
+    assert_eq!(labels, ["initialize", "publish", "clone"]);
+    let out = joined(&mut app);
+    assert!(out.contains("no git repository"), "{out}");
+    assert!(out.contains("initialize"), "{out}");
+    assert!(out.contains("make this folder a git repository"), "{out}");
+
+    // The first button, pressed.
+    app.on_key(k(KeyCode::Enter));
+    assert!(app.git.repo.is_some(), "{}", app.status);
+    assert!(td.path().join(".git").is_dir());
+    assert!(
+        app.git
+            .status
+            .unstaged
+            .iter()
+            .any(|c| c.path == "README.md"),
+        "and the files are there to stage: {:?}",
+        app.git.status.unstaged
+    );
+}
+
+#[test]
+fn publish_commits_what_there_is_and_pushes_it_to_an_address() {
+    let (td, mut app) = fixture();
+    git_in(td.path(), &["init", "--quiet", "--initial-branch=main"]);
+    quiet_git(td.path());
+    let remote = tempfile::tempdir().unwrap();
+    let bare = remote.path().join("notes.git");
+    git_in(
+        remote.path(),
+        &[
+            "init",
+            "--quiet",
+            "--bare",
+            "--initial-branch=main",
+            "notes.git",
+        ],
+    );
+    let url = bare.to_string_lossy().into_owned();
+
+    // What Enter will do is said first.
+    command_bar(&mut app);
+    type_str(&mut app, &format!("publish {url}"));
+    app.settle();
+    let Mode::Bar(b) = &app.mode else {
+        panic!("the bar is open")
+    };
+    let plan = format!("{:?}", b.plan);
+    assert!(plan.contains("commits every file as"), "{plan}");
+    assert!(plan.contains(&url), "{plan}");
+    app.on_key(k(KeyCode::Enter));
+    finish_job(&mut app);
+
+    let log = git_in(&bare, &["log", "--oneline", "main"]);
+    assert!(log.contains("first commit"), "{log}: {}", app.status);
+    let upstream = git_in(td.path(), &["rev-parse", "--abbrev-ref", "@{upstream}"]);
+    assert_eq!(upstream.trim(), "origin/main", "and the branch follows it");
+}
+
+#[test]
+fn publish_on_a_branch_with_a_remote_pushes_it_there() {
+    let (td, mut app) = repo();
+    let remote = tempfile::tempdir().unwrap();
+    git_in(
+        remote.path(),
+        &["init", "--quiet", "--bare", "--initial-branch=main"],
+    );
+    let url = remote.path().to_string_lossy().into_owned();
+    git_in(td.path(), &["remote", "add", "origin", &url]);
+    source(&mut app);
+    let publish = app
+        .git
+        .buttons()
+        .iter()
+        .position(|b| b.label() == "publish")
+        .expect("a branch with no upstream can be published");
+    for _ in 0..10 {
+        app.on_key(k(KeyCode::Up));
+    }
+    for _ in 0..publish {
+        app.on_key(k(KeyCode::Right));
+    }
+    app.on_key(k(KeyCode::Enter));
+    finish_job(&mut app);
+    let log = git_in(remote.path(), &["log", "--oneline", "main"]);
+    assert!(log.contains("first"), "{log}: {}", app.status);
+    let labels: Vec<&str> = app.git.buttons().iter().map(|b| b.label()).collect();
+    assert!(
+        labels.contains(&"push"),
+        "now it has somewhere to push: {labels:?}"
+    );
+}
+
+#[test]
+fn publishing_says_every_step_it_will_take() {
+    let (_td, app) = fixture();
+    let words = ["https://example.com/me/notes.git".to_string()];
+    let plan = app.plan_publish(&words).expect("an address is enough");
+    assert_eq!(
+        app.describe_publish(&plan),
+        "makes this a git repository, commits every file as \"first commit\", \
+         then pushes to https://example.com/me/notes.git"
+    );
+}
+
+/// A repository with one commit in it, to clone.
+fn upstream() -> (tempfile::TempDir, String) {
+    let at = tempfile::tempdir().unwrap();
+    let work = at.path().join("work");
+    fs::create_dir(&work).unwrap();
+    git_in(&work, &["init", "--quiet", "--initial-branch=main"]);
+    quiet_git(&work);
+    fs::write(work.join("hello.md"), "# Hello\n").unwrap();
+    git_in(&work, &["add", "--all"]);
+    git_in(&work, &["commit", "--quiet", "-m", "hello"]);
+    git_in(
+        at.path(),
+        &["clone", "--quiet", "--bare", "work", "shared.git"],
+    );
+    let url = at.path().join("shared.git").to_string_lossy().into_owned();
+    (at, url)
+}
+
+#[test]
+fn clone_fills_an_empty_project() {
+    let (_up, url) = upstream();
+    let td = tempfile::tempdir().unwrap();
+    let mut app = App::new(target(td.path(), None), Config::default(), None).unwrap();
+    command(&mut app, &format!("clone {url}"));
+    finish_job(&mut app);
+    assert!(td.path().join("hello.md").is_file(), "{}", app.status);
+    assert!(
+        td.path().join(".git").is_dir(),
+        "the project is the repository"
+    );
+    assert!(
+        app.rows.iter().any(|r| r.name == "hello.md"),
+        "and shows it"
+    );
+}
+
+#[test]
+fn clone_into_a_project_with_files_makes_a_folder_for_it() {
+    let (_up, url) = upstream();
+    let (td, mut app) = fixture();
+    command(&mut app, &format!("clone {url}"));
+    finish_job(&mut app);
+    assert!(
+        td.path().join("shared/hello.md").is_file(),
+        "named for the repository: {}",
+        app.status
+    );
+    assert!(
+        !td.path().join(".git").exists(),
+        "the project is left as it was"
+    );
+}
+
+#[test]
+fn clone_on_its_own_with_a_name_is_still_a_copy() {
+    use crate::app::sentence::{Sentence, parse};
+    assert!(matches!(
+        parse("clone notes.md to ideas.md"),
+        Sentence::Copy { .. }
+    ));
+    assert!(matches!(
+        parse("clone https://github.com/me/notes"),
+        Sentence::Clone { .. }
+    ));
+    assert!(matches!(parse("clone me/notes"), Sentence::Clone { .. }));
 }

@@ -358,6 +358,23 @@ impl App {
         };
     }
 
+    /// `*`: the bar, with a command already begun.
+    pub(super) fn open_command_bar(&mut self) {
+        self.begin_command("");
+        self.status = format!("a command, like {COMMAND_SIGIL}copy a to b; Tab finishes words");
+    }
+
+    /// The bar, with `words` typed after the `*` already, and the line under
+    /// it saying what Enter would do with them.
+    pub(super) fn begin_command(&mut self, words: &str) {
+        self.open_bar();
+        if let Mode::Bar(b) = &mut self.mode {
+            b.input = format!("{COMMAND_SIGIL}{words}");
+            b.cursor = b.input.chars().count();
+            b.stale = true;
+        }
+    }
+
     /// Narrow the map to what has been typed, and say what is left of it.
     ///
     /// The map's half of the bar. Filtering the map and searching the project
@@ -611,7 +628,7 @@ impl App {
         }
         self.place_cursor_on(hit);
         if matches!(self.preview, Preview::Buffer { .. }) {
-            self.focus = Focus::Editor;
+            self.enter(Focus::Editor);
         }
     }
 

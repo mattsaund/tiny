@@ -194,6 +194,7 @@ impl App {
         // as one of tiny's: `Ctrl+L` clears its screen, Alt+B goes back a
         // word in it. Only the key that leaves is tiny's, see `term`.
         if self.focus == Focus::Terminal
+            && self.entered
             && matches!(self.mode, Mode::Normal)
             && self.window == Window::Main
         {
@@ -224,10 +225,12 @@ impl App {
             };
         }
         // With nothing over it, the window that is not the main one takes the
-        // whole screen and every key with it.
+        // whole screen and every key with it. In the main window the arrows
+        // pick a part until Enter goes into one, see `navigate`.
         match self.window {
             Window::Map => self.on_map_key(key),
             Window::Source => self.on_source_key(key),
+            Window::Main if !self.entered => self.on_pick_key(key),
             Window::Main => match self.focus {
                 Focus::Tree => self.on_tree_key(key),
                 Focus::Editor => self.on_editor_key(key),
@@ -238,10 +241,15 @@ impl App {
 
     /// Keys for the source-control window.
     ///
-    /// The same shape as the map's: the window owns the whole screen, so there
-    /// is no focus to consider and no mode to fall through to; one lookup, one
-    /// action, and Esc is the way out.
+    /// The same two levels as the main window: picking a half, and being in
+    /// one, where one lookup finds one action, and Esc steps back out.
     fn on_source_key(&mut self, key: KeyEvent) {
+        if self.git.repo.is_none() {
+            return self.on_no_repository_key(key);
+        }
+        if !self.git.entered {
+            return self.on_git_pick_key(key);
+        }
         // The message box is a pane that types, so it takes the keyboard whole:
         // a `k` in a commit message is the letter k.
         if self.git.focus == GitFocus::Message {
@@ -273,6 +281,31 @@ impl App {
             Action::PageDown => self.page_git_diff(1),
             Action::Narrower => self.resize_tree_pane(-1),
             Action::Wider => self.resize_tree_pane(1),
+            Action::Back => {
+                self.git.entered = false;
+                self.status = format!(
+                    "arrows pick a side, {} goes in, {} again leaves",
+                    self.key_name(Action::Open),
+                    self.key_name(Action::Back)
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// Keys in the git window of a project in no repository: along the
+    /// buttons it offers, Enter to press one, and Esc back to the files.
+    fn on_no_repository_key(&mut self, key: KeyEvent) {
+        let Some(action) = self.keymap.resolve(KeyContext::Source, &key) else {
+            return;
+        };
+        if self.on_global_action(action) {
+            return;
+        }
+        match action {
+            Action::Left | Action::Up => self.step_git_button(-1),
+            Action::Right | Action::Down => self.step_git_button(1),
+            Action::Open => self.activate_git(),
             Action::Back => self.show_window(Window::Main),
             _ => {}
         }
@@ -290,10 +323,10 @@ impl App {
             return None;
         }
         let typing = matches!(self.mode, Mode::Bar(_) | Mode::Settings(_))
-            || (self.window == Window::Main
-                && self.focus == Focus::Editor
-                && matches!(self.preview, Preview::Buffer { .. }))
-            || (self.window == Window::Source && self.git.focus == GitFocus::Message);
+            || self.editing()
+            || (self.window == Window::Source
+                && self.git.entered
+                && self.git.focus == GitFocus::Message);
         let action = if typing {
             self.keymap.resolve_while_typing(KeyContext::Global, key)
         } else {
@@ -389,10 +422,11 @@ impl App {
     /// was one of them; [`Action::Save`] is deliberately not, since what it
     /// saves depends on where you are. The two window keys are not either:
     /// [`App::handle_key`] answers them before any pane is asked.
-    fn on_global_action(&mut self, action: Action) -> bool {
+    pub(super) fn on_global_action(&mut self, action: Action) -> bool {
         match action {
             Action::Quit => self.request_quit(),
             Action::Bar => self.open_bar(),
+            Action::Command => self.open_command_bar(),
             Action::ToggleTreePane => self.toggle_tree_pane(),
             Action::NewWindow => self.open_new_window(),
             Action::NextPane => self.next_pane(),
@@ -409,8 +443,8 @@ impl App {
     /// typed) which is why the browser's own keys are bare: `.` for dotfiles,
     /// `<` and `>` for its width, `i` `j` `k` `l` for the arrows.
     ///
-    /// Esc is `back` here as it is everywhere, and back from the browser is
-    /// out of tiny, asking first if anything is unsaved.
+    /// Esc is `back` here as it is everywhere: out of the browser, to pick
+    /// another part. It never quits; `Ctrl+Q` does.
     fn on_tree_key(&mut self, key: KeyEvent) {
         let page = self.last_tree_height.saturating_sub(1).max(1) as isize;
         let Some(action) = self.keymap.resolve(KeyContext::Tree, &key) else {
@@ -421,7 +455,7 @@ impl App {
         }
         match action {
             Action::Save => self.save_from_tree(),
-            Action::Back => self.request_quit(),
+            Action::Back => self.step_out(),
             Action::Up => self.move_selection(-1),
             Action::Down => self.move_selection(1),
             Action::First => self.select_index(0),
@@ -466,17 +500,13 @@ impl App {
         };
         match resolved {
             Some(Action::Save) => return self.save_active(),
-            // "Back to the tree" means the tree, even when it is folded away,
-            // so it brings the pane back rather than handing the keyboard to
-            // something that is not on screen. A selection, or more cursors
-            // than one, is let go of first, as Esc does everywhere else.
+            // Out of the file, to pick another part. A selection, or more
+            // cursors than one, is let go of first.
             Some(Action::Back) => {
                 if self.active_buffer_mut().is_some_and(|ed| ed.collapse()) {
                     return;
                 }
-                self.focus_tree();
-                self.status = "back to tree".into();
-                return;
+                return self.step_out();
             }
             // The guard does the work: `on_global_action` runs the action if
             // it recognizes it and says so, and an action it does not
@@ -508,7 +538,7 @@ impl App {
             _ => {}
         }
         let Some(ed) = self.active_buffer_mut() else {
-            self.focus = Focus::Tree;
+            self.enter(Focus::Tree);
             return;
         };
         if let Some(complaint) = edit_with_key(ed, action, select, key, page, tab_width) {
@@ -570,7 +600,7 @@ impl App {
         match &self.preview {
             // A note the browser is looking at is drawn as a page, which
             // scrolls by its own count.
-            Preview::Buffer { kind, .. } if kind.reads_first() && self.focus != Focus::Editor => {
+            Preview::Buffer { kind, .. } if kind.reads_first() && !self.editing() => {
                 let max = self.preview_len.saturating_sub(1);
                 self.preview_scroll = if down {
                     (self.preview_scroll + 1).min(max)

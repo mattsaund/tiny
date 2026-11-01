@@ -69,7 +69,7 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     // A heading, the blank under it, and a box three rows tall: anything
     // shorter shows no file at all, and would say the rest are offscreen.
     if inner.width < 8 || inner.height < 5 {
-        f.render_widget(bordered().border_style(pal.border_focus), rows[0]);
+        f.render_widget(bordered().border_style(pal.border_entered), rows[0]);
         return;
     }
 
@@ -91,8 +91,9 @@ pub(super) fn draw_map(f: &mut Frame, app: &mut App, area: Rect) {
     let out_nodes: HashSet<usize> = reaches.iter().map(|e| e.to).collect();
     let in_nodes: HashSet<usize> = reached_by.iter().map(|e| e.from).collect();
 
+    // One part, and always the one the keyboard is in.
     let mut block = bordered()
-        .border_style(pal.border_focus)
+        .border_style(pal.border_entered)
         .title(Line::from(vec![
             Span::raw(" "),
             Span::styled("MAP", pal.text.add_modifier(Modifier::BOLD)),

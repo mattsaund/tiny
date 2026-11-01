@@ -207,6 +207,30 @@ pub(super) fn ctrl_key(code: KeyCode) -> KeyEvent {
     }
 }
 
+/// Into the browser, the way the keys get there: Esc until the arrows are
+/// picking, left to the browser, and Enter to go in. Drawn between, since
+/// where the parts are is what the last frame says.
+pub(super) fn into_browser(app: &mut App) {
+    for _ in 0..4 {
+        if !app.entered {
+            break;
+        }
+        app.on_key(k(KeyCode::Esc));
+    }
+    for _ in 0..4 {
+        if app.focus == Focus::Tree {
+            break;
+        }
+        screen(app, 100, 30);
+        app.on_key(k(KeyCode::Left));
+    }
+    assert_eq!(app.focus, Focus::Tree, "left never reached the browser");
+    if !app.entered {
+        app.on_key(k(KeyCode::Enter));
+    }
+    assert!(app.entered, "and Enter went in");
+}
+
 pub(super) fn type_str(app: &mut App, s: &str) {
     for c in s.chars() {
         app.on_key(ch(c));

@@ -40,6 +40,13 @@ pub enum Button {
     Sync,
     Rebase,
     Commit,
+    /// Make the project a repository, see `*init`.
+    Init,
+    /// Put it somewhere others can reach, see `*publish`.
+    Publish,
+    /// Bring a repository from somewhere else into the project, see
+    /// `*clone`.
+    Clone,
 }
 
 pub const BUTTONS: &[Button] = &[
@@ -60,6 +67,9 @@ impl Button {
             Button::Sync => "sync",
             Button::Rebase => "rebase",
             Button::Commit => "commit",
+            Button::Init => "initialize",
+            Button::Publish => "publish",
+            Button::Clone => "clone",
         }
     }
 
@@ -77,8 +87,9 @@ impl Button {
             Button::Push => Some(("pushing", &[&["push"]])),
             Button::Sync => Some(("syncing", &[&["pull", "--rebase"], &["push"]])),
             Button::Rebase => Some(("rebasing", &[&["rebase"]])),
-            // A commit needs a message, which is typing, which is the box.
-            Button::Commit => None,
+            // A commit needs a message, which is typing, which is the box;
+            // the other three are commands of their own.
+            Button::Commit | Button::Init | Button::Publish | Button::Clone => None,
         }
     }
 }
@@ -114,6 +125,8 @@ pub enum Row {
 pub struct GitPane {
     /// The repository, or `None` when the project is not in one.
     pub repo: Option<Repo>,
+    /// Its remotes, by name.
+    pub remotes: Vec<String>,
     /// Why there is nothing to show, when there is nothing to show.
     pub error: Option<String>,
     pub status: Status,
@@ -132,8 +145,11 @@ pub struct GitPane {
     /// from where the last frame got to rather than parsing from the top.
     pub diff_highlight: [Resume; 2],
     pub diff_scroll: usize,
-    /// Which half has the arrow keys.
+    /// Which half is picked.
     pub focus: GitFocus,
+    /// Whether the keyboard is in that half, rather than the arrows picking
+    /// which half that is, see `navigate`.
+    pub entered: bool,
     /// The commit message being written, if one is.
     ///
     /// A real [`Editor`], so the message gets the same keyboard as everything
@@ -145,6 +161,8 @@ pub struct GitPane {
     pub diff_height: usize,
     /// A push or a pull, still running.
     pub job: Option<Job>,
+    /// What to do once it is done, beyond saying what it said.
+    pub then: Option<super::publish::Then>,
     /// The first line of the list on screen. Nudged by `ui` as little as
     /// keeps the cursor's row in view, the way the browser's is.
     pub list_scroll: usize,
@@ -158,6 +176,31 @@ pub struct GitPane {
 }
 
 impl GitPane {
+    /// The buttons there are, which depends on where the repository stands.
+    ///
+    /// A project in no repository can be made one, published, or have one
+    /// cloned into it. A branch with nowhere to push to yet can be
+    /// published, and fetched into if there is a remote. Everything else has
+    /// the whole row.
+    pub fn buttons(&self) -> Vec<Button> {
+        if self.repo.is_none() {
+            return if self.error.as_deref() == Some(crate::git::NO_REPOSITORY) {
+                vec![Button::Init, Button::Publish, Button::Clone]
+            } else {
+                Vec::new()
+            };
+        }
+        if self.status.branch.upstream.is_some() {
+            return BUTTONS.to_vec();
+        }
+        let mut buttons = Vec::new();
+        if !self.remotes.is_empty() {
+            buttons.push(Button::Fetch);
+        }
+        buttons.extend([Button::Publish, Button::Commit]);
+        buttons
+    }
+
     /// The change the cursor is on, and whether it is staged.
     pub fn current(&self) -> Option<(&Change, bool)> {
         match self.rows.get(self.selected) {
@@ -239,6 +282,8 @@ impl App {
     pub(super) fn refresh_git(&mut self) {
         let root = self.root().to_path_buf();
         self.git.error = None;
+        // Whatever was done here, the browser's colors may have moved too.
+        self.recolor();
         if self.git.repo.is_none() {
             match Repo::find(&root) {
                 Ok(repo) => self.git.repo = Some(repo),
@@ -247,6 +292,8 @@ impl App {
                     self.git.status = Status::default();
                     self.git.graph.clear();
                     self.git.rows.clear();
+                    self.git.remotes.clear();
+                    self.git.button = 0;
                     return;
                 }
             }
@@ -254,6 +301,7 @@ impl App {
         let Some(repo) = self.git.repo.clone() else {
             return;
         };
+        self.git.remotes = repo.remotes();
         // Read before the new status lands: see `rebuild`.
         let before = self
             .git
@@ -266,6 +314,11 @@ impl App {
         self.git.graph = repo.graph(GRAPH_ROWS).unwrap_or_default();
         self.git
             .rebuild(before.as_ref().map(|(path, _)| path.clone()));
+        // The row of buttons may have changed length under the cursor.
+        self.git.button = self
+            .git
+            .button
+            .min(self.git.buttons().len().saturating_sub(1));
         let after = self
             .git
             .current()
@@ -425,19 +478,36 @@ impl App {
             }
             return;
         }
-        let last = BUTTONS.len() - 1;
+        self.step_git_button(delta);
+    }
+
+    /// Along the row of buttons.
+    pub(super) fn step_git_button(&mut self, delta: isize) {
+        let buttons = self.git.buttons();
+        let last = buttons.len().saturating_sub(1);
         self.git.button = (self.git.button as isize + delta).clamp(0, last as isize) as usize;
-        self.status = BUTTONS[self.git.button].label().to_string();
+        if let Some(button) = buttons.get(self.git.button) {
+            self.status = button.label().to_string();
+        }
     }
 
     /// Enter: stage a file, stage a section, or press a button.
     pub(super) fn activate_git(&mut self) {
         let Some(repo) = self.git.repo.clone() else {
+            // No repository: the buttons are all there is.
+            if let Some(button) = self.git.buttons().get(self.git.button).copied() {
+                self.press_git_button(button);
+            }
             return;
         };
         let row = self.git.rows.get(self.git.selected).cloned();
         let done = match row {
-            Some(Row::Buttons) => return self.press_git_button(BUTTONS[self.git.button]),
+            Some(Row::Buttons) => {
+                if let Some(button) = self.git.buttons().get(self.git.button).copied() {
+                    self.press_git_button(button);
+                }
+                return;
+            }
             // The header takes the whole section, which is the "all at once"
             // half of the promise the window makes.
             Some(Row::Header { staged: true }) => repo.unstage(None),
@@ -469,10 +539,46 @@ impl App {
     /// message is the one piece of writing in this window, and a one-line
     /// prompt is not where anyone wants to write the second paragraph of it.
     fn press_git_button(&mut self, button: Button) {
+        match button {
+            Button::Commit => return self.commit_button(),
+            Button::Init => {
+                self.status = match self.init_repository() {
+                    Ok(done) => done,
+                    Err(e) => format!("{e:#}"),
+                };
+                return;
+            }
+            // A branch with a remote to go to and commits to send needs
+            // nothing more said; anything else has a question or two, and
+            // the bar's line says what Enter will do with the answers.
+            Button::Publish => {
+                let ready = self.git.repo.as_ref().is_some_and(Repo::has_commits)
+                    && !self.git.remotes.is_empty();
+                if ready {
+                    return self.run_command("publish");
+                }
+                return self.begin_command("publish ");
+            }
+            Button::Clone => return self.begin_command("clone "),
+            _ => {}
+        }
         let Some((what, steps)) = button.command() else {
-            return self.commit_button();
+            return;
         };
         self.start_git_job(what, steps);
+    }
+
+    /// `*init`: make the project a repository, and show it as one.
+    pub(super) fn init_repository(&mut self) -> anyhow::Result<String> {
+        if let Some(repo) = &self.git.repo {
+            anyhow::bail!("already a repository, at {}", repo.root.display());
+        }
+        let root = self.root().to_path_buf();
+        let repo = Repo::init(&root)?;
+        self.git.repo = Some(repo);
+        self.refresh_git();
+        self.refresh();
+        Ok("made this a git repository: stage, commit, and publish when ready".into())
     }
 
     /// The commit button: open the box, or send what is in it.
@@ -500,6 +606,7 @@ impl App {
             self.git.message = Some(Editor::from_str(path, ""));
         }
         self.git.focus = GitFocus::Message;
+        self.git.entered = true;
         self.status = "write the message: Ctrl+S commits, Esc puts it down".into();
     }
 
@@ -513,6 +620,7 @@ impl App {
             Ok(done) => {
                 self.git.message = None;
                 self.git.focus = GitFocus::List;
+                self.git.entered = true;
                 self.status = done;
             }
             // The message stays in the box: a commit that git refused is one
@@ -532,7 +640,7 @@ impl App {
         match action {
             Some(Action::Save) => return self.commit_message(),
             Some(Action::Back) => {
-                self.git.focus = GitFocus::List;
+                self.git.entered = false;
                 self.status = "message kept, commit to send it".into();
                 return;
             }
@@ -558,12 +666,36 @@ impl App {
             self.status = crate::git::NO_REPOSITORY.into();
             return;
         };
+        let steps = steps
+            .iter()
+            .map(|args| {
+                std::iter::once("git")
+                    .chain(args.iter().copied())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .collect();
+        if let Err(e) = self.start_job(&repo.root, what, steps, None) {
+            self.status = format!("{e:#}");
+        }
+    }
+
+    /// Start programs on a thread in `dir`, one after another, each step
+    /// naming its program first, unless a job is already running.
+    pub(super) fn start_job(
+        &mut self,
+        dir: &Path,
+        what: &str,
+        steps: Vec<Vec<String>>,
+        then: Option<super::publish::Then>,
+    ) -> anyhow::Result<()> {
         if let Some(job) = &self.git.job {
-            self.status = format!("still {}", job.what);
-            return;
+            anyhow::bail!("still {}", job.what);
         }
         self.status = format!("{what}{}", self.palette.glyphs.ellipsis);
-        self.git.job = Some(Job::start(&repo.root, what, steps));
+        self.git.job = Some(Job::start_programs(dir, what, steps));
+        self.git.then = then;
+        Ok(())
     }
 
     /// Collect a finished push or pull. Returns whether anything changed, for
@@ -577,21 +709,26 @@ impl App {
             return false;
         };
         let what = self.git.job.take().map(|j| j.what).unwrap_or_default();
-        match result {
+        let then = self.git.then.take();
+        self.recolor();
+        let said = match &result {
             Ok(out) => {
                 // Git says nothing at all when a push had nothing to do.
                 let last = out.lines().rfind(|l| !l.trim().is_empty());
-                self.status = match last {
+                match last {
                     Some(line) => format!("{what}: {}", line.trim()),
                     None => format!("{what}: nothing to do"),
-                };
+                }
             }
-            Err(e) => self.status = format!("{what} failed: {e}"),
-        }
+            Err(e) => format!("{what} failed: {e}"),
+        };
         // Whatever it did, the repository may look different now.
-        if self.window == Window::Source {
-            self.refresh_git();
+        match then {
+            Some(then) if result.is_ok() => self.after_job(then),
+            _ if self.window == Window::Source => self.refresh_git(),
+            _ => {}
         }
+        self.status = said;
         true
     }
 

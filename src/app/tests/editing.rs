@@ -62,6 +62,7 @@ fn ctrl_s_on_the_project_folder_saves_the_whole_project() {
     }
     assert_eq!(app.dirty_buffers().len(), 3);
 
+    into_browser(&mut app);
     app.selected = 0;
     assert!(app.selected_row().unwrap().is_dir, "the root row");
     app.on_key(ctrl('s'));

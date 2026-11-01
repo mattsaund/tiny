@@ -58,7 +58,7 @@ const KEYS: &[KeyRow] = &[
     Heading("MOVE"),
     Merged(
         &[Action::Up, Action::Down, Action::Left, Action::Right],
-        "move",
+        "move, pick a part",
     ),
     Merged(
         &[
@@ -75,8 +75,8 @@ const KEYS: &[KeyRow] = &[
         &[Action::EditorDocStart, Action::EditorDocEnd],
         "top, bottom",
     ),
-    Bound(&[Action::Open], "open, stage"),
-    Bound(&[Action::Back], "back, quit"),
+    Bound(&[Action::Open], "open, go in, stage"),
+    Bound(&[Action::Back], "out, to pick"),
     Fixed("wheel", "scroll"),
     Blank,
     Heading("EDIT"),
@@ -105,6 +105,7 @@ const KEYS: &[KeyRow] = &[
     Blank,
     Heading("WINDOWS"),
     Bound(&[Action::Bar], "search, *command"),
+    Bound(&[Action::Command], "a command"),
     Bound(&[Action::WindowSource], "git"),
     Bound(&[Action::WindowMap], "map"),
     Bound(&[Action::NewWindow], "new window"),

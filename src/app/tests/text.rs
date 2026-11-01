@@ -75,10 +75,10 @@ fn esc_lets_go_of_a_selection_before_it_leaves_the_file() {
     editing_main(&mut app);
     app.on_key(shift(KeyCode::Down));
     app.on_key(k(KeyCode::Esc));
-    assert_eq!(app.focus, Focus::Editor, "still in the file");
+    assert!(app.editing(), "still in the file");
     assert!(!app.active_buffer().unwrap().has_selection());
     app.on_key(k(KeyCode::Esc));
-    assert_eq!(app.focus, Focus::Tree, "and then out of it");
+    assert!(!app.entered, "and then out of it");
 }
 
 #[test]

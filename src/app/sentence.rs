@@ -177,6 +177,16 @@ pub enum Sentence {
     /// `set tab_width to 2`, with the words after `set` as they were typed.
     Set(Vec<String>),
     Commit(String),
+    /// `init`: make the project a git repository.
+    Init,
+    /// `publish`, `publish public`, `publish notes`, `publish <address>`:
+    /// the words after the verb, sorted out by `plan`.
+    Publish(Vec<String>),
+    /// `clone <address>`, or `clone <address> into <folder>`.
+    Clone {
+        from: String,
+        into: Option<String>,
+    },
     Reload,
     Update,
     /// `split`, or `split down`: a new pane beside this one, or below it.
@@ -328,6 +338,18 @@ pub fn parse(line: &str) -> Sentence {
         return goto(rest);
     }
     match v {
+        // A repository to fetch, or else the copy `clone` has always been.
+        "clone" if cloning(rest) => {
+            let into = rest
+                .iter()
+                .position(|w| w.is(&["into", "to", "in"]))
+                .and_then(|i| rest.get(i + 1))
+                .map(|w| w.text.clone());
+            Sentence::Clone {
+                from: rest[0].text.clone(),
+                into,
+            }
+        }
         _ if GOTO.contains(&v) => goto(rest),
         _ if LINE.contains(&v) => goto(&w),
         _ if COPY.contains(&v) => copy(rest),
@@ -340,6 +362,8 @@ pub fn parse(line: &str) -> Sentence {
         "set" => Sentence::Set(rest.iter().map(|w| w.text.clone()).collect()),
         // As typed: its quotes, its spacing, every word.
         "commit" => Sentence::Commit(after_words(line, polite + 1).to_string()),
+        "init" | "initialize" => Sentence::Init,
+        "publish" => Sentence::Publish(rest.iter().map(|w| w.text.clone()).collect()),
         "reload" | "refresh" | "rescan" => Sentence::Reload,
         "update" | "upgrade" => Sentence::Update,
         "split" | "vsplit" | "hsplit" => Sentence::Split {
@@ -362,6 +386,26 @@ pub fn parse(line: &str) -> Sentence {
             args: rest.iter().map(|w| w.text.clone()).collect(),
         },
     }
+}
+
+/// Whether `clone` is asking for a repository: an address first, or one
+/// word alone, which as a copy would say nothing about where to.
+fn cloning(w: &[Word]) -> bool {
+    match w {
+        [] => false,
+        [_] => true,
+        [first, ..] => remote_address(&first.text),
+    }
+}
+
+/// Whether `word` is the address of a repository rather than a name in the
+/// project: a URL, `git@host:path`, or a name ending in `.git`.
+pub(super) fn remote_address(word: &str) -> bool {
+    word.contains("://")
+        || word.ends_with(".git")
+        || word
+            .split_once('@')
+            .is_some_and(|(_, host)| host.contains(':'))
 }
 
 /// `close`, and what to.
@@ -773,6 +817,9 @@ pub const VERBS: &[&str] = &[
     "replace",
     "set",
     "commit",
+    "init",
+    "publish",
+    "clone",
     "reload",
     "settings",
     "update",

@@ -64,7 +64,8 @@ impl App {
     /// for something else.
     fn can_ask_about_update(&self) -> bool {
         matches!(self.mode, Mode::Normal)
-            && (self.update_by_hand || (self.window == Window::Main && self.focus == Focus::Tree))
+            && (self.update_by_hand
+                || (self.window == Window::Main && (self.focus == Focus::Tree || !self.entered)))
     }
 
     /// Put the question: the window the user asked for, in the words they

@@ -14,13 +14,12 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::editor::draw_editor;
-use super::parts::{FORMAT_LIMIT, label, mark_query, pane};
+use super::parts::{FORMAT_LIMIT, Outline, label, mark_query, pane};
 
 use crate::app::{App, Focus, LinkHit, Mode, PaneHit, Preview, TextHits, TextKind, link_area};
 use crate::text::markdown;
@@ -36,8 +35,11 @@ use crate::text::tabs;
 /// `ui::editor::live_rows`), so the tag is about the keyboard, not about
 /// whether there is formatting on screen.
 pub(super) fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
-    let focused = app.focus == Focus::Editor && matches!(app.mode, Mode::Normal | Mode::Help(_));
-    let text = draw_pane(f, app, area, focused);
+    let outline = Outline::of(
+        app.focus == Focus::Editor && matches!(app.mode, Mode::Normal | Mode::Help(_)),
+        app.entered,
+    );
+    let text = draw_pane(f, app, area, outline);
     app.last_panes.push(PaneHit {
         pinned: None,
         area,
@@ -81,7 +83,7 @@ pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, id: usize, area: Rect, a
         }
     }
 
-    let text = draw_pane(f, app, area, false);
+    let text = draw_pane(f, app, area, Outline::Plain);
     app.last_panes.push(PaneHit {
         pinned: Some(id),
         area,
@@ -108,13 +110,17 @@ pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, id: usize, area: Rect, a
 
 /// One pane, with or without the keyboard. Returns where its lines were
 /// drawn, when it showed a file's lines, for the mouse.
+///
+/// A pane only picked shows its file the way the browser does, as a picture
+/// of itself; gone into, it is the editor.
 pub(super) fn draw_pane(
     f: &mut Frame,
     app: &mut App,
     area: Rect,
-    focused: bool,
+    outline: Outline,
 ) -> Option<TextHits> {
     let pal = app.palette;
+    let focused = outline == Outline::Entered;
 
     let (name, dirty) = match &app.preview {
         Preview::Buffer { path, .. } => (label(path), app.is_dirty(path)),
@@ -130,17 +136,7 @@ pub(super) fn draw_pane(
         _ => "",
     };
 
-    let mut title = vec![
-        Span::raw(" "),
-        Span::styled(
-            name,
-            if focused {
-                pal.text.add_modifier(Modifier::BOLD)
-            } else {
-                pal.dim
-            },
-        ),
-    ];
+    let mut title = vec![Span::raw(" "), Span::styled(name, outline.title(&pal))];
     if dirty {
         title.push(Span::styled(" *", pal.marker));
     }
@@ -149,7 +145,7 @@ pub(super) fn draw_pane(
     }
     title.push(Span::raw(" "));
 
-    let inner = pane(f, area, title, focused, app);
+    let inner = pane(f, area, title, outline, app);
     if inner.width == 0 || inner.height == 0 {
         return None;
     }

@@ -25,8 +25,10 @@ impl App {
     /// commit message. `None` anywhere else.
     fn typing_into(&mut self) -> Option<&mut Editor> {
         match self.window {
-            Window::Source if self.git.focus == GitFocus::Message => self.git.message.as_mut(),
-            Window::Main if self.focus == Focus::Editor => self.active_buffer_mut(),
+            Window::Source if self.git.entered && self.git.focus == GitFocus::Message => {
+                self.git.message.as_mut()
+            }
+            Window::Main if self.focus == Focus::Editor && self.entered => self.active_buffer_mut(),
             _ => None,
         }
     }
@@ -71,7 +73,7 @@ impl App {
     /// hold. Anywhere else there is nothing to put it in.
     pub fn on_paste(&mut self, text: String) {
         self.record_paste(&text);
-        if self.focus == Focus::Terminal && matches!(self.mode, Mode::Normal) {
+        if self.focus == Focus::Terminal && self.entered && matches!(self.mode, Mode::Normal) {
             return self.paste_into_terminal(&text);
         }
         let field = match &self.mode {

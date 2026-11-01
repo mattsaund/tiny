@@ -230,6 +230,9 @@ fn real_main() -> Result<()> {
     app.text_clipboard = clipboard::Clipboard::new(true);
     app.load_plugins();
     app.tell_plugins_what_is_open();
+    // The browser's colors from git, asked on a thread, which no test starts
+    // without asking for it, see `app::marks`.
+    app.color_from_git();
     // A release build asks, once, whether there is a newer one. A debug build
     // is somebody working on tiny, and is left alone, see `update`.
     if app.config.update_check && !cfg!(debug_assertions) {
@@ -394,8 +397,9 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                 // others from being heard.
                 let git = app.poll_git_job();
                 let disk = app.rescan_disk();
+                let colors = app.poll_colors();
                 let update = app.poll_update();
-                if shell || git || disk || update || reading {
+                if shell || git || disk || colors || update || reading {
                     break;
                 }
                 continue;

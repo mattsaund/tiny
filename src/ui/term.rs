@@ -12,13 +12,18 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use super::parts::pane;
+use super::parts::{Outline, pane};
 use crate::app::{App, Focus, Mode};
 
 /// Draw the terminal into `area`, and tell the shell how big that is.
 pub(super) fn draw_terminal(f: &mut Frame, app: &mut App, area: Rect) {
     app.last_term_area = Some(area);
-    let focused = app.focus == Focus::Terminal && matches!(app.mode, Mode::Normal);
+    let outline = Outline::of(
+        app.focus == Focus::Terminal && matches!(app.mode, Mode::Normal),
+        app.entered,
+    );
+    // The cursor is shown only with the keyboard in it.
+    let focused = outline == Outline::Entered;
     let pal = app.palette;
     let name = app
         .term
@@ -28,17 +33,10 @@ pub(super) fn draw_terminal(f: &mut Frame, app: &mut App, area: Rect) {
         .to_string();
     let title = vec![
         Span::raw(" "),
-        Span::styled(
-            name,
-            if focused {
-                pal.text.add_modifier(Modifier::BOLD)
-            } else {
-                pal.dim
-            },
-        ),
+        Span::styled(name, outline.title(&pal)),
         Span::raw(" "),
     ];
-    let inner = pane(f, area, title, focused, app);
+    let inner = pane(f, area, title, outline, app);
     app.last_term_inner = Some(inner);
     let Some(shell) = app.term.as_mut() else {
         return;

@@ -256,12 +256,14 @@ impl App {
         })?;
 
         self.tree.refresh_all();
+
+        self.recolor();
         self.size_cache.clear();
         // Shown where it landed, unless a file is being typed into: moving
         // the browser onto the copy would hand it the next keystrokes, so the
         // keyboard stays in the file it was in and the line below says where
         // the copy went.
-        if self.focus == Focus::Editor && matches!(self.preview, Preview::Buffer { .. }) {
+        if self.editing() {
             self.rebuild_rows();
         } else {
             self.reveal(&dst);
@@ -299,6 +301,7 @@ impl App {
                 // take it for someone else's.
                 self.note_file(&path);
                 self.plugin_event("save", &path);
+                self.recolor();
             }
             Err(e) => self.status = format!("save failed: {e}"),
         }
@@ -367,6 +370,9 @@ impl App {
                 None => {}
             }
         }
+        if saved > 0 {
+            self.recolor();
+        }
         (saved, failed)
     }
 
@@ -404,6 +410,7 @@ impl App {
                 .with_context(|| format!("cannot create {}", target.display()))?;
         }
         self.tree.refresh_all();
+        self.recolor();
         self.size_cache.clear();
         if is_dir {
             self.tree.expand(&target);
@@ -485,6 +492,7 @@ impl App {
             }
         }
         self.tree.refresh_all();
+        self.recolor();
         self.size_cache.clear();
         self.reveal(target);
         Ok(format!(
@@ -567,6 +575,7 @@ impl App {
                 self.buffers.retain(|p, _| !p.starts_with(path));
                 let parent = path.parent().map(Path::to_path_buf);
                 self.tree.refresh_all();
+                self.recolor();
                 // Through `rebuild_rows`, so a folder's remembered size and the
                 // watcher's picture of the tree are both brought up to date.
                 self.rebuild_rows();
@@ -579,7 +588,10 @@ impl App {
                 // `*delete` can be run from the editor. If the pane holding the
                 // keyboard just lost its file, the tree is the only place left
                 // with something to point at.
-                if self.focus == Focus::Editor && !matches!(self.preview, Preview::Buffer { .. }) {
+                if self.focus == Focus::Editor
+                    && self.entered
+                    && !matches!(self.preview, Preview::Buffer { .. })
+                {
                     self.focus_tree();
                 }
                 self.status = format!("deleted {}", display_name(path));

@@ -81,16 +81,21 @@ fn the_chrome_names_no_colors_at_all() {
     let buf = t.backend().buffer().clone();
 
     // The tree pane holds only chrome: no syntax highlighting to excuse
-    // a color. Everything in it should inherit the terminal's palette.
+    // a color. Everything in it should inherit the terminal's palette, but
+    // for the green outline of the part the keyboard is in, which is a
+    // color because it is a meaning.
     for y in 0..buf.area.height {
         for x in 0..28 {
             let Some(cell) = buf.cell((x, y)) else {
                 continue;
             };
-            let allowed = matches!(
-                cell.fg,
-                Color::Reset | Color::White | Color::DarkGray | Color::Gray | Color::Black
-            );
+            let outline =
+                cell.fg == Color::Green && !cell.symbol().chars().any(char::is_alphanumeric);
+            let allowed = outline
+                || matches!(
+                    cell.fg,
+                    Color::Reset | Color::White | Color::DarkGray | Color::Gray | Color::Black
+                );
             assert!(
                 allowed,
                 "chrome at {x},{y} uses {:?}; the design brief is white and black",

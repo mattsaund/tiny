@@ -5,7 +5,7 @@
 .\"
 .\" A test in src/main.rs reads this against the keymap and the options, so a
 .\" key or an option that changes without changing here fails the build.
-.TH TINY 1 2026-10-31 "tiny 0.6.4" "User Commands"
+.TH TINY 1 2026-11-01 "tiny 0.6.5" "User Commands"
 .SH NAME
 tiny \- an IDE, text editor, knowledge manager and file browser in the \%terminal
 .SH SYNOPSIS
@@ -61,6 +61,21 @@ Prints the licenses of everything built into tiny.
 Removes tiny and its config file.
 Your own files are not touched.
 .SH CONTROLS
+.SS Picking a part
+The window has parts: the browser, each pane, and the terminal.
+The keyboard is either in one of them, which a green outline says, or out
+of them all, picking one, which a white outline says.
+.TP
+.B "Up, Down, Left, Right, i, k, j, l"
+Pick the part that way.
+Toward the browser, while it is hidden, it comes back.
+.TP
+.B Enter
+Go into the part that is picked.
+.TP
+.B Esc
+Out of a part, to pick another.
+Esc never quits; Ctrl+Q does.
 .SS Anywhere
 These work from every pane, the file you are typing in included.
 In a file,
@@ -90,6 +105,9 @@ value, and Tab again gives the next.
 .B "F1, ?"
 Every key and command.
 .TP
+.B *
+The bar, with a command begun.
+.TP
 .B Ctrl+G
 The git window, and back.
 .TP
@@ -115,7 +133,8 @@ closes it.
 .B Ctrl+O
 The terminal, and back.
 It runs your shell in the project's folder, under the panes, and every key
-but Ctrl+O goes to it.
+but Ctrl+O goes to it, and Esc at the shell's prompt, which steps out.
+A program that takes the whole screen gets Esc as well.
 .B exit
 closes it.
 .SS The browser
@@ -162,7 +181,7 @@ Show or hide hidden files.
 Narrower or wider.
 .TP
 .B Esc
-Quit, asking first if anything is unsaved.
+Out of the browser, to pick another part.
 .SS Editing a file
 Letters, Enter, Tab, Backspace and Delete type as they do anywhere.
 Enter keeps the indent.
@@ -236,8 +255,8 @@ Play back what was recorded.
 plays it twenty times.
 .TP
 .B Esc
-Let go of the selection and the other cursors, or with none, back to the
-browser.
+Let go of the selection and the other cursors, or with none, out of the
+file, to pick another part.
 .SS The mouse
 A click puts the cursor where it lands, and a drag selects.
 A double click selects a word, a triple click a line, and a click on the
@@ -250,12 +269,12 @@ anything on the screen.
 In a list, the first click picks and the second opens: a row of the browser,
 a box on the map, a change or a button in the git window.
 A search result opens with one.
-A click on another pane, or on the terminal, gives it the keyboard.
+A click goes into the part it lands on, the terminal included.
 A drag on the border between two parts resizes them: the browser's edge,
 the border between two panes or above the terminal, and in the git window
 the list's edge and the border between the two halves of a diff.
 Neither part is made smaller than leaves room for what it holds.
-The wheel scrolls whatever it is over.
+The wheel scrolls whatever it is over, whichever part the keyboard is in.
 A program in the terminal that asks for the mouse gets it there.
 .PP
 A click on a link follows it: a web address opens in your browser, and a
@@ -308,4 +327,24 @@ Ask git again.
 Narrower or wider.
 .TP
 .B Esc
-Back to the browser.
+Out of the list or the diff, to pick the other with the arrows; again, back
+to the browser.
+.PP
+In a project that is not a git repository yet, the window offers to
+initialize one, to publish the project, or to clone a repository into it.
+The same are
+.BR *init ,
+.B *publish
+and
+.BR "*clone <address>" .
+Publishing makes the repository if there is none, commits everything as the
+first commit if nothing has been committed, and pushes it: to the remote it
+has, to an address typed after the word, or to a new private GitHub
+repository made with the gh program.
+.B "*publish public"
+makes it public.
+.PP
+The browser colors what git says about each file: yellow for changed since
+the last commit, green for new, gray for what .gitignore leaves out, and red
+for a conflict.
+A folder takes the color of what is inside it.

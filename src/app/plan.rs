@@ -143,6 +143,9 @@ pub(super) enum Plan {
     },
     Set(Vec<String>),
     Commit(String),
+    Init,
+    Publish(super::publish::Publish),
+    Clone(super::publish::Cloning),
     Reload,
     Update,
     Split {
@@ -452,6 +455,11 @@ impl App {
             } => self.plan_replace(find, with, within.as_ref(), *whole_words),
             Sentence::Set(args) => Ok(Plan::Set(args.clone())),
             Sentence::Commit(message) => Ok(Plan::Commit(message.clone())),
+            Sentence::Init => self.plan_init().map(|()| Plan::Init),
+            Sentence::Publish(words) => self.plan_publish(words).map(Plan::Publish),
+            Sentence::Clone { from, into } => {
+                self.plan_clone(from, into.as_deref()).map(Plan::Clone)
+            }
             Sentence::Reload => Ok(Plan::Reload),
             Sentence::Update => Ok(Plan::Update),
             Sentence::Split { stacked } => Ok(Plan::Split { stacked: *stacked }),
@@ -921,6 +929,9 @@ impl App {
             },
             Plan::Commit(m) if m.is_empty() => "commit with what message?".into(),
             Plan::Commit(m) => format!("commits what is staged: {m}"),
+            Plan::Init => "makes this folder a git repository".into(),
+            Plan::Publish(p) => self.describe_publish(p),
+            Plan::Clone(c) => self.describe_clone(c),
             Plan::Reload => "reads the disk and the plugins again".into(),
             Plan::Update => "asks GitHub for a newer tiny".into(),
             Plan::Split { stacked: false } => "a new pane beside this one".into(),
@@ -975,7 +986,7 @@ impl App {
                 };
                 let line = (n - 1).min(ed.line_count().saturating_sub(1));
                 ed.goto(line, 0);
-                self.focus = Focus::Editor;
+                self.enter(Focus::Editor);
                 Ok(format!("line {}", line + 1))
             }
             Plan::Open(p) => {
@@ -1049,6 +1060,9 @@ impl App {
             } => self.replace_in_file(&path, &needle, &with, count),
             Plan::Set(args) => self.cmd_set(&args),
             Plan::Commit(m) => self.commit(&m),
+            Plan::Init => self.init_repository(),
+            Plan::Publish(p) => self.publish(p),
+            Plan::Clone(c) => self.clone_repository(c),
             Plan::Reload => self.cmd_reload(),
             Plan::Update => self.cmd_update(),
             Plan::Split { stacked } => {

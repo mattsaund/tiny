@@ -221,6 +221,7 @@ pub enum Action {
     Save,
     Quit,
     Bar,
+    Command,
     Help,
     WindowSource,
     WindowMap,
@@ -318,6 +319,15 @@ const TABLE: &[Row] = &[
         "search",
         "* for commands",
         "/ ctrl+f",
+    ),
+    // A bare key, so it works wherever nothing is being typed, and above
+    // all while picking a part, where every key is free.
+    (
+        Action::Command,
+        &[Context::Global],
+        "command",
+        "the bar, for a command",
+        "*",
     ),
     (Action::Help, &[Context::Global], "help", "", "? f1"),
     (
@@ -426,7 +436,7 @@ const TABLE: &[Row] = &[
             Context::Source,
         ],
         "back",
-        "or quit, from the browser",
+        "out, to pick another part",
         "esc",
     ),
     (

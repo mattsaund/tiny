@@ -239,7 +239,7 @@ fn a_save_hook_works_on_the_file_being_saved_not_the_one_on_screen() {
     select(&mut app, "README.md");
     app.on_key(k(KeyCode::Enter));
     type_str(&mut app, "y");
-    app.on_key(k(KeyCode::Esc));
+    into_browser(&mut app);
     app.on_key(k(KeyCode::Home));
     app.on_key(ctrl('s'));
 

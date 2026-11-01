@@ -14,9 +14,10 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use super::parts::{highlight_row, keep_visible, mark_query, pane};
+use super::parts::{Outline, highlight_row, highlight_row_in, keep_visible, mark_query, pane};
 
 use crate::app::{App, Bar, Focus, Mode};
+use crate::git::Mark;
 use crate::text::search::{self, HitKind, Matcher};
 use crate::text::tabs;
 
@@ -29,20 +30,18 @@ use crate::text::tabs;
 /// handler's page-up/page-down.
 pub(super) fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     let pal = app.palette;
-    let focused = app.focus == Focus::Tree && matches!(app.mode, Mode::Normal | Mode::Help(_));
+    let outline = Outline::of(
+        app.focus == Focus::Tree && matches!(app.mode, Mode::Normal | Mode::Help(_)),
+        app.entered,
+    );
+    // The cursor's row is reversed only with the keyboard in the browser.
+    let focused = outline == Outline::Entered;
     let title = vec![
         Span::raw(" "),
-        Span::styled(
-            "BROWSER",
-            if focused {
-                pal.text.add_modifier(Modifier::BOLD)
-            } else {
-                pal.dim
-            },
-        ),
+        Span::styled("BROWSER", outline.title(&pal)),
         Span::raw(" "),
     ];
-    let inner = pane(f, area, title, focused, app);
+    let inner = pane(f, area, title, outline, app);
     app.last_tree_inner = Some(inner);
 
     let height = inner.height as usize;
@@ -88,6 +87,19 @@ pub(super) fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             pal.text
         };
+        // What git says about it, in its color, over the weight a folder
+        // already has.
+        let tint = app
+            .coloring
+            .marks
+            .of(&row.path, row.is_dir)
+            .map(|mark| match mark {
+                Mark::Modified => pal.git_modified,
+                Mark::Added => pal.git_added,
+                Mark::Ignored => pal.git_ignored,
+                Mark::Conflict => pal.git_conflict,
+            });
+        let name_style = name_style.patch(tint.unwrap_or_default());
         let mut spans = vec![
             Span::styled("  ".repeat(row.depth), pal.text),
             Span::styled(marker, pal.text),
@@ -97,7 +109,7 @@ pub(super) fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
             spans.push(Span::styled(" *", pal.marker));
         }
         if i == app.selected {
-            highlight_row(&mut spans, width, pal, focused);
+            highlight_row_in(&mut spans, width, pal, focused, tint);
         }
         lines.push(Line::from(spans));
     }
@@ -160,7 +172,7 @@ pub(super) fn draw_results(f: &mut Frame, app: &App, area: Rect, b: &Bar) -> Opt
         ),
         Span::raw(" "),
     ];
-    let inner = pane(f, area, title, true, app);
+    let inner = pane(f, area, title, Outline::Picked, app);
     let height = inner.height as usize;
     if height == 0 || inner.width == 0 {
         return None;

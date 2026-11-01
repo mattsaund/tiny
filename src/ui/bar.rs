@@ -194,6 +194,11 @@ fn hints(app: &App) -> String {
         ),
         // With no repository there is nothing to stage or open.
         (_, Window::Source) if app.git.error.is_some() => format!("{} back", key(Action::Back)),
+        (_, Window::Source) if !app.git.entered => format!(
+            "arrows pick | {} go in | {} leave",
+            key(Action::Open),
+            key(Action::Back)
+        ),
         // What the arrows do in git depends on which half has them, and a
         // hint naming the other half's keys is worse than none.
         (_, Window::Source) => match app.git.focus {
@@ -202,21 +207,31 @@ fn hints(app: &App) -> String {
                 key(Action::Save),
                 key(Action::Back)
             ),
-            GitFocus::Diff => "up/down scroll | left back to the changes".into(),
+            GitFocus::Diff => format!("up/down scroll | {} out", key(Action::Back)),
             GitFocus::List => format!(
-                "{} stage | {} open | {} refresh | {} back",
+                "{} stage | {} open | {} refresh | {} out",
                 key(Action::Open),
                 key(Action::SourceOpen),
                 key(Action::Refresh),
                 key(Action::Back)
             ),
         },
+        // Picking a part: the arrows move the outline, and the bare keys
+        // that are letters in a file are free.
+        (_, Window::Main) if !app.entered => format!(
+            "arrows pick | {} go in | {} search | {} command | {} help",
+            key(Action::Open),
+            key(Action::Bar),
+            key(Action::Command),
+            key(Action::Help)
+        ),
         (_, Window::Main) => match app.focus {
             Focus::Tree => format!(
-                "{} search | {} git | {} map",
+                "{} search | {} git | {} map | {} out",
                 key(Action::Bar),
                 key(Action::WindowSource),
-                key(Action::WindowMap)
+                key(Action::WindowMap),
+                key(Action::Back)
             ),
             // Only with a file to type into: the keyboard can be in a pane
             // showing a picture or a folder, where none of these do anything.
@@ -235,15 +250,20 @@ fn hints(app: &App) -> String {
                 )
             }
             Focus::Editor if app.active_buffer().is_some() => format!(
-                "{} save | {} undo | {} delete line | {} back",
+                "{} save | {} undo | {} delete line | {} out",
                 key(Action::Save),
                 key(Action::EditorUndo),
                 key(Action::EditorDeleteLine),
                 key(Action::Back)
             ),
-            Focus::Editor => format!("{} back", key(Action::Back)),
-            // Every other key is the shell's, so this is the one worth saying.
-            Focus::Terminal => format!("{} back | exit closes it", key(Action::Terminal)),
+            Focus::Editor => format!("{} out", key(Action::Back)),
+            // Every other key is the shell's, so these are the ones worth
+            // saying.
+            Focus::Terminal => format!(
+                "{} out | {} back | exit closes it",
+                key(Action::Back),
+                key(Action::Terminal)
+            ),
         },
     }
 }
@@ -272,7 +292,7 @@ fn position_readout(app: &App) -> String {
                 // keypress and the size hardly ever, so the steady number goes
                 // on the outside where it will not be read as part of the one
                 // that is moving.
-                Some(ed) if app.focus == Focus::Editor => {
+                Some(ed) if app.editing() => {
                     let many = match (ed.others.len(), ed.selected_count()) {
                         (0, 0) => String::new(),
                         (0, n) => format!("{n} selected  "),

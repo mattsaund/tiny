@@ -3,10 +3,15 @@
 //! `Ctrl+O` (or `*terminal`) starts one in the project's folder and gives it
 //! the keyboard, and `Ctrl+O` again gives the keyboard back to wherever it
 //! was, leaving the shell on screen and running. While it has the keyboard,
-//! every key goes to the shell as it was typed, `Ctrl+C` and `Ctrl+W` and Esc
-//! included, which is what makes it a terminal: the one key kept back is the
-//! one that leaves. The shell exiting closes the pane, and so does `*close
+//! every key goes to the shell as it was typed, `Ctrl+C` and `Ctrl+W`
+//! included, which is what makes it a terminal: the key kept back is the one
+//! that leaves. The shell exiting closes the pane, and so does `*close
 //! terminal`.
+//!
+//! Esc steps out to picking another part, as it does everywhere, while the
+//! shell is at its prompt. A program that has taken the whole screen (an
+//! editor, a pager, `htop`) gets Esc instead, because it needs it; `Ctrl+O`
+//! still leaves from there.
 
 use crossterm::event::KeyEvent;
 
@@ -44,20 +49,21 @@ impl App {
                 }
             }
         }
-        if self.focus != Focus::Terminal {
-            self.focus_before_term = self.focus;
+        if !(self.focus == Focus::Terminal && self.entered) {
+            self.focus_before_term = (self.focus, self.entered);
         }
-        self.focus = Focus::Terminal;
+        self.enter(Focus::Terminal);
         self.status = format!("terminal, {} comes back", self.key_name(Action::Terminal));
     }
 
     /// The keyboard back to where it was before the terminal took it.
     fn leave_terminal(&mut self) {
-        self.focus = match self.focus_before_term {
+        let (before, entered) = self.focus_before_term;
+        (self.focus, self.entered) = match before {
             // The pane may have stopped showing a file in the meantime.
-            Focus::Editor if self.active_buffer().is_none() => Focus::Tree,
-            Focus::Terminal => Focus::Tree,
-            before => before,
+            Focus::Editor if self.active_buffer().is_none() => (Focus::Tree, entered),
+            Focus::Terminal => (Focus::Tree, true),
+            before => (before, entered),
         };
         self.status = "terminal still running".into();
     }
@@ -98,10 +104,17 @@ impl App {
     }
 
     /// A key while the terminal has the keyboard: the shell's, unless it is
-    /// the one that leaves.
+    /// the one that leaves, or Esc at the shell's prompt, see the module docs.
     pub(super) fn on_terminal_key(&mut self, key: KeyEvent) {
         if self.keymap.find(KeyContext::Global, &key) == Some(Action::Terminal) {
             return self.leave_terminal();
+        }
+        let whole_screen = self
+            .term
+            .as_ref()
+            .is_some_and(|shell| shell.screen().alternate_screen());
+        if !whole_screen && self.keymap.find(KeyContext::Tree, &key) == Some(Action::Back) {
+            return self.step_out();
         }
         match &mut self.term {
             Some(shell) => shell.key(key),

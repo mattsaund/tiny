@@ -71,7 +71,8 @@ fn right_steps_into_a_file_and_esc_steps_back_out() {
     assert!(app.active_buffer().unwrap().dirty, "and lands in the text");
 
     app.on_key(k(KeyCode::Esc));
-    assert_eq!(app.focus, Focus::Tree);
+    assert!(!app.entered, "out of the file, picking");
+    assert_eq!(app.focus, Focus::Editor, "with the file's pane picked");
 }
 
 #[test]

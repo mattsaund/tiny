@@ -41,6 +41,12 @@ tiny ~/notes         # that folder, made if it is missing
 tiny ~/code/main.py  # that file
 ```
 
+## Moving around
+
+Esc steps out of the part you are in, the arrows pick another (white), and
+Enter goes in (green). A click goes straight in. Esc never quits; `Ctrl+Q`
+does.
+
 ## Search everything
 
 ![searching the project](docs/search.png)
@@ -74,6 +80,8 @@ any two parts to resize them.
 ![the git window](docs/git.png)
 
 `Ctrl+G`. `Enter` stages, `commit` commits, with the git you already have.
+The browser shows changed files in yellow, new ones in green and ignored ones
+in gray. No repository yet: initialize, publish or clone from the same window.
 
 ## Map
 
@@ -97,10 +105,11 @@ addresses open in your browser, links to files open in tiny.
 
 | key | does |
 |---|---|
-| arrows, `i` `j` `k` `l` | move |
-| `Enter`, `Esc` | open, back |
+| arrows, `i` `j` `k` `l` | move, pick a part |
+| `Enter`, `Esc` | go in, step out |
 | `Ctrl+S` | save (on a folder, all of it) |
 | `/`, `Ctrl+F` | search |
+| `*` | a command |
 | click, drag | place the cursor, select |
 | `Ctrl` and a click | follow a link |
 | `Shift` and a move, `Ctrl+A` | select, select all |

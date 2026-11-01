@@ -92,8 +92,12 @@ impl App {
         match &self.preview {
             Preview::Buffer { path, .. } => {
                 let path = path.clone();
-                self.focus = Focus::Editor;
-                self.status = "editing: Ctrl+S save, Esc back".into();
+                self.enter(Focus::Editor);
+                self.status = format!(
+                    "editing: {} save, {} out",
+                    self.key_name(Action::Save),
+                    self.key_name(Action::Back)
+                );
                 self.plugin_event("open", &path);
             }
             Preview::Media { path, .. } => {
@@ -144,12 +148,14 @@ impl App {
         if self.tree_hidden {
             self.tree_hidden = false;
             // Back to whichever pane had it, so the key is a true toggle.
-            self.focus = self.focus_before_hide;
+            (self.focus, self.entered) = self.focus_before_hide;
             self.status = format!("browser back, {key} hides it");
         } else {
             self.tree_hidden = true;
-            self.focus_before_hide = self.focus;
-            self.focus = Focus::Editor;
+            self.focus_before_hide = (self.focus, self.entered);
+            if self.focus == Focus::Tree {
+                self.focus = Focus::Editor;
+            }
             self.status = format!("browser hidden, {key} brings it back");
         }
     }
@@ -213,12 +219,11 @@ impl App {
         };
     }
 
-    /// Put the tree on screen and give it the keyboard. What Esc means from
-    /// the preview, whether or not the tree was folded away: "back to the
-    /// tree" has to end up at the tree either way.
+    /// Put the tree on screen and give it the keyboard, whether or not it
+    /// was folded away: "to the browser" has to end up at the browser.
     pub(super) fn focus_tree(&mut self) {
         self.tree_hidden = false;
-        self.focus = Focus::Tree;
+        self.enter(Focus::Tree);
     }
 
     /// `.`: show or hide dotfiles. Writes through to the config so the setting
@@ -244,6 +249,7 @@ impl App {
         self.tree.refresh_all();
         self.reread_clean_buffers();
         self.rebuild_rows();
+        self.recolor();
         self.status = "refreshed".into();
     }
 

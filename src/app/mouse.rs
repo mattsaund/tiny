@@ -236,7 +236,10 @@ impl App {
         }
         let taken = shell.mouse(m.kind, at.x - area.x, at.y - area.y, m.modifiers);
         // A click hands it the keyboard as well, whoever has the mouse.
-        if taken && matches!(m.kind, MouseEventKind::Down(_)) && self.focus != Focus::Terminal {
+        if taken
+            && matches!(m.kind, MouseEventKind::Down(_))
+            && !(self.focus == Focus::Terminal && self.entered)
+        {
             self.open_terminal();
         }
         taken
@@ -322,9 +325,11 @@ impl App {
         }
     }
 
+    /// A click in the main window goes into the part it lands on, and does
+    /// what it would there: one click, not one to pick and one to go in.
     fn press_main(&mut self, at: Position, mods: KeyModifiers, count: u8) {
         if self.last_term_area.is_some_and(|r| r.contains(at)) {
-            if self.focus != Focus::Terminal {
+            if !(self.focus == Focus::Terminal && self.entered) {
                 self.open_terminal();
             }
             return;
@@ -345,7 +350,7 @@ impl App {
 
     /// A row of the browser: the cursor to it, and a second time, open it.
     fn press_tree(&mut self, at: Position, inner: Rect) {
-        let was_here = self.focus == Focus::Tree;
+        let was_here = self.focus == Focus::Tree && self.entered;
         self.focus_tree();
         let row = self.tree_scroll + usize::from(at.y - inner.y);
         if row >= self.rows.len() {
@@ -364,10 +369,14 @@ impl App {
         if let Some(id) = hit.pinned {
             self.focus_pane(id);
         }
+        // A picture or a folder has nothing to go into: picked, and that is
+        // all a click can do with it.
         if !matches!(self.preview, Preview::Buffer { .. }) {
+            self.focus = Focus::Editor;
+            self.entered = false;
             return;
         }
-        self.focus = Focus::Editor;
+        self.enter(Focus::Editor);
         // A note drawn formatted, with the browser in charge: the keyboard is
         // all a click can give it, there being no lines on screen to aim at.
         let Some(text) = hit.text else {
@@ -514,8 +523,10 @@ impl App {
         if self.git.diff_area.is_some_and(|r| r.contains(at)) {
             if self.git.message.is_some() {
                 self.git.focus = GitFocus::Message;
+                self.git.entered = true;
             } else if !self.git.diff.is_empty() {
                 self.git.focus = GitFocus::Diff;
+                self.git.entered = true;
             }
             return;
         }
@@ -534,8 +545,9 @@ impl App {
         else {
             return;
         };
-        let was_list = self.git.focus == GitFocus::List;
+        let was_list = self.git.focus == GitFocus::List && self.git.entered;
         self.git.focus = GitFocus::List;
+        self.git.entered = true;
         let again = was_list && self.git.selected == hit.row;
         let button = hit
             .buttons

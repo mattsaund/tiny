@@ -150,6 +150,9 @@ impl App {
         }
         let dirs = self.rescan_dirs();
         let files = self.rescan_files();
+        if dirs || files {
+            self.recolor();
+        }
         dirs || files
     }
 
@@ -228,7 +231,7 @@ impl App {
         if let Some(gone) = was_on.filter(|p| !p.exists()) {
             self.status = format!("{} is gone from disk", display_name(&gone));
         }
-        if self.focus == Focus::Editor {
+        if self.focus == Focus::Editor && self.entered {
             // Take the keyboard out of the file: otherwise the next thing
             // typed is typed into whichever file the cursor fell onto.
             self.focus_tree();

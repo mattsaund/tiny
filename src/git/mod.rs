@@ -145,6 +145,22 @@ impl Branch {
     }
 }
 
+/// What the browser colors a file or a folder for, from what git says about
+/// it. In order of how much it matters, which is what a folder shows when
+/// more than one thing is going on inside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Mark {
+    /// Left out by `.gitignore` and the like: gray.
+    Ignored,
+    /// New: never committed, staged or not. Green.
+    Added,
+    /// Changed since the last commit, or, for a folder, something in it
+    /// deleted. Yellow.
+    Modified,
+    /// Both sides of a merge changed it. Red.
+    Conflict,
+}
+
 /// Everything the window draws, as of the last time git was asked.
 #[derive(Debug, Clone, Default)]
 pub struct Status {
@@ -265,6 +281,44 @@ impl Repo {
         Ok(Self {
             root: PathBuf::from(top),
         })
+    }
+
+    /// What the browser colors: every path git has something to say about,
+    /// relative to the top of the repository, with a folder that is new or
+    /// ignored as a whole written with a `/` at its end.
+    pub fn marks(&self) -> Result<Vec<(String, Mark)>> {
+        let out = run::git(&self.root, &["status", "--porcelain=v1", "-z", "--ignored"])?;
+        Ok(parse::marks(&out))
+    }
+
+    /// Where the repository keeps its own files, so the browser can tell
+    /// when another program has committed or staged something.
+    pub fn git_dir(&self) -> Result<PathBuf> {
+        let out = run::git(&self.root, &["rev-parse", "--absolute-git-dir"])?;
+        Ok(PathBuf::from(out.trim()))
+    }
+
+    /// Make `dir` a repository. On the branch `main` unless git has been
+    /// told what to call the first branch, which is what GitHub and the like
+    /// call it.
+    pub fn init(dir: &Path) -> Result<Self> {
+        run::git(dir, &["init", "--quiet"])?;
+        if run::git(dir, &["config", "--get", "init.defaultBranch"]).is_err() {
+            run::git(dir, &["symbolic-ref", "HEAD", "refs/heads/main"])?;
+        }
+        Self::find(dir)
+    }
+
+    /// Whether anything has been committed yet.
+    pub fn has_commits(&self) -> bool {
+        run::git(&self.root, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok()
+    }
+
+    /// The remotes, by name.
+    pub fn remotes(&self) -> Vec<String> {
+        run::git(&self.root, &["remote"])
+            .map(|out| out.lines().map(str::to_string).collect())
+            .unwrap_or_default()
     }
 
     /// What has changed, and where the branch stands.

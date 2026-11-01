@@ -29,7 +29,10 @@ pub struct Theme {
     pub text: String,
     pub dim: String,
     pub border: String,
+    /// The part the arrows have picked.
     pub border_focus: String,
+    /// The part the keyboard is in, see `app::navigate`.
+    pub border_entered: String,
     pub selection: String,
     pub directory: String,
     pub heading: String,
@@ -41,6 +44,13 @@ pub struct Theme {
     /// default for why they are the exception.
     pub map_in: String,
     pub map_out: String,
+    /// The browser's names, by what git says about them: changed since the
+    /// last commit, new, left out by `.gitignore`, and caught in a merge
+    /// conflict. Colors that are the meaning, like the map's.
+    pub git_modified: String,
+    pub git_added: String,
+    pub git_ignored: String,
+    pub git_conflict: String,
 }
 
 impl Default for Theme {
@@ -53,6 +63,9 @@ impl Default for Theme {
             dim: "darkgray".into(),
             border: "darkgray".into(),
             border_focus: "white".into(),
+            // Like the two below, a color that is the meaning: picked is
+            // white, and in is green, which no weight could say apart.
+            border_entered: "green".into(),
             selection: "reverse".into(),
             directory: "bold".into(),
             heading: "bold".into(),
@@ -67,6 +80,12 @@ impl Default for Theme {
             // works here, so `#7dcfff` or `cyan bold` replaces them.
             map_in: "green".into(),
             map_out: "red".into(),
+            // The colors every other editor uses for these, so the browser
+            // reads at a glance to anyone who has used one.
+            git_modified: "yellow".into(),
+            git_added: "green".into(),
+            git_ignored: "darkgray".into(),
+            git_conflict: "red".into(),
         }
     }
 }
@@ -85,6 +104,7 @@ pub struct Palette {
     pub dim: Style,
     pub border: Style,
     pub border_focus: Style,
+    pub border_entered: Style,
     pub selection: Style,
     pub directory: Style,
     pub heading: Style,
@@ -93,6 +113,10 @@ pub struct Palette {
     pub marker: Style,
     pub map_in: Style,
     pub map_out: Style,
+    pub git_modified: Style,
+    pub git_added: Style,
+    pub git_ignored: Style,
+    pub git_conflict: Style,
     /// The characters lines and markers are drawn with, from the `glyphs`
     /// setting. Here because everything that draws is already handed the
     /// palette, so a setting that changes how the screen is built reaches all
@@ -111,6 +135,7 @@ impl Palette {
             dim: parse_style(&t.dim),
             border: parse_style(&t.border),
             border_focus: parse_style(&t.border_focus),
+            border_entered: parse_style(&t.border_entered),
             selection: parse_style(&t.selection),
             directory: parse_style(&t.directory),
             heading: parse_style(&t.heading),
@@ -119,6 +144,10 @@ impl Palette {
             marker: parse_style(&t.marker),
             map_in: parse_style(&t.map_in),
             map_out: parse_style(&t.map_out),
+            git_modified: parse_style(&t.git_modified),
+            git_added: parse_style(&t.git_added),
+            git_ignored: parse_style(&t.git_ignored),
+            git_conflict: parse_style(&t.git_conflict),
             glyphs: GlyphSet::Unicode.glyphs(),
             colors: Colors::Truecolor,
         }

@@ -5,7 +5,7 @@
 //! two halves arrive as separate records, a conflicted file, a diff with no
 //! trailing newline) are tested as strings.
 
-use super::{Branch, Change, Code, Diff, DiffLine, LineKind, Status};
+use super::{Branch, Change, Code, Diff, DiffLine, LineKind, Mark, Status};
 
 /// Parse `git status --porcelain=v1 --branch -z`.
 ///
@@ -73,6 +73,37 @@ pub fn status(out: &str) -> Status {
         }
     }
     status
+}
+
+/// Parse `git status --porcelain=v1 -z --ignored` into what the browser
+/// colors each path.
+///
+/// The same records as [`status`], and two more spellings: `!!` for what git
+/// ignores. A folder new or ignored as a whole comes as one record with a
+/// `/` on the end. A deleted file is not in the browser to color, so it
+/// marks its folders as changed. A rename is new where it went, and the
+/// record of where it came from is passed over.
+pub fn marks(out: &str) -> Vec<(String, Mark)> {
+    let mut marks = Vec::new();
+    let mut records = out.split('\0').filter(|r| !r.is_empty());
+    while let Some(record) = records.next() {
+        let (codes, path) = record.split_at(record.len().min(2));
+        let path = path.trim_start().to_string();
+        let mut chars = codes.chars();
+        let (x, y) = (chars.next().unwrap_or(' '), chars.next().unwrap_or(' '));
+        if x == 'R' || x == 'C' || y == 'R' || y == 'C' {
+            records.next();
+        }
+        let mark = match (x, y) {
+            ('!', _) | (_, '!') => Mark::Ignored,
+            ('?', _) | (_, '?') => Mark::Added,
+            ('U', _) | (_, 'U') | ('A', 'A') | ('D', 'D') => Mark::Conflict,
+            ('A' | 'R' | 'C', _) => Mark::Added,
+            _ => Mark::Modified,
+        };
+        marks.push((path, mark));
+    }
+    marks
 }
 
 /// The `## main...origin/main [ahead 1, behind 2]` line.
@@ -214,6 +245,27 @@ fn filler() -> DiffLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_kind_of_change_has_its_color() {
+        let out = " M src/main.rs\0M  staged.rs\0?? new.md\0?? fresh/\0A  added.rs\0\
+                   R  to.rs\0from.rs\0UU both.rs\0 D gone.rs\0!! target/\0!! notes.log\0";
+        assert_eq!(
+            marks(out),
+            [
+                ("src/main.rs".to_string(), Mark::Modified),
+                ("staged.rs".into(), Mark::Modified),
+                ("new.md".into(), Mark::Added),
+                ("fresh/".into(), Mark::Added),
+                ("added.rs".into(), Mark::Added),
+                ("to.rs".into(), Mark::Added),
+                ("both.rs".into(), Mark::Conflict),
+                ("gone.rs".into(), Mark::Modified),
+                ("target/".into(), Mark::Ignored),
+                ("notes.log".into(), Mark::Ignored),
+            ]
+        );
+    }
 
     /// Records are NUL-separated, so a fixture reads better written with `\0`
     /// spelled out.

@@ -186,18 +186,67 @@ fn folding_the_tree_while_editing_leaves_you_editing() {
 }
 
 #[test]
-fn esc_brings_the_tree_back_and_lands_on_it() {
+fn the_outline_is_white_while_picking_and_green_inside() {
+    let (_td, mut app) = fixture();
+    select(&mut app, "design.md");
+    // The color of the top left corner of the pane beside the browser.
+    let corner = |app: &mut App| {
+        let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        t.draw(|f| crate::ui::draw(f, app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        let x = (0..100)
+            .find(|&x| x > 0 && buf[(x, 0)].symbol() == "\u{250c}")
+            .unwrap();
+        (buf[(0, 0)].fg, buf[(x, 0)].fg)
+    };
+    assert_eq!(
+        corner(&mut app),
+        (Color::Green, Color::DarkGray),
+        "in the browser"
+    );
+    app.on_key(k(KeyCode::Esc));
+    assert_eq!(
+        corner(&mut app),
+        (Color::White, Color::DarkGray),
+        "picking it"
+    );
+    app.on_key(k(KeyCode::Right));
+    assert_eq!(
+        corner(&mut app),
+        (Color::DarkGray, Color::White),
+        "picking the file"
+    );
+    app.on_key(k(KeyCode::Enter));
+    assert_eq!(
+        corner(&mut app),
+        (Color::DarkGray, Color::Green),
+        "in the file"
+    );
+
+    // And both are settings, like every other color.
+    command(&mut app, "set theme.border_entered cyan");
+    command(&mut app, "set theme.border_focus yellow");
+    assert_eq!(corner(&mut app), (Color::DarkGray, Color::Cyan));
+    app.on_key(k(KeyCode::Esc));
+    assert_eq!(corner(&mut app), (Color::DarkGray, Color::Yellow));
+}
+
+#[test]
+fn left_toward_a_folded_browser_brings_it_back() {
     let (_td, mut app) = fixture();
     select(&mut app, "main.py");
     app.on_key(k(KeyCode::Enter));
     app.on_key(ctrl('t'));
 
     app.on_key(k(KeyCode::Esc));
-    assert!(
-        !app.tree_hidden,
-        "Esc means the tree, so the tree comes back"
-    );
+    assert!(app.tree_hidden, "Esc steps out of the file, and only that");
+    screen(&mut app, 100, 30);
+    app.on_key(k(KeyCode::Left));
+    assert!(!app.tree_hidden, "toward where it was, it comes back");
     assert_eq!(app.focus, Focus::Tree);
+    assert!(!app.entered, "picked");
+    app.on_key(k(KeyCode::Enter));
+    assert!(app.entered, "and Enter goes in");
 }
 
 #[test]
@@ -485,7 +534,7 @@ fn dotfiles_are_a_browser_key_and_a_setting() {
     // From a file, the setting is the way; from the browser, one key.
     command(&mut app, "set show_hidden true");
     assert!(app.config.show_hidden);
-    app.on_key(k(KeyCode::Esc));
+    into_browser(&mut app);
     app.on_key(ch('.'));
     assert!(
         !app.config.show_hidden,
@@ -721,7 +770,7 @@ fn ctrl_u_and_ctrl_d_page_where_there_are_no_page_keys() {
     assert_eq!(app.active_buffer().unwrap().cursor_line, 0, "and back up");
 
     // And in the browser, where they move the cursor a screen at a time.
-    app.on_key(k(KeyCode::Esc));
+    into_browser(&mut app);
     let before = app.selected;
     app.on_key(ctrl('d'));
     assert!(app.selected > before || app.selected == app.rows.len() - 1);
@@ -914,15 +963,22 @@ fn the_windows_are_ctrl_g_and_ctrl_l_from_anywhere() {
 #[test]
 fn esc_leaves_a_window_for_the_main_one() {
     let (_td, mut app) = fixture();
-    for window in [Window::Map, Window::Source] {
-        app.on_key(match window {
-            Window::Map => ctrl('l'),
-            _ => ctrl('g'),
-        });
-        assert_eq!(app.window, window);
-        app.on_key(k(KeyCode::Esc));
-        assert_eq!(app.window, Window::Main, "esc came back from {window:?}");
-    }
+    // The map is one part, always in, so Esc is straight back.
+    app.on_key(ctrl('l'));
+    assert_eq!(app.window, Window::Map);
+    app.on_key(k(KeyCode::Esc));
+    assert_eq!(app.window, Window::Main, "esc came back from the map");
+
+    // Out of a repository, the git window is one part as well. In one, Esc
+    // steps out of a half first, see the git tests.
+    app.on_key(ctrl('g'));
+    assert_eq!(app.window, Window::Source);
+    app.on_key(k(KeyCode::Esc));
+    assert_eq!(
+        app.window,
+        Window::Main,
+        "esc came back from the git window"
+    );
 }
 
 #[test]
