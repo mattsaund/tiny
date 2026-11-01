@@ -69,8 +69,8 @@ pub enum Then {
 
 /// A repository's name, from its address: the last part, without `.git`.
 fn name_in(url: &str) -> String {
-    url.trim_end_matches('/')
-        .rsplit(['/', ':'])
+    url.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\', ':'])
         .next()
         .unwrap_or(url)
         .trim_end_matches(".git")
@@ -324,6 +324,7 @@ mod tests {
         assert_eq!(name_in("git@github.com:me/notes.git"), "notes");
         assert_eq!(name_in("https://example.com/me/notes/"), "notes");
         assert_eq!(name_in("../other"), "other");
+        assert_eq!(name_in("C:\\Users\\me\\shared.git"), "shared", "on Windows");
     }
 
     #[test]

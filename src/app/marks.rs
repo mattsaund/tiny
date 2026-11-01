@@ -38,15 +38,26 @@ pub struct Marks {
 }
 
 impl Marks {
-    /// From what [`Repo::marks`] said, its paths being relative to `top`.
-    pub fn build(top: &Path, said: Vec<(String, Mark)>) -> Self {
+    /// From what [`Repo::marks`] said, its paths being relative to the top
+    /// of the repository, for the project at `root`, which is `prefix` down
+    /// from the top (see [`Repo::prefix`]). What is outside the project is
+    /// left out: the browser does not show it.
+    pub fn build(root: &Path, prefix: &str, said: Vec<(String, Mark)>) -> Self {
         let mut marks = Marks::default();
         for (rel, mark) in said {
-            let whole = rel.ends_with('/');
-            let path = top.join(rel.trim_end_matches('/'));
+            let Some(inside) = rel.strip_prefix(prefix) else {
+                continue;
+            };
+            let whole = inside.ends_with('/');
+            let inside = inside.trim_end_matches('/');
+            let path = if inside.is_empty() {
+                root.to_path_buf()
+            } else {
+                root.join(inside)
+            };
             if mark != Mark::Ignored {
                 for folder in path.ancestors().skip(1) {
-                    if !folder.starts_with(top) {
+                    if !folder.starts_with(root) {
                         break;
                     }
                     let was = marks.folders.entry(folder.to_path_buf()).or_insert(mark);
@@ -161,7 +172,8 @@ impl App {
         std::thread::spawn(move || {
             let answer: Answer = Repo::find(&root).ok().and_then(|repo| {
                 let said = repo.marks().ok()?;
-                Some((Marks::build(&repo.root, said), repo.git_dir().ok()))
+                let prefix = Repo::prefix(&root).ok()?;
+                Some((Marks::build(&root, &prefix, said), repo.git_dir().ok()))
             });
             // Nobody to tell if tiny has quit in the meantime.
             let _ = tx.send(answer);
@@ -229,6 +241,7 @@ mod tests {
         let top = Path::new("/p");
         let marks = Marks::build(
             top,
+            "",
             vec![
                 ("src/app/new.rs".into(), Mark::Added),
                 ("src/main.rs".into(), Mark::Modified),
@@ -255,5 +268,29 @@ mod tests {
             Some(Mark::Modified),
             "the top shows it as well"
         );
+    }
+
+    #[test]
+    fn a_project_in_a_folder_of_a_repository_sees_only_its_own() {
+        let root = Path::new("/elsewhere/notes");
+        let marks = Marks::build(
+            root,
+            "notes/",
+            vec![
+                ("notes/today.md".into(), Mark::Modified),
+                ("src/main.rs".into(), Mark::Modified),
+                ("notes/drafts/".into(), Mark::Added),
+            ],
+        );
+        assert_eq!(
+            marks.of(&root.join("today.md"), false),
+            Some(Mark::Modified)
+        );
+        assert_eq!(
+            marks.of(&root.join("drafts/a.md"), false),
+            Some(Mark::Added)
+        );
+        assert_eq!(marks.of(root, true), Some(Mark::Modified));
+        assert_eq!(marks.files.len(), 1, "src/main.rs is not in the project");
     }
 }

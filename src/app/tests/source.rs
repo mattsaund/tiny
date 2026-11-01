@@ -1366,7 +1366,9 @@ fn publish_commits_what_there_is_and_pushes_it_to_an_address() {
     let Mode::Bar(b) = &app.mode else {
         panic!("the bar is open")
     };
-    let plan = format!("{:?}", b.plan);
+    let Some(Ok(plan)) = b.plan.clone() else {
+        panic!("a plan: {:?}", b.plan)
+    };
     assert!(plan.contains("commits every file as"), "{plan}");
     assert!(plan.contains(&url), "{plan}");
     app.on_key(k(KeyCode::Enter));

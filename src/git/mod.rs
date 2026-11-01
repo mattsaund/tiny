@@ -291,6 +291,17 @@ impl Repo {
         Ok(parse::marks(&out))
     }
 
+    /// Where `dir` is inside the repository, as git writes it: `""` at the
+    /// top, `notes/` in a folder of it. Paths git gives relative to the top
+    /// are put back under `dir` with this, rather than under the top as git
+    /// spells it, which on macOS and Windows need not be how the project's
+    /// own folder is spelled.
+    pub fn prefix(dir: &Path) -> Result<String> {
+        Ok(run::git(dir, &["rev-parse", "--show-prefix"])?
+            .trim()
+            .to_string())
+    }
+
     /// Where the repository keeps its own files, so the browser can tell
     /// when another program has committed or staged something.
     pub fn git_dir(&self) -> Result<PathBuf> {
