@@ -3,6 +3,13 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.6.6 - 2026-11-01
+
+- **The arrows stay in the part you are in.** With the browser gone into,
+  right on a file no longer jumps into the file, and in the git window right
+  and left no longer cross between the list and the diff. Moving between
+  parts is Esc and the arrows; Enter still opens a file.
+
 ## 0.6.5 - 2026-11-01
 
 - **Pick a part, then go in.** Esc steps out of the browser, a file or the

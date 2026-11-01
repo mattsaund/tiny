@@ -34,12 +34,14 @@ pub const TREE_WIDTH_MAX: f32 = 0.60;
 impl App {
     // ---- actions ----------------------------------------------------------
 
-    /// Right-arrow on the tree: expand a closed folder, step into an
-    /// already-open one, or focus the preview for a file.
+    /// Right-arrow on the tree: expand a closed folder, or step into an
+    /// already-open one.
     ///
     /// This is the "inwards" key, and the mirror of
     /// [`App::collapse_or_parent`]: holding it down walks you down a branch.
-    /// Enter is deliberately different, see [`App::toggle_or_open`].
+    /// On a file it stays put: the arrows move inside the part the keyboard
+    /// is in and never out of it, so a file is opened with Enter, see
+    /// [`App::toggle_or_open`].
     pub(super) fn activate(&mut self) {
         let Some(row) = self.selected_row().cloned() else {
             return;
@@ -52,7 +54,7 @@ impl App {
                 self.rebuild_rows();
             }
         } else {
-            self.focus_editor();
+            self.status = format!("{} opens it", self.key_name(Action::Open));
         }
     }
 

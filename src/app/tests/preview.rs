@@ -62,11 +62,17 @@ fn plain_text_opens_straight_into_the_editor() {
 }
 
 #[test]
-fn right_steps_into_a_file_and_esc_steps_back_out() {
+fn right_on_a_file_stays_in_the_browser_and_enter_opens_it() {
     let (_td, mut app) = fixture();
     select(&mut app, "design.md");
     app.on_key(k(KeyCode::Right));
-    assert_eq!(app.focus, Focus::Editor, "right steps into the file");
+    assert!(
+        app.focus == Focus::Tree && app.entered,
+        "an arrow moves inside the browser, never out of it"
+    );
+    assert!(app.status.contains("opens it"), "{}", app.status);
+    app.on_key(k(KeyCode::Enter));
+    assert!(app.editing(), "Enter opens the file");
     type_str(&mut app, "x");
     assert!(app.active_buffer().unwrap().dirty, "and lands in the text");
 
@@ -79,7 +85,7 @@ fn right_steps_into_a_file_and_esc_steps_back_out() {
 fn a_bare_left_moves_the_cursor_instead_of_leaving() {
     let (_td, mut app) = fixture();
     select(&mut app, "design.md");
-    app.on_key(k(KeyCode::Right));
+    app.on_key(k(KeyCode::Enter));
     app.on_key(k(KeyCode::Right));
     app.on_key(k(KeyCode::Left));
     assert_eq!(

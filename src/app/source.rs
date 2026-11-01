@@ -448,34 +448,13 @@ impl App {
         self.scroll_git_diff(pages * page);
     }
 
-    /// Left and right: along the button row, or in and out of the diff.
-    ///
-    /// One key with two jobs, decided by what the cursor is on. On the button
-    /// row there is a row to walk; on a file, right is the way into the thing
-    /// that file is about, which is what right-arrow means everywhere else in
-    /// tiny too.
+    /// Left and right: along the button row, and nothing anywhere else. The
+    /// arrows move inside the half the keyboard is in and never out of it;
+    /// Esc and the arrows go between the list and the diff, see `navigate`.
     pub(super) fn move_git_button(&mut self, delta: isize) {
-        if self.git.focus == GitFocus::Diff {
-            if delta < 0 {
-                self.git.focus = GitFocus::List;
-                self.status = "back to the changes".into();
-            }
-            return;
-        }
-        if self.git.rows.get(self.git.selected) != Some(&Row::Buttons) {
-            if delta <= 0 {
-                return;
-            }
-            // Into what is drawn on the right: a message put down with Esc,
-            // to go on writing it, or else the diff, where up and down scroll
-            // both columns at once.
-            if self.git.message.is_some() {
-                self.git.focus = GitFocus::Message;
-                self.status = "back in the message: Ctrl+S commits, Esc puts it down".into();
-            } else if !self.git.diff.is_empty() {
-                self.git.focus = GitFocus::Diff;
-                self.status = "reading the change, left to come back".into();
-            }
+        if self.git.focus != GitFocus::List
+            || self.git.rows.get(self.git.selected) != Some(&Row::Buttons)
+        {
             return;
         }
         self.step_git_button(delta);

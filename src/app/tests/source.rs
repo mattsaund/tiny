@@ -108,6 +108,30 @@ fn source(app: &mut App) {
     assert_eq!(app.window, Window::Source);
 }
 
+/// Out of the list and into the diff: Esc to pick, right, and Enter.
+fn into_diff(app: &mut App) {
+    app.on_key(k(KeyCode::Esc));
+    app.on_key(k(KeyCode::Right));
+    app.on_key(k(KeyCode::Enter));
+    assert!(
+        app.git.entered && app.git.focus == GitFocus::Diff,
+        "{}",
+        app.status
+    );
+}
+
+/// Out of the diff and into the list: Esc to pick, left, and Enter.
+fn into_list(app: &mut App) {
+    app.on_key(k(KeyCode::Esc));
+    app.on_key(k(KeyCode::Left));
+    app.on_key(k(KeyCode::Enter));
+    assert!(
+        app.git.entered && app.git.focus == GitFocus::List,
+        "{}",
+        app.status
+    );
+}
+
 /// Put the cursor on a named file in the change list.
 fn cursor_on(app: &mut App, name: &str) {
     for _ in 0..20 {
@@ -486,14 +510,15 @@ fn a_file_with_no_grammar_is_still_drawn() {
 }
 
 #[test]
-fn right_goes_into_the_diff_and_the_arrows_scroll_both_halves() {
+fn the_arrows_stay_in_a_half_and_scroll_both_columns_of_the_diff() {
     let (_td, mut app) = repo();
     source(&mut app);
     cursor_on(&mut app, "README.md");
     assert_eq!(app.git.focus, GitFocus::List);
 
     app.on_key(k(KeyCode::Right));
-    assert_eq!(app.git.focus, GitFocus::Diff, "{}", app.status);
+    assert_eq!(app.git.focus, GitFocus::List, "right stays in the list");
+    into_diff(&mut app);
 
     // Up and down now scroll rather than moving the cursor, and one offset
     // moves both columns because there is only one offset.
@@ -505,7 +530,8 @@ fn right_goes_into_the_diff_and_the_arrows_scroll_both_halves() {
     assert_eq!(app.git.diff_scroll, 0);
 
     app.on_key(k(KeyCode::Left));
-    assert_eq!(app.git.focus, GitFocus::List, "left comes back");
+    assert_eq!(app.git.focus, GitFocus::Diff, "left stays in the diff");
+    into_list(&mut app);
     app.on_key(k(KeyCode::Down));
     assert_ne!(app.git.selected, row, "and the arrows move the list again");
 }
@@ -545,14 +571,13 @@ fn the_change_list_steps_back_when_the_keyboard_goes_into_the_diff() {
         "the cursor's row is highlighted while the list has the keyboard"
     );
 
-    app.on_key(k(KeyCode::Right));
-    assert_eq!(app.git.focus, GitFocus::Diff);
+    into_diff(&mut app);
     assert!(
         !row_is_highlighted(&mut app, "README.md"),
         "and quietly marked once it does not, the same as the browser"
     );
 
-    app.on_key(k(KeyCode::Left));
+    into_list(&mut app);
     assert!(
         row_is_highlighted(&mut app, "README.md"),
         "and highlighted again on the way back"
@@ -578,11 +603,11 @@ fn moving_to_another_file_leaves_the_diff_and_starts_at_its_top() {
     let (_td, mut app) = repo();
     source(&mut app);
     cursor_on(&mut app, "README.md");
-    app.on_key(k(KeyCode::Right));
+    into_diff(&mut app);
     app.on_key(k(KeyCode::Down));
     assert_eq!((app.git.focus, app.git.diff_scroll), (GitFocus::Diff, 1));
 
-    app.on_key(k(KeyCode::Left));
+    into_list(&mut app);
     app.on_key(k(KeyCode::Down));
     assert_eq!(
         app.git.focus,
@@ -627,8 +652,7 @@ fn a_page_key_pages_the_diff_from_either_half() {
     app.on_key(ctrl('u'));
     assert_eq!(app.git.diff_scroll, 0, "and back up again");
 
-    app.on_key(k(KeyCode::Right));
-    assert_eq!(app.git.focus, GitFocus::Diff);
+    into_diff(&mut app);
     app.on_key(ctrl('d'));
     assert_eq!(app.git.diff_scroll, page, "the same from inside the diff");
 }
@@ -1101,13 +1125,18 @@ fn enter_goes_back_into_a_message_that_was_put_down() {
     assert!(app.git.entered && app.git.focus == GitFocus::Message);
     type_str(&mut app, " and more");
 
-    // And from the list, right on a file goes into it too.
+    // From the list, right on a file stays in the list: back to the
+    // message is Esc, right and Enter.
     app.on_key(k(KeyCode::Esc));
     app.on_key(k(KeyCode::Left));
     app.on_key(k(KeyCode::Enter));
     assert_eq!(app.git.focus, GitFocus::List);
     cursor_on(&mut app, "README.md");
     app.on_key(k(KeyCode::Right));
+    assert_eq!(app.git.focus, GitFocus::List, "{}", app.status);
+    app.on_key(k(KeyCode::Esc));
+    app.on_key(k(KeyCode::Right));
+    app.on_key(k(KeyCode::Enter));
     assert_eq!(app.git.focus, GitFocus::Message, "{}", app.status);
     type_str(&mut app, " again");
     let text = app.git.message.as_ref().unwrap().to_text();
