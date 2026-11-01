@@ -18,6 +18,14 @@
 //! The git window has the same two levels for its two halves, the list of
 //! changes and what is drawn beside it. The map is one part, always in.
 //!
+//! # The pane the browser opens files into
+//!
+//! With several panes, the browser shows what its cursor is on in one of
+//! them: the one last gone into, whatever the arrows have picked since. A
+//! pane only picked keeps what it shows, so walking the outline across it to
+//! reach the browser does not take it over. The terminal is never that
+//! pane: going into it leaves the browser opening files where it did.
+//!
 //! # Where the parts are
 //!
 //! Only `ui` knows where anything was drawn, so picking reads the last frame:
@@ -116,6 +124,7 @@ impl App {
     pub(super) fn enter(&mut self, focus: Focus) {
         self.focus = focus;
         self.entered = true;
+        self.picked_pane = None;
     }
 
     /// Esc, in a part of the main window: out of it, to pick another. The
@@ -150,8 +159,28 @@ impl App {
     fn picked_area(&self) -> Option<Rect> {
         match self.focus {
             Focus::Tree => self.last_tree_inner.filter(|_| !self.tree_hidden),
-            Focus::Editor => Some(self.last_live_area),
+            Focus::Editor => match self.picked_pane {
+                Some(id) => self
+                    .last_pinned
+                    .iter()
+                    .find(|(p, _)| *p == id)
+                    .map(|(_, r)| *r)
+                    .or(Some(self.last_live_area)),
+                None => Some(self.last_live_area),
+            },
             Focus::Terminal => self.last_term_area,
+        }
+    }
+
+    /// What a pane set aside shows, for the status line.
+    fn pinned_name(&self, id: usize) -> String {
+        let pane = self
+            .split
+            .as_ref()
+            .and_then(|s| s.pinned.iter().find(|(p, _)| *p == id));
+        match pane.and_then(|(_, pane)| pane.preview.path()) {
+            Some(path) => super::parts::display_name(path),
+            None => "an empty pane".into(),
         }
     }
 
@@ -170,10 +199,12 @@ impl App {
             if self.tree_hidden && way == side {
                 self.tree_hidden = false;
                 self.focus = Focus::Tree;
+                self.picked_pane = None;
                 self.status = "browser".into();
             }
             return;
         };
+        self.picked_pane = None;
         match next {
             Part::Tree => {
                 self.focus = Focus::Tree;
@@ -183,9 +214,12 @@ impl App {
                 self.focus = Focus::Editor;
                 self.status = self.pane_name();
             }
+            // Picked, and nothing more: the pane the browser opens files
+            // into stays the one last gone into.
             Part::Pane(Some(id)) => {
-                self.focus_pane(id);
-                self.entered = false;
+                self.focus = Focus::Editor;
+                self.picked_pane = Some(id);
+                self.status = self.pinned_name(id);
             }
             Part::Terminal => {
                 self.focus = Focus::Terminal;
@@ -211,13 +245,24 @@ impl App {
                 self.status = "browser".into();
             }
             // A file types, a picture opens in the desktop's own program,
-            // and a folder or a binary has nothing to go into.
-            Focus::Editor => match &self.preview {
-                Preview::Buffer { .. } | Preview::Media { .. } => self.focus_editor(),
-                Preview::Binary { kind, .. } => self.status = format!("{kind}, not editable"),
-                _ => self.status = "nothing to go into here".into(),
-            },
+            // and a folder or a binary has nothing to go into. A pane set
+            // aside becomes the one the browser opens files into first.
+            Focus::Editor => {
+                if let Some(id) = self.picked_pane.take() {
+                    self.focus_pane(id);
+                }
+                self.enter_picked_pane();
+            }
             Focus::Terminal => self.open_terminal(),
+        }
+    }
+
+    /// Enter on the pane the browser opens files into.
+    fn enter_picked_pane(&mut self) {
+        match &self.preview {
+            Preview::Buffer { .. } | Preview::Media { .. } => self.focus_editor(),
+            Preview::Binary { kind, .. } => self.status = format!("{kind}, not editable"),
+            _ => self.status = "nothing to go into here".into(),
         }
     }
 
@@ -241,7 +286,21 @@ impl App {
             // What is shown is what is saved: the file in a picked pane, and
             // otherwise what the browser's cursor is on, all of a folder.
             Action::Save => {
-                if self.focus == Focus::Editor && matches!(self.preview, Preview::Buffer { .. }) {
+                let pinned = self.picked_pane.and_then(|id| {
+                    let split = self.split.as_ref()?;
+                    let (_, pane) = split.pinned.iter().find(|(p, _)| *p == id)?;
+                    pane.preview.path().map(std::path::Path::to_path_buf)
+                });
+                if let Some(path) = pinned.filter(|p| self.buffers.contains_key(p)) {
+                    let (saved, failed) = self.save_each(std::slice::from_ref(&path));
+                    self.status = match failed.first() {
+                        Some(why) => format!("save failed: {why}"),
+                        None if saved == 0 => "no changes".into(),
+                        None => format!("saved {}", super::parts::display_name(&path)),
+                    };
+                } else if self.focus == Focus::Editor
+                    && matches!(self.preview, Preview::Buffer { .. })
+                {
                     self.save_active();
                 } else {
                     self.save_from_tree();

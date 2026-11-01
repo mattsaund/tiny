@@ -197,6 +197,10 @@ pub struct App {
     /// Whether the keyboard is in the part `focus` names, rather than the
     /// arrows picking which part that is, see [`navigate`].
     pub entered: bool,
+    /// A pane set aside that the arrows have picked, while picking. Picking
+    /// a pane does not make it the one the browser opens files into; only
+    /// going into it does, see [`navigate`].
+    pub picked_pane: Option<usize>,
     pub mode: Mode,
     /// What the right pane is showing for the current selection. Derived from
     /// the cursor by [`App::sync_preview`]; never set directly.
@@ -438,6 +442,7 @@ impl App {
             // In the browser to begin with: the arrows move through the
             // files, and Esc steps out to pick another part.
             entered: true,
+            picked_pane: None,
             mode: Mode::Normal,
             preview: Preview::Empty,
             preview_scroll: 0,

@@ -417,6 +417,7 @@ impl App {
     /// `*split`, or `*split down`: a new pane beside the one you are in, or
     /// below it, showing the same thing. It takes the keyboard.
     pub(super) fn split_pane(&mut self, stacked: bool) {
+        self.picked_pane = None;
         if self.window != Window::Main {
             self.show_window(Window::Main);
         }
@@ -460,6 +461,7 @@ impl App {
     /// `*close`: the pane with the keyboard goes, and the one before it takes
     /// the keyboard.
     pub(super) fn close_pane(&mut self) {
+        self.picked_pane = None;
         let Some(split) = &mut self.split else {
             self.status = "only one pane".into();
             return;
@@ -483,6 +485,7 @@ impl App {
 
     /// `*close others`: back to one pane, the one you are in.
     pub(super) fn close_other_panes(&mut self) {
+        self.picked_pane = None;
         if self.split.take().is_none() {
             self.status = "only one pane".into();
             return;
@@ -492,6 +495,7 @@ impl App {
 
     /// The keyboard to pane `id`.
     pub(super) fn focus_pane(&mut self, id: usize) {
+        self.picked_pane = None;
         let Some(split) = &mut self.split else {
             return;
         };

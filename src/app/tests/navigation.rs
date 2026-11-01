@@ -1024,3 +1024,82 @@ fn a_slash_in_front_of_a_picture_opens_the_bar() {
 
     assert!(matches!(app.mode, Mode::Bar(_)), "the bar opened");
 }
+
+#[test]
+fn the_browser_opens_files_into_the_pane_last_gone_into() {
+    let (_td, mut app) = fixture();
+    select(&mut app, "design.md");
+    app.on_key(k(KeyCode::Enter));
+    // Two panes: the new one, on the right, has the keyboard.
+    app.on_key(ctrl('w'));
+    let right = app.split.as_ref().unwrap().live;
+    let left = app.split.as_ref().unwrap().pinned[0].0;
+    let shows = |app: &App, id: usize| -> String {
+        let split = app.split.as_ref().unwrap();
+        let path = if split.live == id {
+            app.preview.path()
+        } else {
+            let (_, pane) = split.pinned.iter().find(|(p, _)| *p == id).unwrap();
+            pane.preview.path()
+        };
+        path.map(display_name).unwrap_or_default()
+    };
+
+    // Out, and left across the other pane to the browser.
+    app.on_key(k(KeyCode::Esc));
+    screen(&mut app, 120, 30);
+    app.on_key(k(KeyCode::Left));
+    assert_eq!(app.picked_pane, Some(left), "the left pane, picked");
+    assert_eq!(
+        app.split.as_ref().unwrap().live,
+        right,
+        "and not taken over"
+    );
+    screen(&mut app, 120, 30);
+    app.on_key(k(KeyCode::Left));
+    assert_eq!(app.focus, Focus::Tree);
+    app.on_key(k(KeyCode::Enter));
+
+    // The browser's cursor moves, and the pane last gone into follows it.
+    select(&mut app, "main.py");
+    assert_eq!(shows(&app, right), "main.py");
+    assert_eq!(shows(&app, left), "design.md", "the other keeps its file");
+
+    // Going into the left pane makes it the one that follows.
+    app.on_key(k(KeyCode::Esc));
+    screen(&mut app, 120, 30);
+    app.on_key(k(KeyCode::Right));
+    assert_eq!(app.picked_pane, Some(left));
+    app.on_key(k(KeyCode::Enter));
+    assert!(app.editing(), "in it");
+    assert_eq!(app.split.as_ref().unwrap().live, left);
+    into_browser(&mut app);
+    select(&mut app, "README.md");
+    assert_eq!(shows(&app, left), "README.md");
+    assert_eq!(shows(&app, right), "main.py", "and the right one stays");
+}
+
+#[test]
+fn a_picked_pane_is_outlined_in_white_and_the_others_not() {
+    let (_td, mut app) = fixture();
+    select(&mut app, "design.md");
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(ctrl('w'));
+    app.on_key(k(KeyCode::Esc));
+    screen(&mut app, 120, 30);
+    app.on_key(k(KeyCode::Left));
+    let mut t = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    t.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+    let buf = t.backend().buffer().clone();
+    // The three top left corners along the first row: browser, left pane,
+    // right pane.
+    let corners: Vec<Color> = (0..120)
+        .filter(|&x| buf[(x, 0)].symbol() == "\u{250c}")
+        .map(|x| buf[(x, 0)].fg)
+        .collect();
+    assert_eq!(
+        corners,
+        [Color::DarkGray, Color::White, Color::DarkGray],
+        "only the left pane, which the arrows picked"
+    );
+}

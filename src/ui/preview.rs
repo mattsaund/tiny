@@ -36,7 +36,9 @@ use crate::text::tabs;
 /// whether there is formatting on screen.
 pub(super) fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
     let outline = Outline::of(
-        app.focus == Focus::Editor && matches!(app.mode, Mode::Normal | Mode::Help(_)),
+        app.focus == Focus::Editor
+            && app.picked_pane.is_none()
+            && matches!(app.mode, Mode::Normal | Mode::Help(_)),
         app.entered,
     );
     let text = draw_pane(f, app, area, outline);
@@ -83,7 +85,18 @@ pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, id: usize, area: Rect, a
         }
     }
 
-    let text = draw_pane(f, app, area, Outline::Plain);
+    // White while the arrows have picked it; never green, the keyboard only
+    // ever being in the pane the browser opens files into.
+    let picked = app.focus == Focus::Editor
+        && app.picked_pane == Some(id)
+        && !app.entered
+        && matches!(app.mode, Mode::Normal | Mode::Help(_));
+    let outline = if picked {
+        Outline::Picked
+    } else {
+        Outline::Plain
+    };
+    let text = draw_pane(f, app, area, outline);
     app.last_panes.push(PaneHit {
         pinned: Some(id),
         area,

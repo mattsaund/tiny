@@ -9,6 +9,11 @@ Each version is a `v` tag, with ready-made binaries on its
   right on a file no longer jumps into the file, and in the git window right
   and left no longer cross between the list and the diff. Moving between
   parts is Esc and the arrows; Enter still opens a file.
+- **The browser opens files into the pane you were last in.** With two
+  panes, picking the other one on the way to the browser no longer takes it
+  over: the browser's cursor shows its files in the pane last gone into,
+  green, until another pane is gone into. Going into the terminal does not
+  change which pane that is.
 
 ## 0.6.5 - 2026-11-01
 
