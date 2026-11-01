@@ -5,9 +5,9 @@ browser that lives in the terminal. Search, git, a map, a terminal and
 plugins are built in. Plain files in plain folders; nothing proprietary.
 
 **Full installation size:**\
-8.31 MB Linux (x86_64), 7.66 MB Linux (arm64)\
-7.64 MB macOS (Intel), 7.05 MB macOS (Apple silicon)\
-7.84 MB Windows (x86_64), 7.24 MB Windows (arm64)
+8.41 MB Linux (x86_64), 7.73 MB Linux (arm64)\
+7.73 MB macOS (Intel), 7.12 MB macOS (Apple silicon)\
+7.95 MB Windows (x86_64), 7.32 MB Windows (arm64)
 
 Try it here: https://msaunders.dev/tiny/
 
@@ -79,9 +79,8 @@ any two parts to resize them.
 
 ![the map](docs/map.png)
 
-`Ctrl+L`. How the files of a project link to each other, in any language:
-wikilinks, markdown links, calls, and paths one file names in another. Green
-reaches this file, red is what it reaches.
+`Ctrl+L`. Wikilinks, markdown links, calls and paths between files, in any
+language: green reaches this file, red is what it reaches.
 
 ## Notes, pictures, PDFs
 
