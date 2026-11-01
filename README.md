@@ -5,9 +5,9 @@ browser that lives in the terminal. Search, git, a map, a terminal and
 plugins are built in. Plain files in plain folders; nothing proprietary.
 
 **Full installation size:**\
-8.41 MB Linux (x86_64), 7.73 MB Linux (arm64)\
-7.73 MB macOS (Intel), 7.12 MB macOS (Apple silicon)\
-7.95 MB Windows (x86_64), 7.32 MB Windows (arm64)
+8.48 MB Linux (x86_64), 7.80 MB Linux (arm64)\
+7.79 MB macOS (Intel), 7.18 MB macOS (Apple silicon)\
+8.03 MB Windows (x86_64), 7.39 MB Windows (arm64)
 
 Try it here: https://msaunders.dev/tiny/
 
