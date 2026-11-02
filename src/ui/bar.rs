@@ -54,6 +54,7 @@ pub(super) fn draw_bar(f: &mut Frame, app: &App, area: Rect) {
             app.config.show_hidden,
             &app.plugins.commands(),
             app.known_names(),
+            &app.branch_names(),
         )
         .unwrap_or_default()
     } else {
@@ -208,6 +209,15 @@ fn hints(app: &App) -> String {
                 key(Action::Back)
             ),
             GitFocus::Diff => format!("up/down scroll | {} out", key(Action::Back)),
+            GitFocus::Branches => format!(
+                "{} switch | {} new | {} delete | {} rename | {} merge | {} out",
+                key(Action::Open),
+                key(Action::BranchNew),
+                key(Action::BranchDelete),
+                key(Action::BranchRename),
+                key(Action::BranchMerge),
+                key(Action::Back)
+            ),
             GitFocus::List => format!(
                 "{} stage | {} open | {} refresh | {} out",
                 key(Action::Open),

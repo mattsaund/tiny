@@ -33,6 +33,15 @@ tiny tells you when a new version is out, and `y` updates it. `tiny --update` do
 the same; `tiny --uninstall` removes tiny and leaves your files alone.
 What changed: [CHANGELOG](CHANGELOG.md).
 
+**Arch Linux**, from the AUR:
+
+```sh
+yay -S tiny-ide-bin   # or tiny-ide, built from source
+```
+
+pacman updates it with everything else. It takes the place of Arch's `tiny`,
+an IRC client, which is also a program called `tiny`.
+
 ## Use
 
 ```sh
@@ -80,8 +89,10 @@ any two parts to resize them.
 ![the git window](docs/git.png)
 
 `Ctrl+G`. `Enter` stages, `commit` commits, with the git you already have.
-The browser shows changed files in yellow, new ones in green and ignored ones
-in gray. No repository yet: initialize, publish or clone from the same window.
+The branches are under the changes: `Enter` switches, `n` makes one, `d`
+deletes, `m` merges. The browser shows changed files in yellow, new ones in
+green and ignored ones in gray. No repository yet: initialize, publish or clone
+from the same window.
 
 ## Map
 

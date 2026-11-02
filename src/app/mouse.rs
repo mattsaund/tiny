@@ -520,6 +520,27 @@ impl App {
     /// The git window: a row or a button picked, and a second time, done; a
     /// click on what is drawn on the right gives that the keyboard.
     fn press_git(&mut self, at: Position) {
+        // The branch list: into it, the cursor to the row, and a second
+        // time, Enter on it.
+        if let Some(area) = self.git.branch_area
+            && area.contains(at)
+        {
+            let row = self.git.branch_scroll + usize::from(at.y - area.y);
+            let again = self.git.focus == GitFocus::Branches
+                && self.git.entered
+                && self.git.branch_row == row;
+            self.git.focus = GitFocus::Branches;
+            self.git.entered = true;
+            if row > self.git.shown_branches().len() {
+                return;
+            }
+            if again {
+                self.activate_branch();
+            } else {
+                self.move_branch_cursor(row as isize - self.git.branch_row as isize);
+            }
+            return;
+        }
         if self.git.diff_area.is_some_and(|r| r.contains(at)) {
             if self.git.message.is_some() {
                 self.git.focus = GitFocus::Message;

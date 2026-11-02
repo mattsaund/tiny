@@ -145,6 +145,22 @@ impl Branch {
     }
 }
 
+/// One branch, as the git window's list of them shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchRef {
+    /// `main`, or for one on a remote, `origin/main`.
+    pub name: String,
+    /// On a remote, rather than here.
+    pub remote: bool,
+    /// The one checked out.
+    pub current: bool,
+    /// The remote branch it follows, if it follows one.
+    pub upstream: Option<String>,
+    /// How it stands against that, as git says it: `ahead 1, behind 2`,
+    /// `gone`, or nothing when they are level.
+    pub track: String,
+}
+
 /// What the browser colors a file or a folder for, from what git says about
 /// it. In order of how much it matters, which is what a folder shows when
 /// more than one thing is going on inside it.
@@ -411,6 +427,63 @@ impl Repo {
             Some(p) => format!("unstaged {p}"),
             None => "unstaged everything".into(),
         })
+    }
+
+    /// Every branch, here and on the remotes, the one checked out marked.
+    pub fn branches(&self) -> Result<Vec<BranchRef>> {
+        let out = run::git(
+            &self.root,
+            &[
+                "for-each-ref",
+                "--format=%(HEAD)%00%(refname)%00%(upstream:short)%00%(upstream:track,nobracket)",
+                "refs/heads",
+                "refs/remotes",
+            ],
+        )?;
+        Ok(parse::branches(&out))
+    }
+
+    /// Whether `name` is a name git takes for a branch.
+    pub fn branch_name_ok(&self, name: &str) -> bool {
+        !name.starts_with('-')
+            && run::git(&self.root, &["check-ref-format", "--branch", name]).is_ok()
+    }
+
+    /// Check out the branch `name`.
+    pub fn switch(&self, name: &str) -> Result<()> {
+        run::git(&self.root, &["switch", "--", name]).map(drop)
+    }
+
+    /// Make a branch here following `remote` (`origin/name`), named as it
+    /// is there, and check it out.
+    pub fn switch_tracking(&self, remote: &str) -> Result<()> {
+        run::git(&self.root, &["switch", "--track", remote]).map(drop)
+    }
+
+    /// Make the branch `name` from `from`, or from where the checked out
+    /// one is, and check it out.
+    pub fn create_branch(&self, name: &str, from: Option<&str>) -> Result<()> {
+        let mut args = vec!["switch", "--create", name];
+        args.extend(from);
+        run::git(&self.root, &args).map(drop)
+    }
+
+    /// Delete the branch `name`; with `force`, even with commits on it that
+    /// are in no other branch.
+    pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
+        let flag = if force { "-D" } else { "-d" };
+        run::git(&self.root, &["branch", flag, "--", name]).map(drop)
+    }
+
+    /// Call the branch `from` `to` instead.
+    pub fn rename_branch(&self, from: &str, to: &str) -> Result<()> {
+        run::git(&self.root, &["branch", "-m", "--", from, to]).map(drop)
+    }
+
+    /// Merge `name` into the branch checked out, with git's own message for
+    /// the merge commit.
+    pub fn merge(&self, name: &str) -> Result<String> {
+        run::git(&self.root, &["merge", "--no-edit", "--", name])
     }
 
     /// Commit what is staged.

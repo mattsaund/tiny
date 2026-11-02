@@ -167,6 +167,12 @@ pub enum ConfirmKind {
     /// A newer tiny is out: `y` quits and installs it. Drawn as a window of
     /// its own rather than on the status line, see `App::offer_update`.
     Update(String),
+    /// Delete a branch; with `force`, one whose commits are on no other.
+    DeleteBranch { name: String, force: bool },
+    /// Delete a branch from its remote, for everyone who uses it.
+    DeleteRemoteBranch(String),
+    /// Merge a branch into the one checked out.
+    Merge(String),
 }
 
 /// A pending yes/no question. The `message` is built at the point the action

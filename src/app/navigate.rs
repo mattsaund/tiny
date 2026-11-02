@@ -326,19 +326,33 @@ impl App {
         if self.on_global_action(action) {
             return;
         }
+        // The list top left, the branches under it, and what the list's
+        // cursor is on to the right of both.
+        let right = if self.git.message.is_some() {
+            Some(GitFocus::Message)
+        } else if !self.git.diff.is_empty() {
+            Some(GitFocus::Diff)
+        } else {
+            None
+        };
+        let below = self.git.branch_area.map(|_| GitFocus::Branches);
+        let to = match (self.git.focus, action) {
+            (GitFocus::Diff | GitFocus::Message, Action::Left) => Some(GitFocus::List),
+            (GitFocus::List | GitFocus::Branches, Action::Right) => right,
+            (GitFocus::List | GitFocus::Diff | GitFocus::Message, Action::Down) => below,
+            (GitFocus::Branches, Action::Up) => Some(GitFocus::List),
+            _ => None,
+        };
+        if let Some(to) = to {
+            self.git.focus = to;
+            return;
+        }
         match action {
-            Action::Left => self.git.focus = GitFocus::List,
-            Action::Right => {
-                if self.git.message.is_some() {
-                    self.git.focus = GitFocus::Message;
-                } else if !self.git.diff.is_empty() {
-                    self.git.focus = GitFocus::Diff;
-                }
-            }
             Action::Open => {
                 self.git.entered = true;
                 self.status = match self.git.focus {
                     GitFocus::List => "the changes".into(),
+                    GitFocus::Branches => "the branches: Enter switches, n makes one".into(),
                     GitFocus::Diff => "reading the change".into(),
                     GitFocus::Message => {
                         format!("the message: {} commits", self.key_name(Action::Save))

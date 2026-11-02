@@ -124,6 +124,15 @@ const KEYS: &[KeyRow] = &[
     Bound(&[Action::Refresh], "refresh"),
     Merged(
         &[
+            Action::BranchNew,
+            Action::BranchDelete,
+            Action::BranchRename,
+            Action::BranchMerge,
+        ],
+        "branch: new, delete, rename, merge",
+    ),
+    Merged(
+        &[
             Action::MapWikilinks,
             Action::MapLinks,
             Action::MapCalls,

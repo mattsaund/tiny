@@ -111,7 +111,7 @@ fn git(args: &[&str]) -> Vec<String> {
 
 impl App {
     /// The repository the project is in, if it is in one.
-    fn repository(&self) -> Option<Repo> {
+    pub(super) fn repository(&self) -> Option<Repo> {
         self.git
             .repo
             .clone()

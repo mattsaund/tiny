@@ -1,0 +1,25 @@
+pkgbase = tiny-ide
+	pkgdesc = An IDE, text editor, knowledge manager and file browser in the terminal
+	pkgver = 0.6.6
+	pkgrel = 1
+	url = https://github.com/mattsaund/tiny
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	checkdepends = git
+	makedepends = cargo
+	depends = gcc-libs
+	depends = glibc
+	optdepends = git: the git window, and a map that leaves out what .gitignore names
+	optdepends = github-cli: publishing a project to a new GitHub repository
+	optdepends = xdg-utils: opening pictures, PDFs and links in their own programs
+	optdepends = ffmpeg: how long a video or a sound is
+	optdepends = wl-clipboard: the system clipboard on Wayland
+	optdepends = xclip: the system clipboard on X11
+	conflicts = tiny-ide-bin
+	conflicts = tiny
+	options = !lto
+	source = tiny-ide-0.6.6.tar.gz::https://github.com/mattsaund/tiny/archive/refs/tags/v0.6.6.tar.gz
+	sha256sums = b74aba2e455353a6aece8a9082f83e4f8488f81aefc39d36217bdb0215b101b0
+
+pkgname = tiny-ide

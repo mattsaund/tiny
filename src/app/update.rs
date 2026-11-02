@@ -98,6 +98,9 @@ impl App {
 
     /// `*update`: offer what is already known to be newer, or go and ask.
     pub(super) fn cmd_update(&mut self) -> anyhow::Result<String> {
+        if crate::update::managed_by_package() {
+            return Ok(crate::update::PACKAGED.into());
+        }
         if let Some(version) = self.update_found.take() {
             self.offer_update(version);
             return Ok(String::new());

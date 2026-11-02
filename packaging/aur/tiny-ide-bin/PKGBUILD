@@ -1,0 +1,36 @@
+# Maintainer: Matthew Saunders <matt dot saunders dot 963 at gmail dot com>
+
+# tiny's own prebuilt release, as GitHub Actions built it for each tag: the
+# same binary the install script gets. From source, see the tiny-ide package.
+
+pkgname=tiny-ide-bin
+pkgver=0.6.6
+pkgrel=1
+pkgdesc="An IDE, text editor, knowledge manager and file browser in the terminal"
+arch=('x86_64' 'aarch64')
+url="https://github.com/mattsaund/tiny"
+license=('MIT')
+depends=('gcc-libs' 'glibc')
+optdepends=(
+  'git: the git window, and a map that leaves out what .gitignore names'
+  'github-cli: publishing a project to a new GitHub repository'
+  'xdg-utils: opening pictures, PDFs and links in their own programs'
+  'ffmpeg: how long a video or a sound is'
+  'wl-clipboard: the system clipboard on Wayland'
+  'xclip: the system clipboard on X11'
+)
+provides=('tiny-ide')
+# Arch's own tiny, an IRC client, is a program called tiny as well.
+conflicts=('tiny-ide' 'tiny')
+source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/v$pkgver/tiny-x86_64-unknown-linux-gnu.tar.gz")
+source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::$url/releases/download/v$pkgver/tiny-aarch64-unknown-linux-gnu.tar.gz")
+sha256sums_x86_64=('352ad9d7dc51259e65691e3ca94f63f2488c05e7ffe0ad81cade7f79cb56fe48')
+sha256sums_aarch64=('3d4424c1fdd9bb7855d12c15882ad8b41edaeeccdeb579e4bdf832b6f069a110')
+
+package() {
+  install -Dm755 tiny "$pkgdir/usr/bin/tiny"
+  install -Dm644 tiny.1 "$pkgdir/usr/share/man/man1/tiny.1"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 THIRD-PARTY-NOTICES.txt "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY-NOTICES.txt"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

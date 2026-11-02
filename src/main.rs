@@ -234,8 +234,9 @@ fn real_main() -> Result<()> {
     // without asking for it, see `app::marks`.
     app.color_from_git();
     // A release build asks, once, whether there is a newer one. A debug build
-    // is somebody working on tiny, and is left alone, see `update`.
-    if app.config.update_check && !cfg!(debug_assertions) {
+    // is somebody working on tiny, and is left alone, and so is one the
+    // package manager looks after, see `update`.
+    if app.config.update_check && !cfg!(debug_assertions) && !update::managed_by_package() {
         app.start_update_check(false);
     }
 
@@ -635,6 +636,10 @@ impl Removal {
 /// `--yes` flag to document. End-of-file counts as "no": a program removing
 /// itself should need to be told, not merely left alone.
 fn uninstall() -> Result<()> {
+    if update::managed_by_package() {
+        println!("{}", update::PACKAGED);
+        return Ok(());
+    }
     let bin = std::env::current_exe().ok();
     let removal = Removal::plan(bin, Config::user_path());
     let lines = removal.lines();

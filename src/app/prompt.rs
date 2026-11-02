@@ -37,6 +37,9 @@ impl App {
                 ConfirmKind::ResetSettings => self.do_reset_settings(),
                 ConfirmKind::ResetKeybinds => self.do_reset_keybinds(),
                 ConfirmKind::Update(version) => self.begin_update(version),
+                ConfirmKind::DeleteBranch { name, force } => self.do_delete_branch(&name, force),
+                ConfirmKind::DeleteRemoteBranch(name) => self.do_delete_remote_branch(&name),
+                ConfirmKind::Merge(name) => self.do_merge(&name),
             },
             KeyCode::Char('n') | KeyCode::Char('N')
                 if matches!(c.kind, ConfirmKind::QuitUnsaved) =>

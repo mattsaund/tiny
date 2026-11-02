@@ -375,11 +375,17 @@ fn a_commit_with_no_message_is_refused() {
 }
 
 #[test]
-fn the_branch_map_is_drawn_under_the_changes() {
+fn the_branches_and_the_history_are_drawn_under_the_changes() {
     let (_td, mut app) = repo();
     source(&mut app);
     let out = screen(&mut app, 100, 34).join("\n");
-    assert!(out.contains("branches"), "the panel is there:\n{out}");
+    assert!(out.contains("BRANCHES"), "the branches are there:\n{out}");
+    assert!(out.contains("* main"), "the one checked out marked:\n{out}");
+    assert!(
+        out.contains("+ new branch"),
+        "and the row that makes one:\n{out}"
+    );
+    assert!(out.contains("history"), "the history beside them:\n{out}");
     assert!(out.contains("first"), "with the commit in it:\n{out}");
 }
 
@@ -1520,4 +1526,239 @@ fn clone_on_its_own_with_a_name_is_still_a_copy() {
         Sentence::Clone { .. }
     ));
     assert!(matches!(parse("clone me/notes"), Sentence::Clone { .. }));
+}
+
+/// The branch checked out in the repository at `dir`.
+fn head(dir: &Path) -> String {
+    git_in(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .trim()
+        .to_string()
+}
+
+/// Into the branch list: drawn, so it has somewhere to be, then out to pick,
+/// down, and Enter.
+fn into_branches(app: &mut App) {
+    screen(app, 100, 34);
+    app.on_key(k(KeyCode::Esc));
+    app.on_key(k(KeyCode::Down));
+    app.on_key(k(KeyCode::Enter));
+    assert!(
+        app.git.entered && app.git.focus == GitFocus::Branches,
+        "{}",
+        app.status
+    );
+}
+
+/// The branch list's cursor on `name`.
+fn branch_cursor_on(app: &mut App, name: &str) {
+    app.on_key(k(KeyCode::Home));
+    for _ in 0..20 {
+        if app.git.selected_branch().is_some_and(|b| b.name == name) {
+            return;
+        }
+        app.on_key(k(KeyCode::Down));
+    }
+    panic!("no branch {name} in {:?}", app.git.branches);
+}
+
+#[test]
+fn the_branch_list_makes_branches_and_switches_between_them() {
+    let (td, mut app) = repo();
+    source(&mut app);
+    command(&mut app, "branch login");
+    assert_eq!(head(td.path()), "login", "{}", app.status);
+    assert!(
+        app.status.contains("on the new branch login"),
+        "{}",
+        app.status
+    );
+
+    // Back to main from the list: Enter on it.
+    into_branches(&mut app);
+    branch_cursor_on(&mut app, "main");
+    app.on_key(k(KeyCode::Enter));
+    assert_eq!(head(td.path()), "main", "{}", app.status);
+    let out = screen(&mut app, 100, 34).join("\n");
+    assert!(out.contains("* main"), "marked as checked out:\n{out}");
+
+    // `n` makes one from anywhere in the window, through the bar.
+    app.on_key(ch('n'));
+    let Mode::Bar(b) = &app.mode else {
+        panic!("the bar is open: {}", app.status)
+    };
+    assert_eq!(b.input, "*branch ");
+    type_str(&mut app, "docs");
+    app.on_key(k(KeyCode::Enter));
+    assert_eq!(head(td.path()), "docs", "{}", app.status);
+}
+
+#[test]
+fn d_deletes_a_branch_and_asks_again_for_one_with_commits_of_its_own() {
+    let (td, mut app) = repo();
+    git_in(td.path(), &["switch", "--quiet", "-c", "spike"]);
+    git_in(td.path(), &["commit", "--quiet", "-am", "only on spike"]);
+    git_in(td.path(), &["switch", "--quiet", "main"]);
+    source(&mut app);
+    into_branches(&mut app);
+    branch_cursor_on(&mut app, "spike");
+    app.on_key(ch('d'));
+    let Mode::Confirm(c) = &app.mode else {
+        panic!("asked first: {}", app.status)
+    };
+    assert!(
+        c.message.contains("Delete the branch spike?"),
+        "{}",
+        c.message
+    );
+    app.on_key(ch('y'));
+    let Mode::Confirm(c) = &app.mode else {
+        panic!("and asked again: {}", app.status)
+    };
+    assert!(
+        c.message.contains("commits on no other branch"),
+        "{}",
+        c.message
+    );
+    app.on_key(ch('y'));
+    assert!(
+        app.status.contains("deleted the branch spike"),
+        "{}",
+        app.status
+    );
+    let left = git_in(td.path(), &["branch", "--list", "spike"]);
+    assert!(left.trim().is_empty(), "gone: {left}");
+}
+
+#[test]
+fn the_branch_checked_out_cannot_be_deleted() {
+    let (_td, mut app) = repo();
+    source(&mut app);
+    command(&mut app, "delete branch main");
+    assert!(app.status.contains("checked out"), "{}", app.status);
+    assert!(matches!(app.mode, Mode::Normal));
+}
+
+#[test]
+fn a_branch_is_renamed_and_merged() {
+    let (td, mut app) = repo();
+    git_in(td.path(), &["switch", "--quiet", "-c", "login"]);
+    fs::write(td.path().join("login.md"), "# Login\n").unwrap();
+    git_in(td.path(), &["add", "login.md"]);
+    git_in(td.path(), &["commit", "--quiet", "-m", "a login page"]);
+    git_in(td.path(), &["switch", "--quiet", "main"]);
+    source(&mut app);
+
+    command(&mut app, "rename branch login to signin");
+    assert!(
+        app.status.contains("renamed login to signin"),
+        "{}",
+        app.status
+    );
+    assert!(app.git.branches.iter().any(|b| b.name == "signin"));
+
+    // `R` opens the bar with the rename begun.
+    into_branches(&mut app);
+    branch_cursor_on(&mut app, "signin");
+    app.on_key(ch('R'));
+    let Mode::Bar(b) = &app.mode else {
+        panic!("the bar is open")
+    };
+    assert_eq!(b.input, "*rename branch signin to ");
+    app.on_key(k(KeyCode::Esc));
+
+    // `m` merges it into main, asking first.
+    into_branches(&mut app);
+    branch_cursor_on(&mut app, "signin");
+    app.on_key(ch('m'));
+    let Mode::Confirm(c) = &app.mode else {
+        panic!("asked first: {}", app.status)
+    };
+    assert!(
+        c.message.contains("Merge signin into main?"),
+        "{}",
+        c.message
+    );
+    app.on_key(ch('y'));
+    assert!(td.path().join("login.md").is_file(), "{}", app.status);
+    let log = git_in(td.path(), &["log", "--oneline", "main"]);
+    assert!(log.contains("a login page"), "{log}");
+}
+
+#[test]
+fn switching_waits_until_every_file_is_saved() {
+    let (td, mut app) = repo();
+    git_in(td.path(), &["branch", "other"]);
+    select(&mut app, "main.py");
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, "x");
+    command(&mut app, "switch other");
+    assert!(app.status.contains("save main.py first"), "{}", app.status);
+    assert_eq!(head(td.path()), "main", "nothing switched");
+}
+
+#[test]
+fn a_branch_only_on_a_remote_is_made_here_following_it() {
+    let (td, mut app) = repo();
+    let remote = tempfile::tempdir().unwrap();
+    git_in(
+        remote.path(),
+        &["init", "--quiet", "--bare", "--initial-branch=main"],
+    );
+    let url = remote.path().to_string_lossy().into_owned();
+    git_in(td.path(), &["remote", "add", "origin", &url]);
+    git_in(
+        td.path(),
+        &["push", "--quiet", "origin", "main:main", "main:shared"],
+    );
+    git_in(td.path(), &["fetch", "--quiet", "origin"]);
+    source(&mut app);
+    into_branches(&mut app);
+    branch_cursor_on(&mut app, "origin/shared");
+    app.on_key(k(KeyCode::Enter));
+    assert_eq!(head(td.path()), "shared", "{}", app.status);
+    let upstream = git_in(td.path(), &["rev-parse", "--abbrev-ref", "@{upstream}"]);
+    assert_eq!(upstream.trim(), "origin/shared");
+}
+
+#[test]
+fn the_branch_commands_read_as_they_should() {
+    use crate::app::sentence::{Sentence, parse};
+    assert_eq!(
+        parse("branch login from main"),
+        Sentence::Branch {
+            name: "login".into(),
+            from: Some("main".into())
+        }
+    );
+    assert_eq!(parse("switch to login"), Sentence::Switch("login".into()));
+    assert_eq!(parse("checkout login"), Sentence::Switch("login".into()));
+    assert!(
+        matches!(parse("switch old with new"), Sentence::Replace { .. }),
+        "still a replace"
+    );
+    assert_eq!(
+        parse("delete branch login"),
+        Sentence::DeleteBranch("login".into())
+    );
+    assert_eq!(
+        parse("rename branch to signin"),
+        Sentence::RenameBranch {
+            from: None,
+            to: "signin".into()
+        }
+    );
+    assert_eq!(parse("merge login"), Sentence::Merge("login".into()));
+}
+
+#[test]
+fn tab_finishes_a_branch_name() {
+    let (td, mut app) = repo();
+    git_in(td.path(), &["branch", "login-page"]);
+    command_bar(&mut app);
+    type_str(&mut app, "switch log");
+    app.on_key(k(KeyCode::Tab));
+    let Mode::Bar(b) = &app.mode else {
+        panic!("the bar is open")
+    };
+    assert_eq!(b.input, "*switch login-page");
 }

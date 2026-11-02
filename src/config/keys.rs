@@ -276,6 +276,10 @@ pub enum Action {
     MapReferences,
     // Source control
     SourceOpen,
+    BranchNew,
+    BranchDelete,
+    BranchRename,
+    BranchMerge,
 }
 
 /// Every action, the panes it works in, its name in the config file, a word
@@ -650,6 +654,36 @@ const TABLE: &[Row] = &[
         "source.open",
         "edit the file",
         "tab",
+    ),
+    // The branch list's own keys: lazygit's letters, so a hand that knows
+    // them knows these. Each that cannot be undone asks first.
+    (
+        Action::BranchNew,
+        &[Context::Source],
+        "branch.new",
+        "from the one checked out",
+        "n",
+    ),
+    (
+        Action::BranchDelete,
+        &[Context::Source],
+        "branch.delete",
+        "asks first",
+        "d",
+    ),
+    (
+        Action::BranchRename,
+        &[Context::Source],
+        "branch.rename",
+        "",
+        "R",
+    ),
+    (
+        Action::BranchMerge,
+        &[Context::Source],
+        "branch.merge",
+        "into the one checked out, asks first",
+        "m",
     ),
 ];
 

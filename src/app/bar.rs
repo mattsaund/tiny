@@ -96,6 +96,7 @@ fn complete_command(
     show_hidden: bool,
     added: &[String],
     known: &[String],
+    branches: &[String],
 ) -> Option<String> {
     // Tab again, with nothing typed since: the next of them.
     if let Some(c) = &mut b.cycle
@@ -112,7 +113,7 @@ fn complete_command(
         });
     }
     b.cycle = None;
-    let (typed, matches) = completion_options(b, root, show_hidden, added, known)?;
+    let (typed, matches) = completion_options(b, root, show_hidden, added, known, branches)?;
     if let Some(rest) = common_rest(&typed, &matches) {
         b.input.push_str(&rest);
         b.cursor = b.input.chars().count();
@@ -175,8 +176,9 @@ pub fn completion_for(
     show_hidden: bool,
     added: &[String],
     known: &[String],
+    branches: &[String],
 ) -> Option<String> {
-    let (typed, matches) = completion_options(b, root, show_hidden, added, known)?;
+    let (typed, matches) = completion_options(b, root, show_hidden, added, known, branches)?;
     common_rest(&typed, &matches)
 }
 
@@ -193,6 +195,7 @@ fn completion_options(
     show_hidden: bool,
     added: &[String],
     known: &[String],
+    branches: &[String],
 ) -> Option<(String, Vec<String>)> {
     use super::sentence::{
         COPY, DELETE, GOTO, KINDS, MOVE, NEW_FILE, NEW_FOLDER, RENAME, REPLACE, VERBS,
@@ -280,6 +283,22 @@ fn completion_options(
         "set" if position == 2 || (position == 3 && args[2].eq_ignore_ascii_case("to")) => {
             offer(Config::values_of(&args[1]))
         }
+        // Branches, by name: the one to go to, to merge, or to start from.
+        "switch" | "checkout" | "merge" if !said("with") && position >= 1 => branches.to_vec(),
+        "branch" if position == 2 => offer(&["from"]),
+        "branch" if position == 3 && args[2].eq_ignore_ascii_case("from") => branches.to_vec(),
+        _ if (DELETE.contains(&v) || RENAME.contains(&v))
+            && args
+                .get(1)
+                .is_some_and(|a| a.eq_ignore_ascii_case("branch")) =>
+        {
+            match position {
+                1 => offer(&["branch"]),
+                2 => branches.to_vec(),
+                3 if RENAME.contains(&v) => offer(&["to"]),
+                _ => return None,
+            }
+        }
         "split" if position == 1 => offer(&["down"]),
         "close" if position == 1 => offer(&["others", "terminal"]),
         _ if goto && position == 1 => offer(KINDS).into_iter().chain(names()).collect(),
@@ -351,6 +370,13 @@ impl App {
         // The names a command looks up are listed once per bar, and the disk
         // may have moved on since the last one.
         self.forget_names();
+        // The branches, for Tab, if the git window has not read them yet.
+        if self.git.branches.is_empty()
+            && super::marks::might_be_a_repository(self.root())
+            && let Some(repo) = self.repository()
+        {
+            self.git.branches = repo.branches().unwrap_or_default();
+        }
         self.status = if filtering {
             "filter the map: Enter keeps it | Esc clears it".into()
         } else {
@@ -470,6 +496,7 @@ impl App {
                         self.config.show_hidden,
                         &self.plugins.commands(),
                         self.known_names(),
+                        &self.branch_names(),
                     ) {
                         self.status = said;
                     }
@@ -500,6 +527,7 @@ impl App {
                 self.config.show_hidden,
                 &self.plugins.commands(),
                 self.known_names(),
+                &self.branch_names(),
             ) {
                 self.status = said;
             }
@@ -531,6 +559,11 @@ impl App {
 
     /// Every file and folder name in the project, for Tab to offer, once
     /// the bar has listed them, and nothing until then. Each name once.
+    /// Every branch's name, for Tab after `*switch` and the like.
+    pub fn branch_names(&self) -> Vec<String> {
+        self.git.branches.iter().map(|b| b.name.clone()).collect()
+    }
+
     pub fn known_names(&self) -> &[String] {
         self.names.as_ref().map_or(&[], |n| n.all_names())
     }

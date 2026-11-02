@@ -264,7 +264,14 @@ impl App {
         if self.on_global_action(action) {
             return;
         }
+        let in_branches = self.git.focus == GitFocus::Branches;
+        if self.on_branch_action(action, in_branches) {
+            return;
+        }
         match action {
+            Action::Open if in_branches => self.activate_branch(),
+            Action::PageUp if in_branches => self.move_branch_cursor(-8),
+            Action::PageDown if in_branches => self.move_branch_cursor(8),
             Action::Up => self.move_git_cursor(-1),
             Action::Down => self.move_git_cursor(1),
             Action::First => self.git_to_end(false),
@@ -573,7 +580,7 @@ impl App {
             _ => {}
         }
         match self.window {
-            Window::Source => return self.scroll_git(down, column),
+            Window::Source => return self.scroll_git(down, column, row),
             // One screen, walked with the arrows: nothing to scroll.
             Window::Map => return,
             Window::Main => {}

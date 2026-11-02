@@ -35,6 +35,7 @@
 //! | [`mouse`] | the wheel, a click and a drag |
 //! | [`navigate`] | picking a window with the arrows, and going in |
 //! | [`source`] | the git window: what has changed, and what to do about it |
+//! | [`branches`] | the git window's branches: switching, making, deleting |
 //! | [`watch`] | noticing files another program changed |
 //! | [`marks`] | the browser's colors, from what git says about each file |
 //! | [`update`] | asking whether to install a newer tiny |
@@ -127,6 +128,7 @@ mod tests;
 
 mod actions;
 mod bar;
+mod branches;
 mod clip;
 mod command;
 mod fileops;

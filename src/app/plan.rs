@@ -144,6 +144,7 @@ pub(super) enum Plan {
     Set(Vec<String>),
     Commit(String),
     Init,
+    Branch(super::branches::BranchPlan),
     Publish(super::publish::Publish),
     Clone(super::publish::Cloning),
     Reload,
@@ -456,6 +457,15 @@ impl App {
             Sentence::Set(args) => Ok(Plan::Set(args.clone())),
             Sentence::Commit(message) => Ok(Plan::Commit(message.clone())),
             Sentence::Init => self.plan_init().map(|()| Plan::Init),
+            Sentence::Branch { name, from } => self
+                .plan_create_branch(name, from.as_deref())
+                .map(Plan::Branch),
+            Sentence::Switch(name) => self.plan_switch(name).map(Plan::Branch),
+            Sentence::DeleteBranch(name) => self.plan_delete_branch(name).map(Plan::Branch),
+            Sentence::RenameBranch { from, to } => self
+                .plan_rename_branch(from.as_deref(), to)
+                .map(Plan::Branch),
+            Sentence::Merge(name) => self.plan_merge(name).map(Plan::Branch),
             Sentence::Publish(words) => self.plan_publish(words).map(Plan::Publish),
             Sentence::Clone { from, into } => {
                 self.plan_clone(from, into.as_deref()).map(Plan::Clone)
@@ -930,6 +940,7 @@ impl App {
             Plan::Commit(m) if m.is_empty() => "commit with what message?".into(),
             Plan::Commit(m) => format!("commits what is staged: {m}"),
             Plan::Init => "makes this folder a git repository".into(),
+            Plan::Branch(b) => self.describe_branch(b),
             Plan::Publish(p) => self.describe_publish(p),
             Plan::Clone(c) => self.describe_clone(c),
             Plan::Reload => "reads the disk and the plugins again".into(),
@@ -1061,6 +1072,7 @@ impl App {
             Plan::Set(args) => self.cmd_set(&args),
             Plan::Commit(m) => self.commit(&m),
             Plan::Init => self.init_repository(),
+            Plan::Branch(b) => self.carry_out_branch(b),
             Plan::Publish(p) => self.publish(p),
             Plan::Clone(c) => self.clone_repository(c),
             Plan::Reload => self.cmd_reload(),

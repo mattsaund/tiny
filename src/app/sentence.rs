@@ -187,6 +187,23 @@ pub enum Sentence {
         from: String,
         into: Option<String>,
     },
+    /// `branch login`, `branch login from main`: a new branch, checked out.
+    Branch {
+        name: String,
+        from: Option<String>,
+    },
+    /// `switch login`, `checkout login`: another branch, checked out.
+    Switch(String),
+    /// `delete branch login`.
+    DeleteBranch(String),
+    /// `rename branch login to signin`, or `rename branch to signin` for the
+    /// one checked out.
+    RenameBranch {
+        from: Option<String>,
+        to: String,
+    },
+    /// `merge login`: into the branch checked out.
+    Merge(String),
     Reload,
     Update,
     /// `split`, or `split down`: a new pane beside this one, or below it.
@@ -350,6 +367,22 @@ pub fn parse(line: &str) -> Sentence {
                 into,
             }
         }
+        // Branches. `switch A with B` is still a replace, below.
+        "branch" => branch(rest),
+        "switch" | "checkout" if !rest.iter().any(|w| w.is(&["with"])) => switch(rest),
+        "merge" => match rest.iter().find(|w| !w.is(&["in", "branch", "the"])) {
+            Some(name) => Sentence::Merge(name.text.clone()),
+            None => Sentence::Incomplete("merge which branch? merge login".into()),
+        },
+        _ if DELETE.contains(&v) && rest.first().is_some_and(|w| w.is(&["branch"])) => {
+            match rest.get(1) {
+                Some(name) => Sentence::DeleteBranch(name.text.clone()),
+                None => Sentence::Incomplete("delete which branch? delete branch login".into()),
+            }
+        }
+        _ if RENAME.contains(&v) && rest.first().is_some_and(|w| w.is(&["branch"])) => {
+            rename_branch(&rest[1..])
+        }
         _ if GOTO.contains(&v) => goto(rest),
         _ if LINE.contains(&v) => goto(&w),
         _ if COPY.contains(&v) => copy(rest),
@@ -385,6 +418,47 @@ pub fn parse(line: &str) -> Sentence {
             name: first.text.clone(),
             args: rest.iter().map(|w| w.text.clone()).collect(),
         },
+    }
+}
+
+/// `branch login`, `branch called login from main`.
+fn branch(w: &[Word]) -> Sentence {
+    let w: Vec<&Word> = w
+        .iter()
+        .filter(|x| !x.is(&["called", "named", "a", "new"]))
+        .collect();
+    let from = w
+        .iter()
+        .position(|x| x.is(&["from", "off", "on"]))
+        .and_then(|i| w.get(i + 1))
+        .map(|x| x.text.clone());
+    match w.first().filter(|x| !x.is(&["from", "off", "on"])) {
+        Some(name) => Sentence::Branch {
+            name: name.text.clone(),
+            from,
+        },
+        None => Sentence::Incomplete("a branch called what? branch login".into()),
+    }
+}
+
+/// `switch login`, `switch to login`, `checkout branch login`.
+fn switch(w: &[Word]) -> Sentence {
+    match w.iter().find(|x| !x.is(&["to", "branch", "the", "onto"])) {
+        Some(name) => Sentence::Switch(name.text.clone()),
+        None => Sentence::Incomplete("switch to which branch? switch login".into()),
+    }
+}
+
+/// What follows `rename branch`: `login to signin`, or `to signin` for the
+/// branch checked out.
+fn rename_branch(w: &[Word]) -> Sentence {
+    let to = w.iter().position(|x| x.is(&["to", "as"]));
+    match to.map(|i| (i, w.get(i + 1))) {
+        Some((i, Some(new))) => Sentence::RenameBranch {
+            from: w[..i].first().map(|x| x.text.clone()),
+            to: new.text.clone(),
+        },
+        _ => Sentence::Incomplete("rename it to what? rename branch login to signin".into()),
     }
 }
 
@@ -820,6 +894,10 @@ pub const VERBS: &[&str] = &[
     "init",
     "publish",
     "clone",
+    "branch",
+    "switch",
+    "checkout",
+    "merge",
     "reload",
     "settings",
     "update",

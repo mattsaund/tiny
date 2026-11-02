@@ -5,7 +5,7 @@
 //! two halves arrive as separate records, a conflicted file, a diff with no
 //! trailing newline) are tested as strings.
 
-use super::{Branch, Change, Code, Diff, DiffLine, LineKind, Mark, Status};
+use super::{Branch, BranchRef, Change, Code, Diff, DiffLine, LineKind, Mark, Status};
 
 /// Parse `git status --porcelain=v1 --branch -z`.
 ///
@@ -104,6 +104,39 @@ pub fn marks(out: &str) -> Vec<(String, Mark)> {
         marks.push((path, mark));
     }
     marks
+}
+
+/// Parse `git for-each-ref` over `refs/heads` and `refs/remotes`, with the
+/// format `%(HEAD)`, `%(refname)`, `%(upstream:short)` and
+/// `%(upstream:track,nobracket)`, NUL between them. A remote's `HEAD`, which
+/// only says which of its branches is its main one, is left out.
+pub fn branches(out: &str) -> Vec<BranchRef> {
+    out.lines()
+        .filter_map(|line| {
+            let mut field = line.split('\0');
+            let head = field.next()?;
+            let refname = field.next()?;
+            let upstream = field.next().unwrap_or("");
+            let track = field.next().unwrap_or("");
+            let (name, remote) = match refname.strip_prefix("refs/heads/") {
+                Some(name) => (name, false),
+                None => {
+                    let name = refname.strip_prefix("refs/remotes/")?;
+                    if name.ends_with("/HEAD") {
+                        return None;
+                    }
+                    (name, true)
+                }
+            };
+            Some(BranchRef {
+                name: name.to_string(),
+                remote,
+                current: head == "*",
+                upstream: (!upstream.is_empty()).then(|| upstream.to_string()),
+                track: track.to_string(),
+            })
+        })
+        .collect()
 }
 
 /// The `## main...origin/main [ahead 1, behind 2]` line.
@@ -245,6 +278,18 @@ fn filler() -> DiffLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branches_here_and_on_remotes_and_which_is_checked_out() {
+        let out = "*\0refs/heads/main\0origin/main\0ahead 1\n \0refs/heads/login\0\0\n \0refs/remotes/origin/HEAD\0\0\n \0refs/remotes/origin/main\0\0\n \0refs/remotes/origin/docs\0\0\n";
+        let b = branches(out);
+        let names: Vec<&str> = b.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["main", "login", "origin/main", "origin/docs"]);
+        assert!(b[0].current && !b[1].current);
+        assert_eq!(b[0].upstream.as_deref(), Some("origin/main"));
+        assert_eq!(b[0].track, "ahead 1");
+        assert!(!b[1].remote && b[2].remote);
+    }
 
     #[test]
     fn every_kind_of_change_has_its_color() {

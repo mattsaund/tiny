@@ -5,7 +5,7 @@
 .\"
 .\" A test in src/main.rs reads this against the keymap and the options, so a
 .\" key or an option that changes without changing here fails the build.
-.TH TINY 1 2026-11-01 "tiny 0.6.6" "User Commands"
+.TH TINY 1 2026-11-02 "tiny 0.6.7" "User Commands"
 .SH NAME
 tiny \- an IDE, text editor, knowledge manager and file browser in the \%terminal
 .SH SYNOPSIS
@@ -50,6 +50,8 @@ Shows the version.
 .TP
 .B \-\-update
 Installs the newest release, if there is one.
+A tiny your package manager installed, from the AUR say, is left for it to
+update.
 .TP
 .B \-\-config
 Prints where the config file is.
@@ -60,6 +62,7 @@ Prints the licenses of everything built into tiny.
 .B \-\-uninstall
 Removes tiny and its config file.
 Your own files are not touched.
+A tiny your package manager installed is left for it to remove.
 .SH CONTROLS
 .SS Picking a part
 The window has parts: the browser, each pane, and the terminal.
@@ -313,6 +316,19 @@ Move between the buttons.
 .TP
 .B Enter
 Stage or unstage a file, or a whole list from its heading, or press a button.
+In the branch list, switch to the branch, or make one.
+.TP
+.B n
+A new branch, from the one checked out.
+.TP
+.B d
+Delete the branch under the cursor, asking first.
+.TP
+.B Shift+R
+Rename the branch under the cursor.
+.TP
+.B m
+Merge the branch under the cursor into the one checked out, asking first.
 .TP
 .B Tab
 Edit the file.
@@ -329,6 +345,19 @@ Narrower or wider.
 .B Esc
 Out of the list or the diff, to pick the other with the arrows; again, back
 to the browser.
+.PP
+Under the changes are the branches: the ones here, with a
+.B *
+on the one checked out, and the ones on a remote that no branch here
+follows yet, which Enter makes here.
+Switching and merging wait until every file is saved.
+The same are
+.BR "*branch <name>" ,
+.BR "*switch <name>" ,
+.BR "*delete branch <name>" ,
+.B "*rename branch <name> to <new>"
+and
+.BR "*merge <name>" .
 .PP
 In a project that is not a git repository yet, the window offers to
 initialize one, to publish the project, or to clone a repository into it.

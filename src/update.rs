@@ -24,6 +24,16 @@
 //! asked its version, which is the only reliable way to know the install
 //! worked: a pipe from `curl` into `sh` exits cleanly even when the download
 //! did not.
+//!
+//! # Installed by a package manager
+//!
+//! A tiny that pacman installed from the AUR (or any package manager) is
+//! that manager's to update and to remove: writing over its files would
+//! leave the package's record of them wrong, and in a system folder would
+//! need root anyway. Such a tiny is in one of the system's own program
+//! folders, which the installers never use, and [`managed_by_package`] says
+//! so: it neither asks GitHub about releases nor installs one, and says to
+//! use the package manager instead.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -35,6 +45,27 @@ use anyhow::{Context, Result, anyhow};
 pub fn running() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
+
+/// Whether the tiny running was installed by the system's package manager,
+/// see the module docs.
+pub fn managed_by_package() -> bool {
+    std::env::current_exe().is_ok_and(|exe| in_a_system_folder(&exe))
+}
+
+/// Whether `exe` is in one of the folders a package manager puts programs
+/// in, and the installers never do.
+fn in_a_system_folder(exe: &Path) -> bool {
+    cfg!(unix)
+        && exe.parent().is_some_and(|dir| {
+            ["/usr/bin", "/usr/sbin", "/bin", "/sbin"]
+                .iter()
+                .any(|d| dir == Path::new(d))
+        })
+}
+
+/// What to say instead of updating or removing a tiny the package manager
+/// looks after.
+pub const PACKAGED: &str = "this tiny came from your package manager, which updates and removes it (pacman, or your AUR helper)";
 
 /// The GitHub repository releases come from, from `Cargo.toml`, so a fork
 /// that changes `repository` checks its own releases, not these.
@@ -243,6 +274,10 @@ pub fn relaunch(exe: &Path) -> Result<()> {
 
 /// `tiny --update`: the same check and the same install, without a window.
 pub fn run_cli() -> Result<()> {
+    if managed_by_package() {
+        println!("tiny {}: {PACKAGED}", running());
+        return Ok(());
+    }
     println!("tiny {}, asking GitHub for a newer one", running());
     let Some(latest) = latest() else {
         println!("no release found (or GitHub could not be reached)");
@@ -261,6 +296,20 @@ pub fn run_cli() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tiny_in_a_system_folder_is_the_package_managers() {
+        if cfg!(unix) {
+            assert!(in_a_system_folder(Path::new("/usr/bin/tiny")));
+            assert!(in_a_system_folder(Path::new("/bin/tiny")));
+        }
+        assert!(!in_a_system_folder(Path::new("/home/me/.local/bin/tiny")));
+        assert!(
+            !in_a_system_folder(Path::new("/usr/local/bin/tiny")),
+            "where a person puts it"
+        );
+        assert!(!in_a_system_folder(Path::new("/usr/bin/sub/tiny")));
+    }
 
     #[test]
     fn versions_compare_as_numbers_not_as_text() {

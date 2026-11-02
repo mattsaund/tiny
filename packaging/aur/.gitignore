@@ -1,0 +1,6 @@
+# What makepkg leaves behind when a package is tried here.
+src/
+pkg/
+*.tar.gz
+*.pkg.tar.*
+*.log

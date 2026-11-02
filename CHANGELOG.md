@@ -3,6 +3,22 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.6.7 - 2026-11-02
+
+- **Branches in the git window.** Under the changes, the branches: the ones
+  here, with a `*` on the one checked out, and the ones on a remote that no
+  branch here follows yet. Enter switches to one, making it here if it is
+  on a remote, and the row at the top makes a new one. `n` makes a branch,
+  `d` deletes one (asking first, and again if its commits are on no other
+  branch), `R` renames one and `m` merges one into the branch checked out.
+  The same from the bar: `*branch`, `*switch`, `*delete branch`,
+  `*rename branch` and `*merge`, and Tab finishes a branch's name.
+  Switching and merging wait until every file is saved. The history is
+  beside the branches.
+- **Ready for the AUR**, as `tiny-ide-bin`, the prebuilt release, and
+  `tiny-ide`, built from source; see `packaging/aur`. A tiny that a package
+  manager installed leaves updating and removing it to that manager.
+
 ## 0.6.6 - 2026-11-01
 
 - **The arrows stay in the part you are in.** With the browser gone into,

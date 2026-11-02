@@ -1,9 +1,10 @@
 //! The source-control window: `Ctrl+G`.
 //!
-//! Three parts, laid out the way the questions are asked. On the left, what has
-//! changed. On the right, the file the cursor is on: before on one side, after
-//! on the other. Underneath, the branch map, because "what have I done" and
-//! "where am I" are the two halves of the same look.
+//! Laid out the way the questions are asked. On the left, what has changed,
+//! and under it the branches. On the right, the file the cursor is on:
+//! before on one side, after on the other, and under them the history, as
+//! git draws it, because "what have I done" and "where am I" are the two
+//! halves of the same look.
 //!
 //! # Reading across, not down
 //!
@@ -33,8 +34,9 @@ use crate::text::highlight::Piece;
 use crate::text::tabs;
 use unicode_width::UnicodeWidthStr;
 
-/// How many rows the branch map gets, when there is room for it at all.
-const GRAPH_HEIGHT: u16 = 8;
+/// The most rows the branches and the history get, when there is room for
+/// them at all: a third of the window, up to this.
+const BOTTOM_HEIGHT: u16 = 12;
 
 /// The color of a status letter.
 ///
@@ -56,6 +58,7 @@ fn code_style(code: Code, pal: &Palette) -> Style {
 
 pub(super) fn draw_source(f: &mut Frame, app: &mut App, area: Rect) {
     let pal = app.palette;
+    app.git.branch_area = None;
 
     // No repository, or no git: the window says so, in the middle of itself,
     // with what can be done about it under that: make one, publish the
@@ -124,16 +127,16 @@ pub(super) fn draw_source(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    // The map goes at the bottom and gives up its space first: on a short
-    // window, what has changed matters more than what happened before.
-    let graph_h = if area.height >= 20 && !app.git.graph.is_empty() {
-        GRAPH_HEIGHT
+    // The branches and the history go at the bottom and give up their space
+    // first: on a short window, what has changed matters more.
+    let bottom_h = if area.height >= 16 {
+        (area.height / 3).clamp(6, BOTTOM_HEIGHT)
     } else {
         0
     };
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(6), Constraint::Length(graph_h)])
+        .constraints([Constraint::Min(6), Constraint::Length(bottom_h)])
         .split(area);
 
     // The list is as wide as the browser, and its edge moves the same way.
@@ -167,9 +170,97 @@ pub(super) fn draw_source(f: &mut Frame, app: &mut App, area: Rect) {
         draw_diff(f, app, columns[1], &pal);
     }
     app.git.diff_area = Some(columns[1]);
-    if graph_h > 0 {
-        draw_graph(f, app, rows[1], &pal);
+    if bottom_h > 0 {
+        // As wide as the list above, so the two read as one column.
+        let bottom = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(list_w), Constraint::Min(10)])
+            .split(rows[1]);
+        draw_branches(f, app, bottom[0], &pal);
+        draw_graph(f, app, bottom[1], &pal);
     }
+}
+
+/// `ahead 1, behind 2` as `+1 -2`: the branch list is narrow.
+fn track(said: &str) -> String {
+    said.split(", ")
+        .map(|part| {
+            if let Some(n) = part.strip_prefix("ahead ") {
+                format!("+{n}")
+            } else if let Some(n) = part.strip_prefix("behind ") {
+                format!("-{n}")
+            } else {
+                part.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The branch list, under the changes: a row that makes a branch, the
+/// branches here with a `*` on the one checked out, as git marks it, and the
+/// ones on a remote that no branch here follows. See `app::branches`.
+fn draw_branches(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
+    let git = &app.git;
+    let outline = Outline::of(git.focus == GitFocus::Branches, git.entered);
+    // The cursor's row is reversed only with the keyboard in the list.
+    let focused = outline == Outline::Entered;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(pal.glyphs.border)
+        .border_style(outline.style(pal))
+        .title(Line::from(vec![
+            Span::raw(" "),
+            Span::styled("BRANCHES", outline.title(pal)),
+            Span::raw(" "),
+        ]));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let height = inner.height as usize;
+    if height == 0 || inner.width == 0 {
+        return;
+    }
+    let shown = git.shown_branches();
+    let total = shown.len() + 1;
+    // As little way from where it was as shows the cursor, like the browser.
+    let mut scroll = git.branch_scroll.min(total.saturating_sub(height));
+    if git.branch_row < scroll {
+        scroll = git.branch_row;
+    } else if git.branch_row >= scroll + height {
+        scroll = git.branch_row + 1 - height;
+    }
+    let width = inner.width as usize;
+    let mut lines: Vec<Line> = Vec::with_capacity(height);
+    for i in scroll..(scroll + height).min(total) {
+        let mut spans = match i.checked_sub(1).map(|n| shown[n]) {
+            None => vec![Span::styled(" + new branch", pal.dim)],
+            Some(b) => {
+                // Set in from the border by one, as the changes above are.
+                let (mark, style) = if b.current {
+                    (" * ", pal.text.add_modifier(Modifier::BOLD))
+                } else if b.remote {
+                    ("   ", pal.dim)
+                } else {
+                    ("   ", pal.text)
+                };
+                let mut spans = vec![
+                    Span::styled(mark, style),
+                    Span::styled(b.name.clone(), style),
+                ];
+                if !b.track.is_empty() {
+                    spans.push(Span::styled(format!("  {}", track(&b.track)), pal.dim));
+                }
+                spans
+            }
+        };
+        if i == git.branch_row {
+            highlight_row(&mut spans, width, *pal, focused);
+        }
+        lines.push(Line::from(spans));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+    app.git.branch_scroll = scroll;
+    app.git.branch_area = Some(inner);
 }
 
 /// The left column: buttons, then what has changed, in two sections.
@@ -691,9 +782,16 @@ fn draw_graph(f: &mut Frame, app: &App, area: Rect, pal: &Palette) {
         .borders(Borders::ALL)
         .border_set(pal.glyphs.border)
         .border_style(pal.border)
-        .title(Line::from(Span::styled(" branches ", pal.dim)));
+        .title(Line::from(Span::styled(" history ", pal.dim)));
     let inner = block.inner(area);
     f.render_widget(block, area);
+    if app.git.graph.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(" nothing committed yet", pal.dim))),
+            inner,
+        );
+        return;
+    }
     let lines: Vec<Line> = app
         .git
         .graph

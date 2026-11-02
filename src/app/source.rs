@@ -20,7 +20,7 @@
 
 use std::path::Path;
 
-use crate::git::{Change, Diff, Job, Repo, Status};
+use crate::git::{BranchRef, Change, Diff, Job, Repo, Status};
 use crate::text::editor::Editor;
 use crate::text::highlight::Resume;
 
@@ -107,6 +107,8 @@ pub enum GitFocus {
     Diff,
     /// Typing a commit message, in a box over both diff columns.
     Message,
+    /// The branches, under the changes, see `branches`.
+    Branches,
 }
 
 /// One line of the left-hand list.
@@ -127,6 +129,17 @@ pub struct GitPane {
     pub repo: Option<Repo>,
     /// Its remotes, by name.
     pub remotes: Vec<String>,
+    /// Every branch, here and on the remotes, see `branches`.
+    pub branches: Vec<BranchRef>,
+    /// The cursor in the branch list: `0` is the row that makes a branch,
+    /// and `n` the `n`th branch of [`GitPane::shown_branches`].
+    pub branch_row: usize,
+    /// The first row of the branch list on screen, kept by `ui` as little
+    /// way from where it was as shows the cursor.
+    pub branch_scroll: usize,
+    /// Where the branch list's rows were in the last frame, for the mouse.
+    /// Written by `ui`.
+    pub branch_area: Option<ratatui::layout::Rect>,
     /// Why there is nothing to show, when there is nothing to show.
     pub error: Option<String>,
     pub status: Status,
@@ -176,6 +189,29 @@ pub struct GitPane {
 }
 
 impl GitPane {
+    /// The branches the list shows: those here, then those on a remote that
+    /// no branch here follows, which Enter makes here.
+    pub fn shown_branches(&self) -> Vec<&BranchRef> {
+        let followed: Vec<&str> = self
+            .branches
+            .iter()
+            .filter_map(|b| b.upstream.as_deref())
+            .collect();
+        let here = self.branches.iter().filter(|b| !b.remote);
+        let there = self
+            .branches
+            .iter()
+            .filter(|b| b.remote && !followed.contains(&b.name.as_str()));
+        here.chain(there).collect()
+    }
+
+    /// The branch the cursor is on in the branch list, or `None` on its
+    /// first row, the one that makes a branch.
+    pub fn selected_branch(&self) -> Option<&BranchRef> {
+        let i = self.branch_row.checked_sub(1)?;
+        self.shown_branches().get(i).copied()
+    }
+
     /// The buttons there are, which depends on where the repository stands.
     ///
     /// A project in no repository can be made one, published, or have one
@@ -293,6 +329,7 @@ impl App {
                     self.git.graph.clear();
                     self.git.rows.clear();
                     self.git.remotes.clear();
+                    self.git.branches.clear();
                     self.git.button = 0;
                     return;
                 }
@@ -302,6 +339,18 @@ impl App {
             return;
         };
         self.git.remotes = repo.remotes();
+        // The cursor stays on the branch it was on, wherever that now is.
+        let was_on = self.git.selected_branch().map(|b| b.name.clone());
+        self.git.branches = repo.branches().unwrap_or_default();
+        self.git.branch_row = match was_on {
+            Some(name) => self
+                .git
+                .shown_branches()
+                .iter()
+                .position(|b| b.name == name)
+                .map_or(0, |i| i + 1),
+            None => 0,
+        };
         // Read before the new status lands: see `rebuild`.
         let before = self
             .git
@@ -376,6 +425,9 @@ impl App {
         if self.git.focus == GitFocus::Diff {
             return self.scroll_git_diff(delta);
         }
+        if self.git.focus == GitFocus::Branches {
+            return self.move_branch_cursor(delta);
+        }
         self.move_git_selection(delta);
     }
 
@@ -390,8 +442,12 @@ impl App {
     /// One notch of the wheel in the git window: over the list it moves the
     /// list's cursor, the way the wheel over the browser does, and anywhere
     /// else it scrolls what is drawn there.
-    pub(super) fn scroll_git(&mut self, down: bool, column: u16) {
+    pub(super) fn scroll_git(&mut self, down: bool, column: u16, row: u16) {
         let step = if down { 1 } else { -1 };
+        let at = ratatui::layout::Position::new(column, row);
+        if self.git.branch_area.is_some_and(|r| r.contains(at)) {
+            return self.move_branch_cursor(step);
+        }
         let over_list = matches!(self.git.list_cols, Some((x0, x1)) if column >= x0 && column < x1);
         match (over_list, &mut self.git.message) {
             // A message being written keeps the keyboard: moving the list's
