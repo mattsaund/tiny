@@ -39,8 +39,7 @@ What changed: [CHANGELOG](CHANGELOG.md).
 yay -S tiny-ide-bin   # or tiny-ide, built from source
 ```
 
-pacman updates it with everything else. It takes the place of Arch's `tiny`,
-an IRC client, which is also a program called `tiny`.
+pacman updates it with everything else.
 
 ## Use
 
