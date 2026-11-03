@@ -4,7 +4,7 @@
 # same binary the install script gets. From source, see the tiny-ide package.
 
 pkgname=tiny-ide-bin
-pkgver=0.6.7
+pkgver=0.6.8
 pkgrel=1
 pkgdesc="An IDE, text editor, knowledge manager and file browser in the terminal"
 arch=('x86_64' 'aarch64')
@@ -24,8 +24,8 @@ provides=('tiny-ide')
 conflicts=('tiny-ide' 'tiny')
 source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/v$pkgver/tiny-x86_64-unknown-linux-gnu.tar.gz")
 source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::$url/releases/download/v$pkgver/tiny-aarch64-unknown-linux-gnu.tar.gz")
-sha256sums_x86_64=('8ec66eb8abba0accfce75299cff0b24de8c040f2cae7f0e55351247c0e947cf5')
-sha256sums_aarch64=('5b9cb0ceee84da0c61eb5027c3cbb7e82e6ba672a1c9d74d3a860827d4e33636')
+sha256sums_x86_64=('3d6cd3823e75d8172b25c56768410cb50cd33bcbd56b608df20689f589754452')
+sha256sums_aarch64=('cfdac41a8a3edbb3196da099dbe04576a45410c64b21b91d497263a41221401b')
 
 package() {
   install -Dm755 tiny "$pkgdir/usr/bin/tiny"
