@@ -109,9 +109,14 @@ impl Marks {
     }
 }
 
-/// What the thread asking git sends back: the colors, and where the
-/// repository keeps its index, or nothing at all outside a repository.
-type Answer = Option<(Marks, Option<PathBuf>)>;
+/// When the files in a repository's own folder that a commit moves were
+/// last changed, see [`stamps`].
+pub(super) type Stamps = [Option<SystemTime>; 3];
+
+/// What the thread asking git sends back: the colors, and the repository's
+/// own folder with what those files looked like before git was asked; or
+/// nothing at all outside a repository.
+type Answer = Option<(Marks, Option<(PathBuf, Stamps)>)>;
 
 /// The browser's colors, and the asking that keeps them current.
 #[derive(Debug, Default)]
@@ -128,7 +133,7 @@ pub struct Coloring {
     /// The repository's own folder, and what the files in it that move
     /// with a commit looked like when git was last asked, see [`stamps`].
     git_dir: Option<PathBuf>,
-    stamps: [Option<SystemTime>; 3],
+    stamps: Stamps,
 }
 
 /// Whether `folder` could be in a repository: a `.git` in it or a folder
@@ -148,7 +153,7 @@ fn changed(path: &Path) -> Option<SystemTime> {
 /// commits rewrite; `HEAD`, which a switch does; and the record of where
 /// `HEAD` has been, which every commit, amend and reset adds to, even the
 /// ones that leave the other two alone.
-fn stamps(dir: &Path) -> [Option<SystemTime>; 3] {
+fn stamps(dir: &Path) -> Stamps {
     [
         changed(&dir.join("index")),
         changed(&dir.join("HEAD")),
@@ -193,9 +198,16 @@ impl App {
         let (tx, rx) = channel();
         std::thread::spawn(move || {
             let answer: Answer = Repo::find(&root).ok().and_then(|repo| {
+                // Looked at before git is asked, not once it has answered:
+                // a commit made while it answers is then still a change to
+                // be noticed, rather than taken for one the answer has seen.
+                let git = repo.git_dir().ok().map(|dir| {
+                    let then = stamps(&dir);
+                    (dir, then)
+                });
                 let said = repo.marks().ok()?;
                 let prefix = Repo::prefix(&root).ok()?;
-                Some((Marks::build(&root, &prefix, said), repo.git_dir().ok()))
+                Some((Marks::build(&root, &prefix, said), git))
             });
             // Nobody to tell if tiny has quit in the meantime.
             let _ = tx.send(answer);
@@ -212,11 +224,11 @@ impl App {
                 Err(TryRecvError::Empty) => {}
                 done => {
                     self.coloring.asking = None;
-                    let (marks, git_dir) = done.ok().flatten().unwrap_or_default();
-                    if let Some(dir) = &git_dir {
-                        self.coloring.stamps = stamps(dir);
-                    }
-                    self.coloring.git_dir = git_dir;
+                    let (marks, git) = done.ok().flatten().unwrap_or_default();
+                    self.coloring.git_dir = git.map(|(dir, then)| {
+                        self.coloring.stamps = then;
+                        dir
+                    });
                     news = marks != self.coloring.marks;
                     self.coloring.marks = marks;
                     if std::mem::take(&mut self.coloring.again) {
@@ -228,12 +240,16 @@ impl App {
         // Another program committing, staging or switching branches moves
         // these, and nothing in the browser would show it otherwise. Nor in
         // the marks beside the line numbers, which are measured against the
-        // last commit.
+        // last commit: they keep their own record of these, since an answer
+        // about the colors moves this one.
         if let Some(dir) = &self.coloring.git_dir {
             let now = stamps(dir);
             if now != self.coloring.stamps {
                 self.coloring.stamps = now;
                 self.recolor();
+            }
+            if now != self.gutter.seen {
+                self.gutter.seen = now;
                 self.recommitted();
             }
         }

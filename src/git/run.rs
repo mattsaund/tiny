@@ -48,6 +48,12 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
     run(dir, args, &[])
 }
 
+/// [`git`], giving back what it wrote as it came: for a file's whole
+/// contents, which are megabytes, and a copy of which would be another.
+pub fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    output("git", dir, args, &[]).map(|out| out.stdout)
+}
+
 /// [`git`], with git's messages in English whatever language the system
 /// speaks: for a caller that reads a message to tell one failure from
 /// another, rather than showing it. git translates them, and a test for
@@ -89,6 +95,21 @@ fn run_both(
     args: &[&str],
     env: &[(&str, &str)],
 ) -> Result<(String, String)> {
+    let out = output(program, dir, args, env)?;
+    Ok((
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
+}
+
+/// `program` run the way every program here is, and what it wrote, or its
+/// own complaint when it failed.
+fn output(
+    program: &str,
+    dir: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<std::process::Output> {
     let out = Command::new(program)
         .current_dir(dir)
         .stdin(Stdio::null())
@@ -113,10 +134,7 @@ fn run_both(
             }
         ));
     }
-    Ok((
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    ))
+    Ok(out)
 }
 
 /// A git command running somewhere else, with its answer still to come.

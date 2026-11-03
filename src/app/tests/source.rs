@@ -188,9 +188,13 @@ fn the_lines_changed_since_the_last_commit_are_marked_beside_their_numbers() {
     );
     assert_eq!(lane_before(&mut app, "three"), (" ".to_string(), None));
 
-    // Committed, by another program: the marks go.
+    // Committed, by another program: the marks go. The save asked git for
+    // the browser's colors, and that answer is given time to come back
+    // first: an answer that arrives after a commit must not pass for having
+    // seen it, which it once did, and the marks stayed.
     app.on_key(ctrl('s'));
     git_in(at, &["commit", "--quiet", "-am", "more of a list"]);
+    std::thread::sleep(std::time::Duration::from_millis(300));
     app.poll_colors();
     let marks = app.wait_for_line_marks(&path).unwrap();
     assert_eq!(letters(&marks), "......", "committed, so nothing to mark");

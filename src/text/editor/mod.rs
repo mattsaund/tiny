@@ -70,17 +70,17 @@ fn next_version() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Where each line of `content` is in it, as a buffer would split it: see
-/// [`Editor::from_str`]. For anything that compares other text with a
-/// buffer's, like the file as the last commit has it, and keeps that text
-/// whole rather than a string a line.
-pub fn line_ranges(content: &str) -> Vec<Range<usize>> {
-    split(content).0
+/// Where each line of `content` is in it, as a buffer would split it, each
+/// handed to `line` in turn: see [`Editor::from_str`]. For anything that
+/// compares other text with a buffer's, like the file as the last commit
+/// has it, and keeps that text whole rather than a string a line.
+pub fn each_line(content: &str, line: impl FnMut(Range<usize>)) {
+    split(content, line);
 }
 
-/// Where each line of `content` is, and the line ending it uses, see
-/// [`Editor::from_str`].
-fn split(content: &str) -> (Vec<Range<usize>>, LineEnding) {
+/// Where each line of `content` is, handed to `line` in turn, and the line
+/// ending it uses, see [`Editor::from_str`].
+fn split(content: &str, mut line: impl FnMut(Range<usize>)) -> LineEnding {
     let breaks = content.matches('\n').count();
     let crlf = breaks > 0 && content.matches("\r\n").count() == breaks;
     let body = match content.strip_suffix('\n') {
@@ -88,7 +88,6 @@ fn split(content: &str) -> (Vec<Range<usize>>, LineEnding) {
         Some(body) => body,
         None => content,
     };
-    let mut lines = Vec::with_capacity(breaks + 1);
     let mut start = 0;
     for (at, _) in body.match_indices('\n') {
         // Every line but the last came before a break, which in a CRLF file
@@ -99,16 +98,15 @@ fn split(content: &str) -> (Vec<Range<usize>>, LineEnding) {
         } else {
             at
         };
-        lines.push(start..end);
+        line(start..end);
         start = at + 1;
     }
-    lines.push(start..body.len());
-    let ending = if crlf {
+    line(start..body.len());
+    if crlf {
         LineEnding::Crlf
     } else {
         LineEnding::Lf
-    };
-    (lines, ending)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,8 +270,8 @@ impl Editor {
     /// so a save writes back the endings it read rather than turning every
     /// other line's into it.
     pub fn from_str(path: PathBuf, content: &str) -> Self {
-        let (ranges, line_ending) = split(content);
-        let lines = ranges.into_iter().map(|r| content[r].to_string()).collect();
+        let mut lines = Vec::with_capacity(content.matches('\n').count() + 1);
+        let line_ending = split(content, |r| lines.push(content[r].to_string()));
         let trailing_newline = content.ends_with('\n') || content.is_empty();
         Self {
             path,

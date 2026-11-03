@@ -29,11 +29,11 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use crate::git::run;
-use crate::text::editor::line_ranges;
+use crate::text::editor::each_line;
 use crate::text::linediff::{self, LineMark, Lines};
 
 use super::App;
-use super::marks::might_be_a_repository;
+use super::marks::{Stamps, might_be_a_repository};
 
 /// Past this many lines a file is not marked: the last commit's copy is kept
 /// beside the buffer, and a diff of each edit is a look at every line.
@@ -48,14 +48,17 @@ struct Text {
 }
 
 impl Text {
-    /// `text` split the way a buffer would split it, or nothing if it is too
-    /// big to say where its lines are in four bytes.
-    fn new(text: String) -> Option<Self> {
-        u32::try_from(text.len()).ok()?;
-        let lines = line_ranges(&text)
-            .into_iter()
-            .map(|r| (r.start as u32, r.end as u32))
-            .collect();
+    /// `bytes` split the way a buffer would split them, or nothing if they
+    /// are too many to say where a line is in four bytes.
+    fn new(bytes: Vec<u8>) -> Option<Self> {
+        u32::try_from(bytes.len()).ok()?;
+        // Taken as it came, unless it is not UTF-8, which only a copy can
+        // mend; and no bigger than it is.
+        let mut text = String::from_utf8(bytes)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+        text.shrink_to_fit();
+        let mut lines = Vec::with_capacity(text.matches('\n').count() + 1);
+        each_line(&text, |r| lines.push((r.start as u32, r.end as u32)));
         Some(Text { text, lines })
     }
 }
@@ -87,8 +90,9 @@ struct Committed {
     /// asked again the next time the file is drawn.
     stale: bool,
     /// The marks last worked out, and the version of the buffer they are
-    /// for, see [`crate::text::editor::Editor::version`].
-    marks: Option<(u64, Arc<[LineMark]>)>,
+    /// for, see [`crate::text::editor::Editor::version`]. Filled again in
+    /// place after an edit, unless a frame is still holding them.
+    marks: Option<(u64, Arc<Vec<LineMark>>)>,
 }
 
 impl Committed {
@@ -120,6 +124,10 @@ pub struct Gutter {
     /// starts no thread it did not ask for.
     pub(super) on: bool,
     files: HashMap<PathBuf, Committed>,
+    /// What the repository's files that a commit moves looked like when
+    /// the marks were last told the commit may have moved, see
+    /// [`super::marks`].
+    pub(super) seen: Stamps,
 }
 
 /// Ask git, on a thread, for `path` as the last commit has it.
@@ -137,8 +145,8 @@ fn ask(path: &Path) -> Receiver<Answer> {
 fn committed(path: &Path) -> Answer {
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty())?;
     let name = path.file_name()?.to_str()?;
-    let text = run::git(dir, &["cat-file", "blob", &format!("HEAD:./{name}")]).ok()?;
-    Text::new(text)
+    let bytes = run::git_bytes(dir, &["cat-file", "blob", &format!("HEAD:./{name}")]).ok()?;
+    Text::new(bytes)
 }
 
 impl App {
@@ -146,7 +154,7 @@ impl App {
     /// any to draw: worked out again if the buffer has changed since they
     /// last were. `None` while git has not said what the last commit has,
     /// and for a file it has nothing of.
-    pub(crate) fn line_marks(&mut self, path: &Path) -> Option<Arc<[LineMark]>> {
+    pub(crate) fn line_marks(&mut self, path: &Path) -> Option<Arc<Vec<LineMark>>> {
         if !self.gutter.on || !self.config.line_marks {
             return None;
         }
@@ -174,14 +182,19 @@ impl App {
         }
         let lines = file.lines.as_ref()?;
         let version = ed.version();
-        match &file.marks {
-            Some((made_for, marks)) if *made_for == version => Some(marks.clone()),
-            _ => {
-                let marks: Arc<[LineMark]> = linediff::marks(lines, ed.lines()).into();
-                file.marks = Some((version, marks.clone()));
-                Some(marks)
+        if let Some((made_for, marks)) = &mut file.marks {
+            if *made_for != version {
+                let fill = Arc::make_mut(marks);
+                linediff::mark(lines, ed.lines(), fill);
+                *made_for = version;
             }
+            return Some(marks.clone());
         }
+        let mut fill = Vec::new();
+        linediff::mark(lines, ed.lines(), &mut fill);
+        let marks = Arc::new(fill);
+        file.marks = Some((version, marks.clone()));
+        Some(marks)
     }
 
     /// Take in whatever git has said since the last frame. Returns whether
@@ -217,7 +230,7 @@ impl App {
     /// Wait for git to say what the last commit has of `path`, and give back
     /// the marks: how a test sees them.
     #[cfg(test)]
-    pub(super) fn wait_for_line_marks(&mut self, path: &Path) -> Option<Arc<[LineMark]>> {
+    pub(super) fn wait_for_line_marks(&mut self, path: &Path) -> Option<Arc<Vec<LineMark>>> {
         self.gutter.on = true;
         for _ in 0..1000 {
             let marks = self.line_marks(path);

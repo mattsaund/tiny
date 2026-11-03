@@ -81,8 +81,20 @@ struct Hunk {
 }
 
 /// The mark for every line of `new`, against `old`.
+#[cfg(test)]
 pub fn marks(old: &(impl Lines + ?Sized), new: &(impl Lines + ?Sized)) -> Vec<LineMark> {
-    let mut out = vec![LineMark::default(); new.count()];
+    let mut out = Vec::new();
+    mark(old, new, &mut out);
+    out
+}
+
+/// The mark for every line of `new`, against `old`, into `out`, whatever
+/// was in it before: a list kept and filled again costs nothing, where a new
+/// one on every key was a hundred thousand lines' worth of fresh memory for
+/// a file that long.
+pub fn mark(old: &(impl Lines + ?Sized), new: &(impl Lines + ?Sized), out: &mut Vec<LineMark>) {
+    out.clear();
+    out.resize(new.count(), LineMark::default());
     for h in hunks(old, new) {
         let (deleted, added) = (h.a1 > h.a0, h.b1 > h.b0);
         if !added {
@@ -107,7 +119,6 @@ pub fn marks(old: &(impl Lines + ?Sized), new: &(impl Lines + ?Sized)) -> Vec<Li
             mark.change = change;
         }
     }
-    out
 }
 
 /// Where `old` and `new` differ.
