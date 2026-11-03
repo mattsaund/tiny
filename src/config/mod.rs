@@ -133,6 +133,9 @@ pub struct Config {
     pub tree_width: f32,
     /// Number the lines of a file being edited.
     pub line_numbers: bool,
+    /// Beside the numbers, mark the lines changed since the last commit,
+    /// see `app::gutter`.
+    pub line_marks: bool,
     /// Which characters tiny draws its lines and markers with. See
     /// [`glyphs`]: the font is the terminal's, so this is how tiny is made to
     /// look right in any of them. Read from `markers` too, its old name.
@@ -172,6 +175,7 @@ impl Default for Config {
             tree_side: Side::Left,
             tree_width: 0.30,
             line_numbers: true,
+            line_marks: true,
             glyphs: GlyphSet::Auto,
             colors: Colors::Auto,
             borders: true,
@@ -301,6 +305,7 @@ impl Config {
             ("tree_side", "left or right"),
             ("tree_width", "0.1 to 0.6"),
             ("line_numbers", ""),
+            ("line_marks", "mark lines changed since the commit"),
             ("glyphs", "auto, unicode, console or ascii"),
             ("colors", "auto, truecolor, 256, 16 or none"),
             ("borders", ""),
@@ -326,6 +331,12 @@ impl Config {
             ("theme.git_added", "browser: new"),
             ("theme.git_ignored", "browser: left out by .gitignore"),
             ("theme.git_conflict", "browser: a merge conflict"),
+            ("theme.line_added", "beside a line number: new"),
+            ("theme.line_modified", "beside a line number: changed"),
+            (
+                "theme.line_deleted",
+                "beside a line number: lines taken out",
+            ),
         ]
     }
 
@@ -333,8 +344,8 @@ impl Config {
     /// what Tab offers after `*set` and its name.
     pub fn values_of(key: &str) -> &'static [&'static str] {
         match key {
-            "show_hidden" | "auto_reload" | "update_check" | "line_numbers" | "borders"
-            | "cursor_blink" => &["true", "false"],
+            "show_hidden" | "auto_reload" | "update_check" | "line_numbers" | "line_marks"
+            | "borders" | "cursor_blink" => &["true", "false"],
             "tree_side" => &["left", "right"],
             "glyphs" => &["auto", "unicode", "console", "ascii"],
             "colors" => &["auto", "truecolor", "256", "16", "none"],
@@ -361,6 +372,7 @@ impl Config {
             "tree_side" => side_name(self.tree_side).into(),
             "tree_width" => format!("{:.2}", self.tree_width),
             "line_numbers" => self.line_numbers.to_string(),
+            "line_marks" => self.line_marks.to_string(),
             "glyphs" => self.glyphs.name().into(),
             "colors" => self.colors.name().into(),
             "borders" => self.borders.to_string(),
@@ -386,6 +398,9 @@ impl Config {
             "theme.git_added" => self.theme.git_added.clone(),
             "theme.git_ignored" => self.theme.git_ignored.clone(),
             "theme.git_conflict" => self.theme.git_conflict.clone(),
+            "theme.line_added" => self.theme.line_added.clone(),
+            "theme.line_modified" => self.theme.line_modified.clone(),
+            "theme.line_deleted" => self.theme.line_deleted.clone(),
             _ => return None,
         })
     }
@@ -418,6 +433,7 @@ impl Config {
                     .map_err(|_| anyhow!("tree_width must be a number like 0.3"))?
             }
             "line_numbers" => self.line_numbers = parse_bool(v)?,
+            "line_marks" => self.line_marks = parse_bool(v)?,
             // `markers` was this setting's name before it covered more than
             // the browser, and is still what some people will type.
             "glyphs" | "markers" => {
@@ -458,6 +474,9 @@ impl Config {
             "theme.git_added" => self.theme.git_added = v.to_string(),
             "theme.git_ignored" => self.theme.git_ignored = v.to_string(),
             "theme.git_conflict" => self.theme.git_conflict = v.to_string(),
+            "theme.line_added" => self.theme.line_added = v.to_string(),
+            "theme.line_modified" => self.theme.line_modified = v.to_string(),
+            "theme.line_deleted" => self.theme.line_deleted = v.to_string(),
             _ => return Err(anyhow!("unknown setting `{key}`")),
         }
         *self = std::mem::take(self).sanitized();

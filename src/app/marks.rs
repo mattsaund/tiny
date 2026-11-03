@@ -10,9 +10,14 @@
 //! done; nothing waits for it. It is asked when there is reason to think the
 //! answer moved: at the start, after a save or anything done to a file, when
 //! the disk watcher sees a change, after anything done in the git window, and
-//! when the repository's own index or `HEAD` moves, which is another program
-//! committing, staging or switching branches. Nothing is asked on a timer, so
-//! an idle tiny still uses no CPU.
+//! when the repository's own index, `HEAD` or record of where `HEAD` has been
+//! moves, which is another program committing, amending, staging, resetting
+//! or switching branches. Nothing is asked on a timer, so an idle tiny still
+//! uses no CPU.
+//!
+//! That last is also when the marks beside the line numbers are measured
+//! again, see [`super::gutter`]: every one of those can make the last commit
+//! a different one.
 //!
 //! Outside a repository there is nothing to color, and the first answer says
 //! so; the browser looks exactly as it always did.
@@ -120,10 +125,10 @@ pub struct Coloring {
     asking: Option<Receiver<Answer>>,
     /// Asked again while it was asking: once it answers, ask once more.
     again: bool,
-    /// The repository's own folder, and what its index and `HEAD` looked
-    /// like when git was last asked.
+    /// The repository's own folder, and what the files in it that move
+    /// with a commit looked like when git was last asked, see [`stamps`].
     git_dir: Option<PathBuf>,
-    stamps: [Option<SystemTime>; 2],
+    stamps: [Option<SystemTime>; 3],
 }
 
 /// Whether `folder` could be in a repository: a `.git` in it or a folder
@@ -138,6 +143,19 @@ fn changed(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// When the files in the repository's folder `dir` that something done
+/// with git moves were last changed: the index, which staging and most
+/// commits rewrite; `HEAD`, which a switch does; and the record of where
+/// `HEAD` has been, which every commit, amend and reset adds to, even the
+/// ones that leave the other two alone.
+fn stamps(dir: &Path) -> [Option<SystemTime>; 3] {
+    [
+        changed(&dir.join("index")),
+        changed(&dir.join("HEAD")),
+        changed(&dir.join("logs").join("HEAD")),
+    ]
+}
+
 impl App {
     /// Start keeping the browser's colors, see the module docs.
     ///
@@ -145,8 +163,12 @@ impl App {
     /// repository: no thread, and no git, is cheaper than one asked to say
     /// so. A `.git` that turns up later, from `*init` or a clone, starts
     /// them then.
+    ///
+    /// The marks beside the line numbers start here too: they are git's
+    /// colors as well, and asked for as each file is drawn.
     pub fn color_from_git(&mut self) {
         self.coloring.on = true;
+        self.gutter.on = true;
         if might_be_a_repository(self.root()) {
             self.recolor();
         }
@@ -192,8 +214,7 @@ impl App {
                     self.coloring.asking = None;
                     let (marks, git_dir) = done.ok().flatten().unwrap_or_default();
                     if let Some(dir) = &git_dir {
-                        self.coloring.stamps =
-                            [changed(&dir.join("index")), changed(&dir.join("HEAD"))];
+                        self.coloring.stamps = stamps(dir);
                     }
                     self.coloring.git_dir = git_dir;
                     news = marks != self.coloring.marks;
@@ -205,12 +226,15 @@ impl App {
             }
         }
         // Another program committing, staging or switching branches moves
-        // these two, and nothing in the browser would show it otherwise.
+        // these, and nothing in the browser would show it otherwise. Nor in
+        // the marks beside the line numbers, which are measured against the
+        // last commit.
         if let Some(dir) = &self.coloring.git_dir {
-            let now = [changed(&dir.join("index")), changed(&dir.join("HEAD"))];
+            let now = stamps(dir);
             if now != self.coloring.stamps {
                 self.coloring.stamps = now;
                 self.recolor();
+                self.recommitted();
             }
         }
         news

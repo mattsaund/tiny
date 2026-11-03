@@ -372,21 +372,25 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
         loop {
             // A shell writes whenever it likes, and there is no telling the
             // terminal to wake us when it does, so while there is one it is
-            // looked at every tick. Colors still being read in behind a
-            // guess are drawn again the moment nothing else is happening,
-            // see `highlight::Resume::behind`.
+            // looked at every tick. So is git, while it is being asked what
+            // the last commit has of a file just opened: its answer is
+            // milliseconds away, and the marks beside the line numbers
+            // should not wait half a second behind it. Colors still being
+            // read in behind a guess are drawn again the moment nothing else
+            // is happening, see `highlight::Resume::behind`.
             let wait = if app.colors_behind {
                 Duration::ZERO
-            } else if app.has_terminal() {
+            } else if app.has_terminal() || app.line_marks_coming() {
                 TICK
             } else {
                 IDLE
             };
             if !event::poll(wait)? {
                 let shell = app.poll_terminal();
+                let marks = app.poll_line_marks();
                 reading = app.colors_behind;
                 if looked.elapsed() < IDLE {
-                    if shell || reading {
+                    if shell || marks || reading {
                         break;
                     }
                     continue;
@@ -400,7 +404,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
                 let disk = app.rescan_disk();
                 let colors = app.poll_colors();
                 let update = app.poll_update();
-                if shell || git || disk || colors || update || reading {
+                if shell || marks || git || disk || colors || update || reading {
                     break;
                 }
                 continue;

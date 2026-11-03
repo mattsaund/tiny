@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::git::Mark;
+use crate::text::linediff::{Change, LineMark};
 
 /// A repository with one commit, one modified file and one untracked one.
 ///
@@ -99,6 +100,125 @@ fn the_browser_colors_each_name_by_what_git_says_about_it() {
         mark(&app, "README.md"),
         None,
         "committed, so nothing to say"
+    );
+}
+
+/// The marks beside the line numbers as letters, one per line: `.` for
+/// none, `+` new, `~` changed, `_` lines taken out below and `^` above.
+fn letters(marks: &[LineMark]) -> String {
+    marks
+        .iter()
+        .map(|m| match m.change {
+            Change::Added => '+',
+            Change::Modified => '~',
+            Change::Same if m.deleted_below => '_',
+            Change::Same if m.deleted_above => '^',
+            Change::Same => '.',
+        })
+        .collect()
+}
+
+/// What is drawn in the column just before the first place `text` is on
+/// screen, which in a file is the mark beside its line number, and in what
+/// color.
+fn lane_before(app: &mut App, text: &str) -> (String, Option<Color>) {
+    let mut t = Terminal::new(TestBackend::new(90, 20)).unwrap();
+    t.draw(|f| crate::ui::draw(f, app)).unwrap();
+    let buf = t.backend().buffer().clone();
+    for y in 0..buf.area.height {
+        let row: Vec<&str> = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+        let joined = row.concat();
+        if let Some(i) = joined.find(text) {
+            let x = joined[..i].chars().count() as u16 - 1;
+            let cell = &buf[(x, y)];
+            let color = (cell.symbol() != " ").then_some(cell.fg);
+            return (cell.symbol().to_string(), color);
+        }
+    }
+    panic!("{text} is not on screen");
+}
+
+#[test]
+fn the_lines_changed_since_the_last_commit_are_marked_beside_their_numbers() {
+    let (td, mut app) = repo();
+    let at = td.path();
+    fs::write(at.join("list.txt"), "one\ntwo\nthree\nfour\nfive\nsix\n").unwrap();
+    git_in(at, &["add", "list.txt"]);
+    git_in(at, &["commit", "--quiet", "-m", "a list"]);
+    command(&mut app, "reload");
+    // What the repository looked like, for the commit below to be noticed.
+    app.wait_for_colors();
+    let path = at.join("list.txt");
+    select(&mut app, "list.txt");
+    let marks = app.wait_for_line_marks(&path).expect("the commit has it");
+    assert_eq!(letters(&marks), "......", "nothing changed yet");
+
+    // One line changed, one put in, and the last taken out.
+    app.on_key(k(KeyCode::Enter));
+    app.on_key(k(KeyCode::Down));
+    app.on_key(k(KeyCode::End));
+    type_str(&mut app, "!");
+    app.on_key(k(KeyCode::Down));
+    app.on_key(k(KeyCode::Down));
+    app.on_key(k(KeyCode::End));
+    app.on_key(k(KeyCode::Enter));
+    type_str(&mut app, "four and a half");
+    app.on_key(k(KeyCode::Down));
+    app.on_key(k(KeyCode::Down));
+    app.on_key(k(KeyCode::End));
+    for _ in 0..4 {
+        app.on_key(k(KeyCode::Backspace));
+    }
+    let marks = app.wait_for_line_marks(&path).unwrap();
+    assert_eq!(letters(&marks), ".~..+_", "as typed, before any save");
+
+    // Drawn so: blue, green and red beside the numbers, nothing elsewhere.
+    let g = app.palette.glyphs;
+    assert_eq!(
+        lane_before(&mut app, "two!"),
+        (g.line_changed.to_string(), Some(Color::Blue))
+    );
+    assert_eq!(
+        lane_before(&mut app, "four and a half"),
+        (g.line_changed.to_string(), Some(Color::Green))
+    );
+    assert_eq!(
+        lane_before(&mut app, "five"),
+        (g.line_deleted_below.to_string(), Some(Color::Red))
+    );
+    assert_eq!(lane_before(&mut app, "three"), (" ".to_string(), None));
+
+    // Committed, by another program: the marks go.
+    app.on_key(ctrl('s'));
+    git_in(at, &["commit", "--quiet", "-am", "more of a list"]);
+    app.poll_colors();
+    let marks = app.wait_for_line_marks(&path).unwrap();
+    assert_eq!(letters(&marks), "......", "committed, so nothing to mark");
+
+    // A file the last commit has nothing of has no marks at all, and nor
+    // does any file with them turned off.
+    select(&mut app, "scratch.txt");
+    assert!(app.wait_for_line_marks(&at.join("scratch.txt")).is_none());
+    select(&mut app, "list.txt");
+    command(&mut app, "set line_marks false");
+    assert!(app.wait_for_line_marks(&path).is_none());
+}
+
+#[test]
+fn a_formatted_markdown_block_is_marked_on_every_row_it_takes() {
+    let (td, mut app) = repo();
+    // The fixture changed the paragraph of README.md and left its heading.
+    let path = td.path().join("README.md");
+    select(&mut app, "README.md");
+    app.on_key(k(KeyCode::Enter));
+    let marks = app.wait_for_line_marks(&path).expect("the commit has it");
+    assert_eq!(letters(&marks), "..~");
+    // The cursor is in the heading, so the paragraph is drawn formatted:
+    // a block, not a line, and marked as one.
+    let g = app.palette.glyphs;
+    assert_eq!(
+        lane_before(&mut app, "goodbye gadget"),
+        (g.line_changed.to_string(), Some(Color::Blue))
     );
 }
 

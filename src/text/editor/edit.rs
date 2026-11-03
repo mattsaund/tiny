@@ -81,7 +81,7 @@ impl Editor {
             c.pos = moved(c.pos);
             c.anchor = c.anchor.map(moved);
         }
-        self.touched = self.touched.min(from.line);
+        self.touch(from.line);
         self.dirty = true;
         end
     }
@@ -411,7 +411,7 @@ impl Editor {
             .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
             .collect();
         // Every line may have changed, not only the ones near the cursor.
-        self.touched = 0;
+        self.touch(0);
         self.dirty = true;
         self.clamp_cursor();
         self.goal_col = self.cursor_col;

@@ -5,7 +5,7 @@
 .\"
 .\" A test in src/main.rs reads this against the keymap and the options, so a
 .\" key or an option that changes without changing here fails the build.
-.TH TINY 1 2026-11-02 "tiny 0.6.7" "User Commands"
+.TH TINY 1 2026-11-02 "tiny 0.6.8" "User Commands"
 .SH NAME
 tiny \- an IDE, text editor, knowledge manager and file browser in the \%terminal
 .SH SYNOPSIS
@@ -377,3 +377,11 @@ The browser colors what git says about each file: yellow for changed since
 the last commit, green for new, gray for what .gitignore leaves out, and red
 for a conflict.
 A folder takes the color of what is inside it.
+.PP
+Beside the line numbers of a file, a line new since the last commit is
+marked green and a changed one blue, and a red mark at the foot of a line
+says lines after it were deleted.
+The marks follow the file as it is typed, saved or not, and go once it is
+committed.
+.B "*set line_marks false"
+turns them off.

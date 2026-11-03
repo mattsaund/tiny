@@ -60,7 +60,56 @@ mod undo;
 pub use self::select::Unit;
 
 use std::fs;
+use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// A version no buffer has had yet, see [`Editor::version`].
+fn next_version() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Where each line of `content` is in it, as a buffer would split it: see
+/// [`Editor::from_str`]. For anything that compares other text with a
+/// buffer's, like the file as the last commit has it, and keeps that text
+/// whole rather than a string a line.
+pub fn line_ranges(content: &str) -> Vec<Range<usize>> {
+    split(content).0
+}
+
+/// Where each line of `content` is, and the line ending it uses, see
+/// [`Editor::from_str`].
+fn split(content: &str) -> (Vec<Range<usize>>, LineEnding) {
+    let breaks = content.matches('\n').count();
+    let crlf = breaks > 0 && content.matches("\r\n").count() == breaks;
+    let body = match content.strip_suffix('\n') {
+        Some(body) if crlf => body.strip_suffix('\r').unwrap_or(body),
+        Some(body) => body,
+        None => content,
+    };
+    let mut lines = Vec::with_capacity(breaks + 1);
+    let mut start = 0;
+    for (at, _) in body.match_indices('\n') {
+        // Every line but the last came before a break, which in a CRLF file
+        // is where its `\r` belongs. The last came before nothing, and a
+        // `\r` there is the file's own.
+        let end = if crlf && body[..at].ends_with('\r') {
+            at - 1
+        } else {
+            at
+        };
+        lines.push(start..end);
+        start = at + 1;
+    }
+    lines.push(start..body.len());
+    let ending = if crlf {
+        LineEnding::Crlf
+    } else {
+        LineEnding::Lf
+    };
+    (lines, ending)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineEnding {
@@ -197,6 +246,8 @@ pub struct Editor {
     /// Lowest line index changed since [`Editor::take_touched`] last ran, or
     /// `usize::MAX` when nothing has. See that method for who asks.
     touched: usize,
+    /// Which text this is, see [`Editor::version`].
+    version: u64,
     /// Where the main cursor's selection began, when there is one: it runs
     /// from here to the cursor, whichever way round they are.
     pub anchor: Option<Pos>,
@@ -221,34 +272,9 @@ impl Editor {
     /// so a save writes back the endings it read rather than turning every
     /// other line's into it.
     pub fn from_str(path: PathBuf, content: &str) -> Self {
-        let breaks = content.matches('\n').count();
-        let crlf = breaks > 0 && content.matches("\r\n").count() == breaks;
-        let line_ending = if crlf {
-            LineEnding::Crlf
-        } else {
-            LineEnding::Lf
-        };
+        let (ranges, line_ending) = split(content);
+        let lines = ranges.into_iter().map(|r| content[r].to_string()).collect();
         let trailing_newline = content.ends_with('\n') || content.is_empty();
-        let body = match content.strip_suffix('\n') {
-            Some(body) if crlf => body.strip_suffix('\r').unwrap_or(body),
-            Some(body) => body,
-            None => content,
-        };
-        let lines: Vec<String> = if content.is_empty() {
-            vec![String::new()]
-        } else {
-            let mut parts: Vec<&str> = body.split('\n').collect();
-            // Every part but the last came before a break, which in a CRLF
-            // file is where its `\r` belongs. The last came before nothing,
-            // and a `\r` there is the file's own.
-            let last = parts.len() - 1;
-            if crlf {
-                for part in &mut parts[..last] {
-                    *part = part.strip_suffix('\r').unwrap_or(part);
-                }
-            }
-            parts.into_iter().map(str::to_string).collect()
-        };
         Self {
             path,
             lines,
@@ -266,6 +292,7 @@ impl Editor {
             redo: Vec::new(),
             last_edit: None,
             touched: usize::MAX,
+            version: next_version(),
             anchor: None,
             others: Vec::new(),
             completing: None,
@@ -327,7 +354,7 @@ impl Editor {
         self.clamp_cursor();
         // Every line may differ from what was there, so anything saved about
         // the old text (each pane's highlighting) starts again from the top.
-        self.touched = 0;
+        self.touch(0);
     }
 
     /// Write the buffer to `path` and clear `dirty`.
@@ -357,6 +384,20 @@ impl Editor {
     /// once per frame.
     pub fn take_touched(&mut self) -> Option<usize> {
         (self.touched != usize::MAX).then(|| std::mem::replace(&mut self.touched, usize::MAX))
+    }
+
+    /// Record that the text changed, from line `from` down.
+    pub(super) fn touch(&mut self, from: usize) {
+        self.touched = self.touched.min(from);
+        self.version = next_version();
+    }
+
+    /// Which text this is: a number no other buffer has had, and that this
+    /// one changes with every edit. Whatever is worked out from the text,
+    /// like the marks beside the line numbers, is kept with the version it
+    /// came from and worked out again only when that is no longer this.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// The lowest line touched, without clearing it.

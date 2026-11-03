@@ -9,6 +9,8 @@
 //! - [`markdown`]: markdown to styled terminal lines.
 //! - [`highlight`]: syntax colors, and the parser-state cache that keeps
 //!   them cheap.
+//! - [`linediff`]: which lines differ from another version of the file,
+//!   for the marks beside the line numbers.
 //! - [`search`]: finding a string, in one file or in a whole project.
 //! - [`tabs`]: the one rule for drawing a tab, shared by everything that
 //!   draws text.
@@ -19,6 +21,7 @@
 
 pub mod editor;
 pub mod highlight;
+pub mod linediff;
 pub mod markdown;
 pub mod search;
 pub mod tabs;

@@ -51,6 +51,11 @@ pub struct Theme {
     pub git_added: String,
     pub git_ignored: String,
     pub git_conflict: String,
+    /// The marks beside the line numbers: a line new since the last commit,
+    /// a line changed since it, and where lines were taken out.
+    pub line_added: String,
+    pub line_modified: String,
+    pub line_deleted: String,
 }
 
 impl Default for Theme {
@@ -86,6 +91,11 @@ impl Default for Theme {
             git_added: "green".into(),
             git_ignored: "darkgray".into(),
             git_conflict: "red".into(),
+            // And for the same reason the ones every editor marks its lines
+            // with.
+            line_added: "green".into(),
+            line_modified: "blue".into(),
+            line_deleted: "red".into(),
         }
     }
 }
@@ -117,6 +127,9 @@ pub struct Palette {
     pub git_added: Style,
     pub git_ignored: Style,
     pub git_conflict: Style,
+    pub line_added: Style,
+    pub line_modified: Style,
+    pub line_deleted: Style,
     /// The characters lines and markers are drawn with, from the `glyphs`
     /// setting. Here because everything that draws is already handed the
     /// palette, so a setting that changes how the screen is built reaches all
@@ -148,6 +161,9 @@ impl Palette {
             git_added: parse_style(&t.git_added),
             git_ignored: parse_style(&t.git_ignored),
             git_conflict: parse_style(&t.git_conflict),
+            line_added: parse_style(&t.line_added),
+            line_modified: parse_style(&t.line_modified),
+            line_deleted: parse_style(&t.line_deleted),
             glyphs: GlyphSet::Unicode.glyphs(),
             colors: Colors::Truecolor,
         }

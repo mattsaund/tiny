@@ -3,6 +3,16 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.6.8 - 2026-11-02
+
+- **Changed lines are marked beside their numbers.** In a file in a git
+  repository, a line new since the last commit is marked green, a changed
+  one blue, and a red mark at the foot of a line says lines after it were
+  deleted, the way other editors mark them. The marks follow what you type,
+  saved or not, and go once it is committed, whatever made the commit.
+  `*set line_marks false` turns them off, and `theme.line_added`,
+  `theme.line_modified` and `theme.line_deleted` color them.
+
 ## 0.6.7 - 2026-11-02
 
 - **Branches in the git window.** Under the changes, the branches: the ones

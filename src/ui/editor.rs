@@ -15,6 +15,16 @@
 //! replaced was for. Lines with text selected, or another cursor on them,
 //! stay raw too, for the same reason.
 //!
+//! # The marks beside the numbers
+//!
+//! The column between a line's number and its text, a space otherwise, is
+//! where a line changed since the last commit is marked: green for a new
+//! one, blue for a changed one, and red where lines were taken out, at the
+//! foot of the line above them. What they are measured against, and when,
+//! is `app::gutter`'s; here they are only drawn. A formatted markdown block
+//! is marked as a whole, on every row it is drawn as, since its rows are
+//! not its lines.
+//!
 //! # Selections and the other cursors
 //!
 //! Selected text is drawn in the theme's `selection` style, and every cursor
@@ -34,8 +44,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use super::parts::{FORMAT_LIMIT, digits, mark_query};
 
 use crate::app::{App, LinkHit, TextHits, TextKind, link_area};
-use crate::config::Palette;
+use crate::config::{Colors, Palette};
 use crate::text::editor::Editor;
+use crate::text::linediff::{Change, LineMark};
 use crate::text::markdown;
 use crate::text::search::Matcher;
 use crate::text::tabs;
@@ -131,6 +142,13 @@ pub(super) fn draw_editor(
         ed.scroll_rows = down;
     }
 
+    // Asked for before the buffer is borrowed to draw: working them out
+    // may need the whole of `app`.
+    let line_marks = if gutter > 0 {
+        app.line_marks(path)
+    } else {
+        None
+    };
     let ed = &app.buffers[path];
     app.preview_len = ed.line_count();
 
@@ -221,16 +239,20 @@ pub(super) fn draw_editor(
             // made-up number is worse than a blank.
             let (label, style) = match row.line() {
                 Some(n) => (
-                    format!("{:>w$} ", n + 1, w = gutter - 1),
+                    format!("{:>w$}", n + 1, w = gutter - 1),
                     if n == cur_line && focused {
                         pal.text
                     } else {
                         pal.dim
                     },
                 ),
-                None => (" ".repeat(gutter), pal.dim),
+                None => (" ".repeat(gutter - 1), pal.dim),
             };
             spans.push(Span::styled(label, style));
+            let lane = line_marks.as_deref().map_or(Lane::Blank, |marks| {
+                Lane::of(row, rows.get(top + i + 1), marks)
+            });
+            spans.push(lane.span(pal));
         }
         // Built apart from the gutter so a query can be marked in the text
         // without ever landing on a line number.
@@ -298,6 +320,76 @@ pub(super) fn draw_editor(
         }
     }
     Some(hits)
+}
+
+/// What is drawn between a line's number and its text, see the module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lane {
+    Blank,
+    Added,
+    Modified,
+    /// Lines were taken out just below this one.
+    DeletedBelow,
+    /// Lines were taken out just above this one, the first.
+    DeletedAbove,
+}
+
+impl Lane {
+    /// The mark for `row`, which is followed by `next`.
+    fn of(row: &Row, next: Option<&Row>, marks: &[LineMark]) -> Self {
+        match row {
+            Row::Raw(n) => marks.get(*n).map_or(Lane::Blank, |m| match m.change {
+                Change::Added => Lane::Added,
+                Change::Modified => Lane::Modified,
+                Change::Same if m.deleted_below => Lane::DeletedBelow,
+                Change::Same if m.deleted_above => Lane::DeletedAbove,
+                Change::Same => Lane::Blank,
+            }),
+            Row::Made {
+                block, end, nth, ..
+            } => {
+                let lines = marks.get(*block..(*end).min(marks.len())).unwrap_or(&[]);
+                // Lines taken out from among a block's own change it as
+                // much as a line changed in it.
+                let inside = lines
+                    .split_last()
+                    .is_some_and(|(_, above)| above.iter().any(|m| m.deleted_below));
+                let last = !matches!(next, Some(Row::Made { block: b, .. }) if b == block);
+                if inside || lines.iter().any(|m| m.change == Change::Modified) {
+                    Lane::Modified
+                } else if lines.iter().any(|m| m.change == Change::Added) {
+                    Lane::Added
+                } else if last && lines.last().is_some_and(|m| m.deleted_below) {
+                    Lane::DeletedBelow
+                } else if *nth == 0 && lines.first().is_some_and(|m| m.deleted_above) {
+                    Lane::DeletedAbove
+                } else {
+                    Lane::Blank
+                }
+            }
+        }
+    }
+
+    /// As it is drawn. With no colors to tell a new line from a changed one,
+    /// each is the sign a diff gives it.
+    fn span(self, pal: Palette) -> Span<'static> {
+        let g = pal.glyphs;
+        let plain = pal.colors == Colors::None;
+        let (glyph, style) = match self {
+            Lane::Blank => return Span::raw(" "),
+            Lane::Added => (if plain { "+" } else { g.line_changed }, pal.line_added),
+            Lane::Modified => (if plain { "~" } else { g.line_changed }, pal.line_modified),
+            Lane::DeletedBelow => (
+                if plain { "-" } else { g.line_deleted_below },
+                pal.line_deleted,
+            ),
+            Lane::DeletedAbove => (
+                if plain { "-" } else { g.line_deleted_above },
+                pal.line_deleted,
+            ),
+        };
+        Span::styled(glyph, style)
+    }
 }
 
 /// One drawn row of a markdown buffer being edited.

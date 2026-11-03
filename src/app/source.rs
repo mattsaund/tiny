@@ -318,8 +318,11 @@ impl App {
     pub(super) fn refresh_git(&mut self) {
         let root = self.root().to_path_buf();
         self.git.error = None;
-        // Whatever was done here, the browser's colors may have moved too.
+        // Whatever was done here, the browser's colors may have moved too,
+        // and the last commit the marks beside the line numbers are
+        // measured against.
         self.recolor();
+        self.recommitted();
         if self.git.repo.is_none() {
             match Repo::find(&root) {
                 Ok(repo) => self.git.repo = Some(repo),

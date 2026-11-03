@@ -38,6 +38,7 @@
 //! | [`branches`] | the git window's branches: switching, making, deleting |
 //! | [`watch`] | noticing files another program changed |
 //! | [`marks`] | the browser's colors, from what git says about each file |
+//! | [`gutter`] | the marks beside the line numbers, from the last commit |
 //! | [`update`] | asking whether to install a newer tiny |
 //! | [`plugins`] | what plugins are shown, and doing what they ask |
 //!
@@ -133,6 +134,7 @@ mod clip;
 mod command;
 mod fileops;
 mod follow;
+mod gutter;
 mod input;
 mod macros;
 mod marks;
@@ -397,6 +399,9 @@ pub struct App {
     /// What git says about each file, for the browser's colors, see
     /// [`marks`].
     pub coloring: marks::Coloring,
+    /// What the last commit has of each file drawn, for the marks beside
+    /// the line numbers, see [`gutter`].
+    gutter: gutter::Gutter,
 }
 
 /// The palette `config` draws with in a terminal that can show what `host`
@@ -516,6 +521,7 @@ impl App {
             diff_share: 0.5,
             watch: Watch::default(),
             coloring: marks::Coloring::default(),
+            gutter: gutter::Gutter::default(),
         };
         app.note_dirs();
         app.sync_preview();

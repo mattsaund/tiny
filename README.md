@@ -90,8 +90,9 @@ any two parts to resize them.
 `Ctrl+G`. `Enter` stages, `commit` commits, with the git you already have.
 The branches are under the changes: `Enter` switches, `n` makes one, `d`
 deletes, `m` merges. The browser shows changed files in yellow, new ones in
-green and ignored ones in gray. No repository yet: initialize, publish or clone
-from the same window.
+green and ignored ones in gray. Beside the line numbers, lines new since the
+last commit are marked green, changed ones blue, and red marks where lines were
+deleted. No repository yet: initialize, publish or clone from the same window.
 
 ## Map
 

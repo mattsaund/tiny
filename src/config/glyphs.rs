@@ -142,6 +142,12 @@ pub struct Glyphs {
     pub map_corners: [char; 4],
     pub map_horizontal: char,
     pub map_vertical: char,
+    /// Beside a line number: the line is new or changed since the last
+    /// commit, which its color tells apart; lines were taken out after it;
+    /// and lines were taken out before it, which only the first line says.
+    pub line_changed: &'static str,
+    pub line_deleted_below: &'static str,
+    pub line_deleted_above: &'static str,
 }
 
 pub static UNICODE: Glyphs = Glyphs {
@@ -164,6 +170,9 @@ pub static UNICODE: Glyphs = Glyphs {
     map_corners: ['╭', '╮', '╰', '╯'],
     map_horizontal: '─',
     map_vertical: '│',
+    line_changed: "┃",
+    line_deleted_below: "▁",
+    line_deleted_above: "▔",
 };
 
 /// What a console draws, from one font: only characters in both code page
@@ -193,6 +202,9 @@ pub static CONSOLE: Glyphs = Glyphs {
     map_corners: ['╔', '╗', '╚', '╝'],
     map_horizontal: '═',
     map_vertical: '║',
+    line_changed: "▌",
+    line_deleted_below: "▄",
+    line_deleted_above: "▀",
 };
 
 pub static ASCII: Glyphs = Glyphs {
@@ -224,12 +236,15 @@ pub static ASCII: Glyphs = Glyphs {
     map_corners: ['+', '+', '+', '+'],
     map_horizontal: '-',
     map_vertical: '|',
+    line_changed: "|",
+    line_deleted_below: "_",
+    line_deleted_above: "^",
 };
 
 /// The characters outside ASCII that are in both code page 437 and WGL4,
 /// of the ones the console set might want: what every console font has.
 #[cfg(test)]
-pub(crate) const CONSOLE_CHARACTERS: &str = "─│┌┐└┘├┤┬┴┼═║╔╗╚╝►▼•○∙→";
+pub(crate) const CONSOLE_CHARACTERS: &str = "─│┌┐└┘├┤┬┴┼═║╔╗╚╝►▼•○∙→▌▄▀";
 
 #[cfg(test)]
 mod tests {
@@ -258,6 +273,9 @@ mod tests {
             g.arrow,
             g.continued,
             g.times,
+            g.line_changed,
+            g.line_deleted_below,
+            g.line_deleted_above,
         ]
         .concat();
         out.extend(g.bullets.iter().copied());

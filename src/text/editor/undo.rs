@@ -56,7 +56,7 @@ impl Editor {
         // this one line records what changed for the whole editor. One line of
         // slack because a backspace at column 0 joins the cursor's line into
         // the one above, changing that one instead.
-        self.touched = self.touched.min(self.cursor_line.saturating_sub(1));
+        self.touch(self.cursor_line.saturating_sub(1));
         let coalesce = kind != EditKind::Structural && self.last_edit == Some(kind);
         self.last_edit = Some(kind);
         self.redo.clear();
@@ -114,7 +114,7 @@ impl Editor {
         self.dirty = true;
         self.last_edit = None;
         // A snapshot replaces every line at once, so nothing above is safe.
-        self.touched = 0;
+        self.touch(0);
         self.clamp_cursor();
         true
     }
@@ -138,7 +138,7 @@ impl Editor {
         self.completing = None;
         self.dirty = true;
         self.last_edit = None;
-        self.touched = 0;
+        self.touch(0);
         self.clamp_cursor();
         true
     }

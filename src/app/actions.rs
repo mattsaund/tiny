@@ -252,6 +252,7 @@ impl App {
         self.reread_clean_buffers();
         self.rebuild_rows();
         self.recolor();
+        self.recommitted();
         self.status = "refreshed".into();
     }
 
