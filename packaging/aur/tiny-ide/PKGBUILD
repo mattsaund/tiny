@@ -5,7 +5,7 @@
 
 pkgname=tiny-ide
 _name=tiny
-pkgver=0.6.8
+pkgver=0.6.9
 pkgrel=1
 pkgdesc="An IDE, text editor, knowledge manager and file browser in the terminal"
 arch=('x86_64' 'aarch64')
@@ -28,7 +28,7 @@ conflicts=('tiny-ide-bin' 'tiny')
 # flags on them do not link with Rust's.
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('c867d4248107644531d914a418c502df1800af7ea1af44d620c8d777dfcd5a6e')
+sha256sums=('132ab023fdbddc257941a275b147998ba81bde893ddad923ed5ad8f06ebe6056')
 
 prepare() {
   cd "$_name-$pkgver"
@@ -54,6 +54,11 @@ package() {
   cd "$_name-$pkgver"
   install -Dm755 target/release/tiny "$pkgdir/usr/bin/tiny"
   install -Dm644 docs/tiny.1 "$pkgdir/usr/share/man/man1/tiny.1"
+  # The menu entry and the icon, in every size there is.
+  install -Dm644 packaging/desktop/tiny.desktop "$pkgdir/usr/share/applications/tiny.desktop"
+  for icon in packaging/desktop/icons/hicolor/*/apps/tiny.*; do
+    install -Dm644 "$icon" "$pkgdir/usr/share/${icon#packaging/desktop/}"
+  done
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 THIRD-PARTY-NOTICES.txt "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY-NOTICES.txt"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"

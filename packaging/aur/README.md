@@ -1,7 +1,7 @@
 # AUR packages
 
-Two packages, each installing the `tiny` command, its manual page and its
-license:
+Two packages, each installing the `tiny` command, its manual page, its
+menu entry and icon, and its license:
 
 - `tiny-ide-bin`: the release's own prebuilt binary, for x86_64 and aarch64.
   Installs in seconds.

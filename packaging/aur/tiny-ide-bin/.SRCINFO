@@ -1,6 +1,6 @@
 pkgbase = tiny-ide-bin
 	pkgdesc = An IDE, text editor, knowledge manager and file browser in the terminal
-	pkgver = 0.6.8
+	pkgver = 0.6.9
 	pkgrel = 1
 	url = https://github.com/mattsaund/tiny
 	arch = x86_64
@@ -17,9 +17,9 @@ pkgbase = tiny-ide-bin
 	provides = tiny-ide
 	conflicts = tiny-ide
 	conflicts = tiny
-	source_x86_64 = tiny-ide-bin-0.6.8-x86_64.tar.gz::https://github.com/mattsaund/tiny/releases/download/v0.6.8/tiny-x86_64-unknown-linux-gnu.tar.gz
-	sha256sums_x86_64 = 3d6cd3823e75d8172b25c56768410cb50cd33bcbd56b608df20689f589754452
-	source_aarch64 = tiny-ide-bin-0.6.8-aarch64.tar.gz::https://github.com/mattsaund/tiny/releases/download/v0.6.8/tiny-aarch64-unknown-linux-gnu.tar.gz
-	sha256sums_aarch64 = cfdac41a8a3edbb3196da099dbe04576a45410c64b21b91d497263a41221401b
+	source_x86_64 = tiny-ide-bin-0.6.9-x86_64.tar.gz::https://github.com/mattsaund/tiny/releases/download/v0.6.9/tiny-x86_64-unknown-linux-gnu.tar.gz
+	sha256sums_x86_64 = 9f8d64235ed5c7f12b2e3e45d6a7a8291d983da3b3e9cfce9d13d32036486267
+	source_aarch64 = tiny-ide-bin-0.6.9-aarch64.tar.gz::https://github.com/mattsaund/tiny/releases/download/v0.6.9/tiny-aarch64-unknown-linux-gnu.tar.gz
+	sha256sums_aarch64 = 9369308e23c01696bf3ae916fe68741529ae0c379bef2385c6a39a7590eb0355
 
 pkgname = tiny-ide-bin

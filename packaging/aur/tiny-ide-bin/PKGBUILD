@@ -4,7 +4,7 @@
 # same binary the install script gets. From source, see the tiny-ide package.
 
 pkgname=tiny-ide-bin
-pkgver=0.6.8
+pkgver=0.6.9
 pkgrel=1
 pkgdesc="An IDE, text editor, knowledge manager and file browser in the terminal"
 arch=('x86_64' 'aarch64')
@@ -24,12 +24,17 @@ provides=('tiny-ide')
 conflicts=('tiny-ide' 'tiny')
 source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/v$pkgver/tiny-x86_64-unknown-linux-gnu.tar.gz")
 source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::$url/releases/download/v$pkgver/tiny-aarch64-unknown-linux-gnu.tar.gz")
-sha256sums_x86_64=('3d6cd3823e75d8172b25c56768410cb50cd33bcbd56b608df20689f589754452')
-sha256sums_aarch64=('cfdac41a8a3edbb3196da099dbe04576a45410c64b21b91d497263a41221401b')
+sha256sums_x86_64=('9f8d64235ed5c7f12b2e3e45d6a7a8291d983da3b3e9cfce9d13d32036486267')
+sha256sums_aarch64=('9369308e23c01696bf3ae916fe68741529ae0c379bef2385c6a39a7590eb0355')
 
 package() {
   install -Dm755 tiny "$pkgdir/usr/bin/tiny"
   install -Dm644 tiny.1 "$pkgdir/usr/share/man/man1/tiny.1"
+  # The menu entry and the icon, in every size the release carries.
+  install -Dm644 desktop/tiny.desktop "$pkgdir/usr/share/applications/tiny.desktop"
+  for icon in desktop/icons/hicolor/*/apps/tiny.*; do
+    install -Dm644 "$icon" "$pkgdir/usr/share/${icon#desktop/}"
+  done
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 THIRD-PARTY-NOTICES.txt "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY-NOTICES.txt"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
