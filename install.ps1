@@ -347,6 +347,91 @@
         }
     }
 
+    # --- the Start menu, and opening files from Explorer ---------------------
+
+    # tiny in the Start menu, with its icon (tiny.exe carries it, see
+    # build.rs), and among the programs Explorer's "Open with" offers for
+    # text. Offered, never made the program for a kind of file: Windows keeps
+    # that choice for the person, and asks them. Nothing here is a reason to
+    # stop; `tiny --uninstall` takes it all away again.
+
+    # The kinds of file tiny is offered for, by extension: text in the forms
+    # people keep it in.
+    $TextTypes = @(
+        '.txt', '.text', '.md', '.markdown', '.log', '.csv', '.tsv',
+        '.json', '.jsonc', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg',
+        '.conf', '.env', '.rs', '.py', '.js', '.mjs', '.cjs', '.ts', '.tsx',
+        '.jsx', '.c', '.h', '.cc', '.cpp', '.hpp', '.cs', '.go', '.java',
+        '.kt', '.lua', '.rb', '.php', '.sh', '.bash', '.zsh', '.fish',
+        '.ps1', '.psm1', '.bat', '.cmd', '.sql', '.html', '.htm', '.css',
+        '.scss', '.diff', '.patch', '.gitignore', '.gitattributes',
+        '.editorconfig'
+    )
+
+    # Set a value in a key under HKEY_CURRENT_USER, making the key if it is
+    # not there. .NET rather than New-Item: New-Item -Force on a key that is
+    # already there makes it again, empty, and these keys hold other
+    # programs' entries as well as tiny's.
+    function Set-UserValue([string]$Key, [string]$Name, [string]$Value) {
+        $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($Key)
+        try { $k.SetValue($Name, $Value) }
+        finally { $k.Close() }
+    }
+
+    function Install-Menu([string]$Exe) {
+        $added = $false
+        $what = 'Edit text, notes and code in the terminal'
+        # The shortcut. A program Windows runs in a console opens in the
+        # terminal Windows is set to use, which is Windows Terminal on 11.
+        $programs = [Environment]::GetFolderPath('Programs')
+        if ($programs) {
+            try {
+                $link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $programs 'tiny.lnk'))
+                $link.TargetPath = $Exe
+                $link.WorkingDirectory = $HOME
+                $link.IconLocation = "$Exe,0"
+                $link.Description = $what
+                $link.Save()
+                $added = $true
+            }
+            catch { }
+        }
+        # "Open with": the program under its own name, the kind of file it
+        # opens, that kind listed under each extension, and the program
+        # among those Settings lets you choose a default from.
+        try {
+            $open = '"' + $Exe + '" "%1"'
+            $icon = '"' + $Exe + '",0'
+            $app = 'Software\Classes\Applications\tiny.exe'
+            Set-UserValue $app 'FriendlyAppName' 'tiny'
+            Set-UserValue "$app\DefaultIcon" '' $icon
+            Set-UserValue "$app\shell\open\command" '' $open
+            $kind = 'Software\Classes\tiny.text'
+            Set-UserValue $kind '' 'Text'
+            Set-UserValue "$kind\DefaultIcon" '' $icon
+            Set-UserValue "$kind\shell\open\command" '' $open
+            $caps = 'Software\tiny\Capabilities'
+            Set-UserValue $caps 'ApplicationName' 'tiny'
+            Set-UserValue $caps 'ApplicationDescription' $what
+            Set-UserValue $caps 'ApplicationIcon' $icon
+            foreach ($ext in $TextTypes) {
+                Set-UserValue "$app\SupportedTypes" $ext ''
+                Set-UserValue "Software\Classes\$ext\OpenWithProgids" 'tiny.text' ''
+                Set-UserValue "$caps\FileAssociations" $ext 'tiny.text'
+            }
+            Set-UserValue 'Software\RegisteredApplications' 'tiny' $caps
+            # Tell Explorer, which otherwise finds out when it next looks.
+            if (-not ('Tiny.Shell' -as [type])) {
+                Add-Type -Namespace Tiny -Name Shell -ErrorAction Stop -MemberDefinition `
+                    '[DllImport("shell32.dll")] public static extern void SHChangeNotify(int e, uint f, IntPtr a, IntPtr b);'
+            }
+            [Tiny.Shell]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
+            $added = $true
+        }
+        catch { }
+        return $added
+    }
+
     # --- what tiny reaches for while it runs --------------------------------
 
     # tiny runs on its own. Two programs make parts of it work, and those that
@@ -408,12 +493,17 @@
         if (-not (Test-Path $binary)) { throw "expected a binary at $binary" }
 
         Add-ToPath -Prefix $prefix
+        $menu = Install-Menu -Exe $binary
         Install-Extras
         Write-Host ''
         Write-Host "installed $binary"
         # tiny updating itself already knows where it is and how to start; it
         # says so itself, straight after this.
         if ($env:TINY_UPDATE) { return }
+        if ($menu) {
+            Write-Host 'tiny is in the Start menu. To open text files with it, right-click one,'
+            Write-Host 'then Open with, Choose another app, tiny, Always.'
+        }
         Write-Host 'run it with:      tiny ~\notes'
         Write-Host 'remove it with:   tiny --uninstall'
     }

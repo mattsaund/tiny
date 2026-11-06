@@ -181,6 +181,35 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           & "$env:TINY_PREFIX\tiny.exe" --version
           if ($LASTEXITCODE -ne 0) { exit 1 }
+      # tiny in the Start menu, offered by "Open with" for text, and wearing
+      # its own icon; then all of that gone after an uninstall. Windows keeps
+      # a program that is running, so the uninstall says it could not remove
+      # tiny.exe itself and fails: what is checked is that the rest went.
+      - name: Check the Start menu and Open with, and that an uninstall takes them
+        shell: powershell
+        env:
+          TINY_PREFIX: ${{ runner.temp }}\tinybin
+        run: |
+          $exe = Join-Path $env:TINY_PREFIX 'tiny.exe'
+          $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'tiny.lnk'
+          if (-not (Test-Path $link)) { throw 'no Start menu shortcut' }
+          $target = (New-Object -ComObject WScript.Shell).CreateShortcut($link).TargetPath
+          if ($target -ne $exe) { throw "the shortcut starts $target" }
+          $command = (Get-ItemProperty 'HKCU:\Software\Classes\Applications\tiny.exe\shell\open\command').'(default)'
+          if ($command -ne ('"' + $exe + '" "%1"')) { throw "Open with runs $command" }
+          $with = Get-ItemProperty 'HKCU:\Software\Classes\.md\OpenWithProgids'
+          if ($null -eq $with.'tiny.text') { throw '.md files are not offered tiny' }
+          # Its icon: green where the disk is, beside the t.
+          Add-Type -AssemblyName System.Drawing
+          $pixel = [System.Drawing.Icon]::ExtractAssociatedIcon($exe).ToBitmap().GetPixel(8, 22)
+          Write-Host "tiny.exe's icon at (8, 22): $pixel"
+          if (-not ($pixel.G -gt 100 -and $pixel.R -lt 100 -and $pixel.B -lt 110)) { throw 'tiny.exe does not wear its icon' }
+          'y' | & $exe --uninstall
+          if (Test-Path $link) { throw 'the shortcut is still there' }
+          if (Test-Path 'HKCU:\Software\Classes\Applications\tiny.exe') { throw 'Open with still has tiny' }
+          $with = Get-ItemProperty 'HKCU:\Software\Classes\.md\OpenWithProgids' -ErrorAction SilentlyContinue
+          if ($with -and $null -ne $with.'tiny.text') { throw '.md files are still offered tiny' }
+          exit 0
 
   install-macos:
     name: install on macOS
@@ -198,6 +227,48 @@ jobs:
           cd "$RUNNER_TEMP"
           sh "$GITHUB_WORKSPACE/install.sh"
           "$TINY_PREFIX/tiny" --version
+      # tiny.app: built, signed, saying what it opens and which tiny it
+      # starts, with its icon and the launcher it runs.
+      - name: Check tiny.app
+        env:
+          TINY_PREFIX: ${{ runner.temp }}/tinybin
+        run: |
+          app="$HOME/Applications/tiny.app"
+          plist="$app/Contents/Info.plist"
+          plutil -lint "$plist"
+          codesign --verify --deep --strict "$app"
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" = dev.msaunders.tiny
+          test "$(plutil -extract TinyBinary raw -o - "$plist")" = "$TINY_PREFIX/tiny"
+          plutil -extract CFBundleDocumentTypes json -o - "$plist"
+          cmp "$app/Contents/Resources/applet.icns" "$GITHUB_WORKSPACE/packaging/desktop/tiny.icns"
+          sh -n "$app/Contents/Resources/open-tiny"
+          cat "$app/Contents/Resources/open-tiny"
+      # And that it opens a file: tiny running, on it, in a window of
+      # Terminal. A runner's desktop is not a person's, so this is said
+      # rather than enforced.
+      - name: Open a file with tiny.app
+        continue-on-error: true
+        env:
+          TINY_PREFIX: ${{ runner.temp }}/tinybin
+        run: |
+          open -a "$HOME/Applications/tiny.app" "$GITHUB_WORKSPACE/CHANGELOG.md"
+          for _ in $(seq 1 30); do
+            if pgrep -f "$TINY_PREFIX/tiny $GITHUB_WORKSPACE/CHANGELOG.md" >/dev/null; then
+              echo "tiny is running on CHANGELOG.md"
+              pkill -f "$TINY_PREFIX/tiny" || true
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "tiny did not start"
+          exit 1
+      - name: Check that an uninstall takes tiny.app
+        env:
+          TINY_PREFIX: ${{ runner.temp }}/tinybin
+        run: |
+          echo y | "$TINY_PREFIX/tiny" --uninstall
+          test ! -e "$HOME/Applications/tiny.app"
+          test ! -e "$TINY_PREFIX/tiny"
 
   install-linux:
     name: install on Linux
@@ -215,6 +286,25 @@ jobs:
           cd "$RUNNER_TEMP"
           sh "$GITHUB_WORKSPACE/install.sh"
           "$TINY_PREFIX/tiny" --version
+      # The menu entry, in the share beside the binary's folder (which for
+      # ~/.local/bin is ~/.local/share), starting this binary, with its icon
+      # in every size; then all of it gone after an uninstall.
+      - name: Check the menu entry, and that an uninstall takes it
+        env:
+          TINY_PREFIX: ${{ runner.temp }}/tinybin
+        run: |
+          share="$RUNNER_TEMP/share"
+          entry="$share/applications/tiny.desktop"
+          cat "$entry"
+          grep -qxF "Exec=\"$TINY_PREFIX/tiny\" %f" "$entry"
+          sudo apt-get update -qq && sudo apt-get install -y -qq desktop-file-utils >/dev/null
+          desktop-file-validate "$entry"
+          test -f "$share/icons/hicolor/scalable/apps/tiny.svg"
+          test -f "$share/icons/hicolor/48x48/apps/tiny.png"
+          echo y | "$TINY_PREFIX/tiny" --uninstall
+          test ! -e "$entry"
+          test ! -e "$share/icons/hicolor/48x48/apps/tiny.png"
+          test ! -e "$TINY_PREFIX/tiny"
 
   # The install line exactly as the README gives it: nothing forced, so it
   # takes the newest release for the machine it is on, and builds only where

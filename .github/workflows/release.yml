@@ -124,7 +124,10 @@ jobs:
       # Windows, `tiny-<target>.tar.gz` everywhere else), so change them in both
       # places or neither. The notices go beside the license: the binary
       # carries other people's work, and theirs travel with it. The manual
-      # page goes where there is a `man` to read it.
+      # page goes where there is a `man` to read it, and `desktop` holds what
+      # install.sh puts in the applications menu: the menu entry and its icons
+      # on Linux, the icon tiny.app wears on a Mac. Windows needs neither,
+      # since tiny.exe carries its icon itself (see build.rs).
       - name: Package for Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -136,10 +139,17 @@ jobs:
       - name: Package for macOS and Linux
         if: runner.os != 'Windows'
         run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            desktop="desktop/tiny.icns"
+          else
+            desktop="desktop/tiny.desktop desktop/icons"
+          fi
+          # `$desktop` is split into words on purpose: one path per word.
           tar -czf "tiny-${{ matrix.target }}.tar.gz" \
             -C "target/${{ matrix.target }}/release" tiny \
             -C "$GITHUB_WORKSPACE" README.md LICENSE THIRD-PARTY-NOTICES.txt \
-            -C "$GITHUB_WORKSPACE/docs" tiny.1
+            -C "$GITHUB_WORKSPACE/docs" tiny.1 \
+            -C "$GITHUB_WORKSPACE/packaging" $desktop
 
       - uses: actions/upload-artifact@v7
         with:

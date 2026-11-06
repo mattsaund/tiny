@@ -5,7 +5,7 @@
 .\"
 .\" A test in src/main.rs reads this against the keymap and the options, so a
 .\" key or an option that changes without changing here fails the build.
-.TH TINY 1 2026-11-02 "tiny 0.6.8" "User Commands"
+.TH TINY 1 2026-11-05 "tiny 0.6.9" "User Commands"
 .SH NAME
 tiny \- an IDE, text editor, knowledge manager and file browser in the \%terminal
 .SH SYNOPSIS
@@ -40,6 +40,12 @@ A name with an extension that does not exist yet is made as an empty file.
 Opens the folder at
 .IR path .
 A folder that does not exist yet is made.
+.PP
+The installers also put tiny in the applications menu, the Start menu on
+Windows and Launchpad on a Mac, where it opens in a terminal, and among the
+programs a file manager offers for text files.
+Choosing it there once, as the program for a kind of file, makes a
+double-click open those in tiny.
 .SH OPTIONS
 .TP
 .BR \-h ", " \-\-help
@@ -60,7 +66,7 @@ Prints where the config file is.
 Prints the licenses of everything built into tiny.
 .TP
 .B \-\-uninstall
-Removes tiny and its config file.
+Removes tiny, its config file and its place in the applications menu.
 Your own files are not touched.
 A tiny your package manager installed is left for it to remove.
 .SH CONTROLS

@@ -8,9 +8,11 @@
 # not run here, or this is run from inside a checkout, does it build from
 # source, fetching the source itself when piped from the web.
 #
-# Then it offers what tiny reaches for while it runs (git for the git window,
-# ffmpeg for video and audio details, xdg-utils to open files on Linux) with
-# the system's own package manager, in one question. tiny runs without them.
+# It puts tiny in the applications menu, with its icon, among the programs a
+# file manager offers for text files. Then it offers what tiny reaches for
+# while it runs (git for the git window, ffmpeg for video and audio details,
+# xdg-utils to open files on Linux) with the system's own package manager, in
+# one question. tiny runs without them.
 #
 # Override anything with the environment:
 #   TINY_REPO=...         git URL to clone
@@ -94,6 +96,225 @@ put_man() {
     [ -f "$1" ] || return 0
     man_dir="$(dirname "$PREFIX")/share/man/man1"
     { mkdir -p "$man_dir" && cp "$1" "$man_dir/tiny.1"; } 2>/dev/null || true
+}
+
+# --- the applications menu ---------------------------------------------------
+#
+# tiny where the system keeps its programs, with its icon, and among the
+# programs a file manager offers to open a text file with: a menu entry on
+# Linux, and an app in ~/Applications on a Mac. From the folder `$1`, which is
+# the release's `desktop` folder or the source's `packaging/desktop`. Like the
+# manual page, none of it is a reason to stop: tiny runs from the terminal
+# without it. `tiny --uninstall` takes it away again.
+
+# Set once tiny is in the menu, for `finish` to say so.
+MENU=""
+
+put_desktop() {
+    [ -d "$1" ] || return 0
+    case "$(uname -s)" in
+        Darwin) put_app "$1" ;;
+        *) put_menu_entry "$1" ;;
+    esac
+}
+
+# `$1` as one argument on a desktop entry's Exec line: in double quotes, with
+# the four characters that mean something inside them escaped; then every
+# backslash doubled, which the file's own rules for strings take back out;
+# and `%`, which starts a field code, doubled.
+desktop_quote() {
+    printf '"%s"' "$(printf '%s' "$1" \
+        | sed -e 's/[\\"`$]/\\&/g' -e 's/\\/\\\\/g' -e 's/%/%%/g')"
+}
+
+# A menu entry, in share/applications beside the folder the binary is in
+# (so ~/.local/share for ~/.local/bin, where the desktop looks), and the icon
+# in every size, in the hicolor theme every desktop falls back on. The entry
+# names the binary by its full path, since what a desktop finds on its PATH
+# is not always what a terminal does. Terminal=true, so the desktop opens it
+# in the terminal it is set to use.
+put_menu_entry() {
+    [ -f "$1/tiny.desktop" ] || return 0
+    share="$(dirname "$PREFIX")/share"
+    apps="$share/applications"
+    exe="$(desktop_quote "$PREFIX/tiny")"
+    if ! { mkdir -p "$apps" \
+        && EXE="$exe" awk '/^Exec=/ { print "Exec=" ENVIRON["EXE"] " %f"; next } { print }' \
+            "$1/tiny.desktop" > "$apps/.tiny.desktop.new" \
+        && mv -f "$apps/.tiny.desktop.new" "$apps/tiny.desktop"; } 2>/dev/null; then
+        rm -f "$apps/.tiny.desktop.new"
+        return 0
+    fi
+    if [ -d "$1/icons" ]; then
+        { mkdir -p "$share/icons" && cp -R "$1/icons/." "$share/icons/"; } 2>/dev/null || true
+    fi
+    # Desktops that keep a cache of these, rather than looking each time,
+    # are told: GNOME's of which programs open which files, GTK's of icons
+    # (only where there already is one: one made here would hide every icon
+    # it did not list), and KDE's of everything.
+    if have update-desktop-database; then
+        update-desktop-database -q "$apps" >/dev/null 2>&1 || true
+    fi
+    if [ -f "$share/icons/hicolor/icon-theme.cache" ] && have gtk-update-icon-cache; then
+        gtk-update-icon-cache -q -t -f "$share/icons/hicolor" >/dev/null 2>&1 || true
+    fi
+    for sycoca in kbuildsycoca6 kbuildsycoca5; do
+        if have "$sycoca"; then
+            "$sycoca" >/dev/null 2>&1 || true
+            break
+        fi
+    done
+    MENU=1
+}
+
+# `$1` in single quotes, for a shell to read back as it is.
+sh_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# The terminal a Mac opens tiny in from Finder and Launchpad: the one this is
+# being installed from, when it is one that can be told to run a program, and
+# otherwise Terminal, which every Mac has.
+mac_terminal() {
+    case "${TERM_PROGRAM:-}" in
+        iTerm.app) echo iTerm; return ;;
+        WezTerm) echo WezTerm; return ;;
+        ghostty) echo Ghostty; return ;;
+    esac
+    if [ -n "${KITTY_WINDOW_ID:-}" ]; then
+        echo kitty
+    elif [ -n "${ALACRITTY_WINDOW_ID:-}${ALACRITTY_SOCKET:-}" ]; then
+        echo Alacritty
+    else
+        echo Terminal
+    fi
+}
+
+# What tiny.app runs: tiny on the file it was handed, or on none, in a new
+# window of the terminal from `mac_terminal`. A program Finder starts gets
+# none of a shell's settings, so this one carries the PATH tiny was
+# installed with (git and ffmpeg are often in Homebrew's folder) and the
+# language, for tiny to know it may draw beyond ASCII.
+mac_launcher() {
+    term=$1
+    q_tiny=$(sh_quote "$PREFIX/tiny")
+    q_path=$(sh_quote "PATH=$PATH")
+    q_lang=""
+    if [ -n "${LANG:-}" ]; then q_lang=" $(sh_quote "LANG=$LANG")"; fi
+    cat <<EOF
+#!/bin/sh
+# Opens tiny on the file named, in a new window of $term. Written by tiny's
+# install.sh; tiny.app runs it.
+set -eu
+run="cd && exec /usr/bin/env $q_path$q_lang $q_tiny"
+if [ -n "\${1:-}" ]; then
+    run="\$run '\$(printf '%s' "\$1" | sed "s/'/'\\\\\\\\''/g")'"
+fi
+EOF
+    case "$term" in
+        Terminal|iTerm)
+            # A .command file is a script both of these run in a window of
+            # their own, and opening one asks no permission of anybody: the
+            # way Ctrl+N opens its window (see terminal.rs). It deletes
+            # itself as it starts.
+            cat <<'EOF'
+script="$(mktemp "${TMPDIR:-/tmp}/tiny.XXXXXX")"
+mv "$script" "$script.command"
+script="$script.command"
+printf '#!/bin/sh\nrm -f "$0"\n%s\n' "$run" > "$script"
+chmod +x "$script"
+EOF
+            printf 'open -a %s "$script"\n' "$term"
+            ;;
+        *)
+            case "$term" in
+                WezTerm) args="start -- /bin/sh -c" ;;
+                kitty) args="/bin/sh -c" ;;
+                *) args="-e /bin/sh -c" ;;
+            esac
+            printf 'open -na %s --args %s "$run"\n' "$term" "$args"
+            ;;
+    esac
+}
+
+# tiny.app, in ~/Applications, where Launchpad and Spotlight find it and a
+# Mac's "Open With" can offer it for text. An AppleScript applet, because
+# Finder hands an app the files to open as events rather than as arguments
+# and AppleScript is what every Mac can build one from; all it does is run
+# the launcher above, kept in the app beside it.
+put_app() {
+    have osacompile || return 0
+    apps="$HOME/Applications"
+    if [ "$(id -u)" -eq 0 ]; then apps=/Applications; fi
+    work="$(temp_dir)" || return 0
+    app="$work/tiny.app"
+    cat > "$work/tiny.applescript" <<'EOF'
+-- tiny, from Finder, Launchpad or the Dock: open-tiny runs it in a window of
+-- a terminal, on each file it was given, or on none.
+on run
+	openTiny("")
+end run
+
+on open theItems
+	repeat with anItem in theItems
+		openTiny(POSIX path of anItem)
+	end repeat
+end open
+
+on openTiny(thePath)
+	set launcher to POSIX path of (path to resource "open-tiny")
+	do shell script quoted form of launcher & " " & quoted form of thePath
+end openTiny
+EOF
+    if ! osacompile -o "$app" "$work/tiny.applescript" >/dev/null 2>&1; then
+        rm -rf "$work"
+        return 0
+    fi
+    res="$app/Contents/Resources"
+    plist="$app/Contents/Info.plist"
+    mac_launcher "$(mac_terminal)" > "$res/open-tiny"
+    chmod +x "$res/open-tiny"
+    if [ -f "$1/tiny.icns" ]; then
+        cp "$1/tiny.icns" "$res/applet.icns"
+        # A newer osacompile puts the icon in an asset catalog as well,
+        # which a Mac would show instead.
+        rm -f "$res/Assets.car"
+        plutil -remove CFBundleIconName "$plist" >/dev/null 2>&1 || true
+    fi
+    version="$("$PREFIX/tiny" --version 2>/dev/null | sed 's/^tiny //')"
+    # What it is called, what it opens (text of every kind, offered rather
+    # than taken: it is never the default for anything until you say), and
+    # which tiny it starts, for `tiny --uninstall` to know it.
+    plutil -replace CFBundleIdentifier -string dev.msaunders.tiny "$plist" \
+        && plutil -replace CFBundleName -string tiny "$plist" \
+        && plutil -replace CFBundleDisplayName -string tiny "$plist" \
+        && plutil -replace CFBundleShortVersionString -string "${version:-0}" "$plist" \
+        && plutil -replace TinyBinary -string "$PREFIX/tiny" "$plist" \
+        && plutil -replace CFBundleDocumentTypes -json '[{
+            "CFBundleTypeName": "Text",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["public.text", "public.plain-text",
+                "public.source-code", "public.script", "public.shell-script",
+                "public.json", "public.xml", "public.yaml",
+                "net.daringfireball.markdown",
+                "public.comma-separated-values-text",
+                "public.tab-separated-values-text", "public.log"]
+        }]' "$plist" >/dev/null 2>&1 \
+        || { rm -rf "$work"; return 0; }
+    # Changed after it was signed, so signed again, ad hoc: a Mac with Apple
+    # silicon runs nothing unsigned.
+    codesign --force --sign - "$app" >/dev/null 2>&1 || true
+    if ! { mkdir -p "$apps" && rm -rf "$apps/tiny.app" && mv "$app" "$apps/tiny.app"; } 2>/dev/null; then
+        rm -rf "$work"
+        return 0
+    fi
+    rm -rf "$work"
+    lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+    if [ -x "$lsregister" ]; then
+        "$lsregister" -f "$apps/tiny.app" >/dev/null 2>&1 || true
+    fi
+    MENU=1
 }
 
 # --- the system's package manager ---------------------------------------------
@@ -225,6 +446,17 @@ finish() {
     # tiny updating itself already knows where it is and how to start; it
     # says so itself, straight after this.
     [ -z "${TINY_UPDATE:-}" ] || return 0
+    # It is offered for text files, never made the program for them: that
+    # is the person's to choose, once, and here is how.
+    if [ -n "$MENU" ]; then
+        if [ "$(uname -s)" = Darwin ]; then
+            say "tiny is in Launchpad. To open text files with it, Get Info on one,"
+            say "choose tiny under Open with, then Change All."
+        else
+            say "tiny is in your applications menu. To open text files with it:"
+            say "  xdg-mime default tiny.desktop text/plain text/markdown"
+        fi
+    fi
     case ":$PATH:" in
         *":$PREFIX:"*)
             say "run it with:      tiny ~/notes"
@@ -303,9 +535,13 @@ prebuilt() {
         rm -rf "$dir"
         die "could not put tiny in $PREFIX"
     fi
-    # Releases before 0.6.0 carry no manual page.
+    # Releases before 0.6.0 carry no manual page, and before 0.6.9 no menu
+    # entry or icon.
     if tar -xzf "$dir/tiny.tar.gz" -C "$dir" tiny.1 2>/dev/null; then
         put_man "$dir/tiny.1"
+    fi
+    if tar -xzf "$dir/tiny.tar.gz" -C "$dir" desktop 2>/dev/null; then
+        put_desktop "$dir/desktop"
     fi
     rm -rf "$dir"
     say "done"
@@ -543,4 +779,5 @@ fi
 [ -x "$ROOT/bin/tiny" ] || die "the build finished without leaving a binary"
 put_in_place "$ROOT/bin/tiny" || die "could not put tiny in $PREFIX"
 put_man "$SRC/docs/tiny.1"
+put_desktop "$SRC/packaging/desktop"
 finish

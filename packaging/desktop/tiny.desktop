@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=tiny
+GenericName=Text Editor
+Comment=Edit text, notes and code in the terminal
+Exec=tiny %f
+Icon=tiny
+Terminal=true
+StartupNotify=false
+Categories=Utility;TextEditor;Development;
+Keywords=text;editor;notes;markdown;code;files;git;terminal;
+MimeType=text/plain;text/markdown;text/x-log;text/csv;text/tab-separated-values;text/x-readme;text/x-csrc;text/x-chdr;text/x-c++src;text/x-c++hdr;text/rust;text/x-python;text/x-python3;text/x-go;text/x-java;text/javascript;application/typescript;text/x-shellscript;application/json;application/xml;text/html;text/css;application/toml;application/yaml;text/x-makefile;text/x-cmake;text/x-tex;text/x-lua;application/x-ruby;application/x-php;application/sql;text/x-patch;application/x-desktop;application/x-zerosize;

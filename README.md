@@ -28,7 +28,8 @@ irm https://raw.githubusercontent.com/mattsaund/tiny/main/install.ps1 | iex
 ```
 
 Downloads the newest [release](https://github.com/mattsaund/tiny/releases) for
-your machine (or builds it), and offers git and ffmpeg if they are missing.
+your machine (or builds it), puts it in your applications menu and among the
+programs that open text files, and offers git and ffmpeg if they are missing.
 tiny tells you when a new version is out, and `y` updates it. `tiny --update` does
 the same; `tiny --uninstall` removes tiny and leaves your files alone.
 What changed: [CHANGELOG](CHANGELOG.md).

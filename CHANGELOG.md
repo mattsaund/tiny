@@ -3,6 +3,21 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.6.9 - 2026-11-05
+
+- **tiny is in the applications menu**, with an icon of its own: the green
+  disk and the t from msaunders.dev, in white. The installers put it in the
+  Linux menu, in Launchpad on a Mac (as tiny.app, in `~/Applications`) and
+  in the Start menu on Windows. Opened from there, it starts in a terminal:
+  the one the desktop is set to use on Linux, the one tiny was installed
+  from on a Mac, Windows' own on Windows.
+- **And among the programs that open text files.** A file manager's "Open
+  with" offers tiny for text, Markdown and code, and choosing it there once,
+  as the program for a kind of file, makes a double-click open those in
+  tiny. tiny never makes itself the default for anything.
+- `tiny --update` brings both along, and `tiny --uninstall` takes them away
+  again with the rest.
+
 ## 0.6.8 - 2026-11-02
 
 - **Changed lines are marked beside their numbers.** In a file in a git

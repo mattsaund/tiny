@@ -23,7 +23,8 @@
 //!    whole-project jobs over every core. [`config`] holds the settings and
 //!    the key bindings, and is read once before any of them. Beside them,
 //!    [`plugins`] runs the Lua ones, [`update`] knows about new releases,
-//!    and [`terminal`] opens another tiny in a window of its own.
+//!    [`terminal`] opens another tiny in a window of its own, and
+//!    [`desktop`] knows what the installers put in the applications menu.
 //!
 //! # The one-way rule
 //!
@@ -55,6 +56,7 @@
 mod app;
 mod clipboard;
 mod config;
+mod desktop;
 mod files;
 mod git;
 mod licenses;
@@ -488,6 +490,11 @@ struct Removal {
     /// it also forgets the entry; unlinking alone leaves cargo believing
     /// tiny is still installed.
     cargo_root: Option<PathBuf>,
+    /// tiny in the applications menu, and among the programs offered for
+    /// text files, see [`desktop`]. Not looked for by [`Removal::plan`],
+    /// which only reads the folders it is handed: the menu is found on the
+    /// machine itself, by `uninstall`.
+    menu: desktop::Menu,
 }
 
 impl Removal {
@@ -548,6 +555,7 @@ impl Removal {
             conf_dir,
             man,
             cargo_root,
+            menu: desktop::Menu::default(),
         }
     }
 
@@ -563,6 +571,7 @@ impl Removal {
         if let Some(p) = &self.conf_dir {
             out.push(format!("  {}/", p.display()));
         }
+        out.extend(self.menu.lines());
         if let Some(p) = &self.man {
             out.push(format!("  {}", p.display()));
         }
@@ -596,6 +605,7 @@ impl Removal {
         {
             errors.push(format!("{}: {e}", p.display()));
         }
+        errors.extend(self.menu.perform());
         if let Some(p) = &self.man
             && let Err(e) = std::fs::remove_file(p)
         {
@@ -645,7 +655,10 @@ fn uninstall() -> Result<()> {
         return Ok(());
     }
     let bin = std::env::current_exe().ok();
-    let removal = Removal::plan(bin, Config::user_path());
+    let mut removal = Removal::plan(bin.clone(), Config::user_path());
+    if let Some(bin) = bin.filter(|b| b.is_file()) {
+        removal.menu = desktop::Menu::plan(terminal::Os::this(), &bin, &desktop::Places::here());
+    }
     let lines = removal.lines();
     if lines.is_empty() {
         println!("nothing to remove: no tiny binary or config file found");
