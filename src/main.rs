@@ -675,7 +675,7 @@ fn uninstall() -> Result<()> {
 
     let mut reply = String::new();
     if std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut reply).is_err()
-        || !matches!(reply.trim(), "y" | "Y" | "yes" | "Yes")
+        || !agreed(&reply)
     {
         println!("canceled, nothing was removed");
         return Ok(());
@@ -692,11 +692,34 @@ fn uninstall() -> Result<()> {
     Err(anyhow!("{} item(s) could not be removed", errors.len()))
 }
 
+/// Whether the answer to "Remove tiny?" is yes. Windows PowerShell can put
+/// a byte order mark in front of what it pipes into a program, and that is
+/// nobody's answer.
+fn agreed(reply: &str) -> bool {
+    matches!(
+        reply.trim().trim_start_matches('\u{feff}'),
+        "y" | "Y" | "yes" | "Yes"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    fn yes_is_yes_however_it_was_piped_in() {
+        assert!(agreed("y\n"));
+        assert!(agreed("yes\r\n"));
+        assert!(
+            agreed("\u{feff}y\r\n"),
+            "after PowerShell's byte order mark"
+        );
+        assert!(!agreed(""), "nothing at all is a no");
+        assert!(!agreed("n\n"));
+        assert!(!agreed("yeah\n"));
+    }
 
     /// A fake install: `<root>/bin/tiny` plus cargo's record of it, and a
     /// config file in its own directory.

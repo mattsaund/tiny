@@ -396,7 +396,7 @@ mod tests {
             ..Places::default()
         };
         let menu = Menu::plan(Os::Mac, &bin, &places);
-        let app = td.path().join("Applications/tiny.app");
+        let app = td.path().join("Applications").join("tiny.app");
         assert_eq!(menu.app.as_deref(), Some(app.as_path()));
         assert_eq!(menu.lines(), [format!("  {}/", app.display())]);
         assert!(menu.perform().is_empty());

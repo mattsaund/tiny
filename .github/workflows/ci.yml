@@ -204,7 +204,8 @@ jobs:
           $pixel = [System.Drawing.Icon]::ExtractAssociatedIcon($exe).ToBitmap().GetPixel(8, 22)
           Write-Host "tiny.exe's icon at (8, 22): $pixel"
           if (-not ($pixel.G -gt 100 -and $pixel.R -lt 100 -and $pixel.B -lt 110)) { throw 'tiny.exe does not wear its icon' }
-          'y' | & $exe --uninstall
+          # The answer from cmd, which sends it as the bytes typed.
+          cmd /c "echo y| `"$exe`" --uninstall"
           if (Test-Path $link) { throw 'the shortcut is still there' }
           if (Test-Path 'HKCU:\Software\Classes\Applications\tiny.exe') { throw 'Open with still has tiny' }
           $with = Get-ItemProperty 'HKCU:\Software\Classes\.md\OpenWithProgids' -ErrorAction SilentlyContinue
