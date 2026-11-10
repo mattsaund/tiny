@@ -4,6 +4,18 @@
 use super::*;
 use crate::files::project::canonical;
 
+/// The fixture, opened the way the command line opens a folder: by the path
+/// the disk resolves it to, which `*cd` lands on too. A Mac's temporary
+/// folders are under /var, which is a link to /private/var, and a file
+/// reached by both would be two files to tiny.
+fn project() -> (tempfile::TempDir, App) {
+    let td = tempfile::tempdir().unwrap();
+    build(td.path());
+    let root = canonical(td.path()).unwrap();
+    let app = App::new(target(&root, None), Config::default(), None).unwrap();
+    (td, app)
+}
+
 /// What the line under the bar says for a command typed but not yet run.
 fn previewed(app: &mut App, line: &str) -> String {
     command_bar(app);
@@ -27,7 +39,7 @@ fn names(app: &App) -> Vec<String> {
 
 #[test]
 fn cd_opens_a_folder_in_the_project_and_cd_dash_comes_back() {
-    let (td, mut app) = fixture();
+    let (td, mut app) = project();
     let src = canonical(&td.path().join("src")).unwrap();
     assert!(previewed(&mut app, "cd src").starts_with("opens "));
     assert!(previewed(&mut app, "cd src").ends_with(" as the project"));
@@ -53,7 +65,7 @@ fn cd_opens_a_folder_in_the_project_and_cd_dash_comes_back() {
 
 #[test]
 fn cd_will_not_open_a_file_a_folder_that_is_not_there_or_the_project_itself() {
-    let (td, mut app) = fixture();
+    let (td, mut app) = project();
     let before = app.root().to_path_buf();
     assert!(previewed(&mut app, "cd README.md").contains("is a file"));
     assert!(previewed(&mut app, "cd nowhere").contains("there is no folder nowhere"));
@@ -66,7 +78,7 @@ fn cd_will_not_open_a_file_a_folder_that_is_not_there_or_the_project_itself() {
 
 #[test]
 fn a_full_path_goes_anywhere_on_the_disk() {
-    let (_td, mut app) = fixture();
+    let (_td, mut app) = project();
     let elsewhere = tempfile::tempdir().unwrap();
     fs::write(elsewhere.path().join("todo.md"), "- milk\n").unwrap();
     let path = elsewhere.path().to_string_lossy().into_owned();
@@ -77,7 +89,7 @@ fn a_full_path_goes_anywhere_on_the_disk() {
 
 #[test]
 fn files_being_edited_stay_open_with_their_changes() {
-    let (td, mut app) = fixture();
+    let (td, mut app) = project();
     select(&mut app, "main.py");
     app.on_key(k(KeyCode::Enter));
     type_str(&mut app, "# mine\n");
@@ -97,7 +109,7 @@ fn files_being_edited_stay_open_with_their_changes() {
 
 #[test]
 fn cd_brings_the_browser_back_wherever_it_was_typed() {
-    let (_td, mut app) = fixture();
+    let (_td, mut app) = project();
     app.on_key(ctrl('t'));
     assert!(app.tree_hidden);
     app.on_key(ctrl('g'));
@@ -109,7 +121,7 @@ fn cd_brings_the_browser_back_wherever_it_was_typed() {
 
 #[test]
 fn tab_finishes_a_folder_for_cd_and_offers_no_files() {
-    let (_td, mut app) = fixture();
+    let (_td, mut app) = project();
     assert_eq!(
         completed(&mut app, "cd sr"),
         format!("cd src{}", std::path::MAIN_SEPARATOR)
@@ -131,7 +143,7 @@ fn tab_finishes_a_folder_for_cd_and_offers_no_files() {
 
 #[test]
 fn the_desktop_start_hides_the_browser_and_says_how_to_get_it_back() {
-    let (_td, mut app) = fixture();
+    let (_td, mut app) = project();
     app.hide_browser_at_start();
     assert!(app.tree_hidden);
     assert_eq!(app.status, "Ctrl+T for the browser, ? for help");
@@ -172,4 +184,22 @@ fn a_warning_is_not_replaced_by_the_desktop_start() {
     app.hide_browser_at_start();
     assert!(app.tree_hidden);
     assert_eq!(app.status, "tiny.conf: line 3 is not a setting");
+}
+
+/// The same folder by another path, through a link, the way a Mac's
+/// temporary folders are: still the project, not somewhere to go.
+#[cfg(unix)]
+#[test]
+fn the_project_is_the_project_whatever_path_it_was_opened_by() {
+    let td = tempfile::tempdir().unwrap();
+    build(&td.path().join("real"));
+    std::os::unix::fs::symlink(td.path().join("real"), td.path().join("link")).unwrap();
+    let mut app = App::new(
+        target(&td.path().join("link"), None),
+        Config::default(),
+        None,
+    )
+    .unwrap();
+    assert!(previewed(&mut app, "cd .").contains("is the project already"));
+    assert!(previewed(&mut app, "cd ../real").contains("is the project already"));
 }

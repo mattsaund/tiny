@@ -78,7 +78,10 @@ impl App {
         if !dir.is_dir() {
             return Err(format!("{typed} is a file; cd opens a folder"));
         }
-        if dir == self.root() {
+        // Compared as the disk resolves it: the same folder can be named by
+        // more than one path, through a link (a Mac's /var is /private/var).
+        let here = canonical(self.root()).unwrap_or_else(|_| self.root().to_path_buf());
+        if dir == here {
             return Err(format!("{} is the project already", shown(&dir)));
         }
         Ok(dir)
