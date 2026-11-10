@@ -5,9 +5,10 @@ Each version is a `v` tag, with ready-made binaries on its
 
 ## 0.7.1 - 2026-11-09
 
-- **From the applications menu, tiny opens on the browser again**, to go
-  wherever you need to or `*cd` somewhere else. A file opened from a file
-  manager still fills the window, the way `tiny <file>` always has. The
+- **From the applications menu, tiny opens on the browser again**, in your
+  home folder (Desktop, Documents, Pictures and the rest), to go wherever
+  you need to or `*cd` somewhere else. A file opened from a file manager
+  still fills the window, the way `tiny <file>` always has. The
   launchers no longer pass `--hide-browser`, which stays for a terminal,
   and `tiny --update` puts them right.
 

@@ -134,13 +134,29 @@ desktop_quote() {
 # is not always what a terminal does, and keeps any arguments the release's
 # own entry gives it (0.7.0's gave --hide-browser). Terminal=true, so the
 # desktop opens it in the terminal it is set to use.
+#
+# Started from the menu with no file, tiny opens the folder it starts in,
+# and that is the home folder, with Desktop, Documents and the rest in it:
+# Path says so, rather than leaving it to whatever started the terminal.
+# Not for an install as root, which is everyone's and has no one home.
 put_menu_entry() {
     [ -f "$1/tiny.desktop" ] || return 0
     share="$(dirname "$PREFIX")/share"
     apps="$share/applications"
     exe="$(desktop_quote "$PREFIX/tiny")"
+    home=""
+    if [ "$(id -u)" -ne 0 ] && [ -n "${HOME:-}" ]; then
+        home="$(printf '%s' "$HOME" | sed 's/\\/\\\\/g')"
+    fi
     if ! { mkdir -p "$apps" \
-        && EXE="$exe" awk '/^Exec=tiny / { print "Exec=" ENVIRON["EXE"] substr($0, 10); next } { print }' \
+        && EXE="$exe" HOMEDIR="$home" awk '
+            /^Path=/ && ENVIRON["HOMEDIR"] != "" { next }
+            /^Exec=tiny / {
+                print "Exec=" ENVIRON["EXE"] substr($0, 10)
+                if (ENVIRON["HOMEDIR"] != "") print "Path=" ENVIRON["HOMEDIR"]
+                next
+            }
+            { print }' \
             "$1/tiny.desktop" > "$apps/.tiny.desktop.new" \
         && mv -f "$apps/.tiny.desktop.new" "$apps/tiny.desktop"; } 2>/dev/null; then
         rm -f "$apps/.tiny.desktop.new"

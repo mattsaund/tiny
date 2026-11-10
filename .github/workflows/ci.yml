@@ -300,6 +300,7 @@ jobs:
           entry="$share/applications/tiny.desktop"
           cat "$entry"
           grep -qxF "Exec=\"$TINY_PREFIX/tiny\" %f" "$entry"
+          grep -qxF "Path=$HOME" "$entry"
           sudo apt-get update -qq && sudo apt-get install -y -qq desktop-file-utils >/dev/null
           desktop-file-validate "$entry"
           test -f "$share/icons/hicolor/scalable/apps/tiny.svg"
