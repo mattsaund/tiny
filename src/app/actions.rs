@@ -162,6 +162,26 @@ impl App {
         }
     }
 
+    /// Start with the browser folded away, as `--hide-browser` asks: how the
+    /// applications menu starts tiny. A file named on the command line has
+    /// had it folded already. The status line says how to bring it back,
+    /// unless it has something more pressing to say, like a config file that
+    /// would not read.
+    pub fn hide_browser_at_start(&mut self) {
+        if self.tree_hidden {
+            return;
+        }
+        let before = std::mem::take(&mut self.status);
+        let greeting = matches!(before.as_str(), "? for help" | "new project, ? for help");
+        self.toggle_tree_pane();
+        self.status = if greeting {
+            let key = self.key_name(Action::ToggleTreePane);
+            format!("{key} for the browser, ? for help")
+        } else {
+            before
+        };
+    }
+
     /// One step of `<` or `>`: a narrower or a wider browser, and the file
     /// pane takes whatever it gives up.
     ///

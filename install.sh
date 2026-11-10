@@ -131,15 +131,16 @@ desktop_quote() {
 # (so ~/.local/share for ~/.local/bin, where the desktop looks), and the icon
 # in every size, in the hicolor theme every desktop falls back on. The entry
 # names the binary by its full path, since what a desktop finds on its PATH
-# is not always what a terminal does. Terminal=true, so the desktop opens it
-# in the terminal it is set to use.
+# is not always what a terminal does, and keeps the arguments the release's
+# own entry gives it (--hide-browser, from 0.6.10). Terminal=true, so the
+# desktop opens it in the terminal it is set to use.
 put_menu_entry() {
     [ -f "$1/tiny.desktop" ] || return 0
     share="$(dirname "$PREFIX")/share"
     apps="$share/applications"
     exe="$(desktop_quote "$PREFIX/tiny")"
     if ! { mkdir -p "$apps" \
-        && EXE="$exe" awk '/^Exec=/ { print "Exec=" ENVIRON["EXE"] " %f"; next } { print }' \
+        && EXE="$exe" awk '/^Exec=tiny / { print "Exec=" ENVIRON["EXE"] substr($0, 10); next } { print }' \
             "$1/tiny.desktop" > "$apps/.tiny.desktop.new" \
         && mv -f "$apps/.tiny.desktop.new" "$apps/tiny.desktop"; } 2>/dev/null; then
         rm -f "$apps/.tiny.desktop.new"
@@ -198,6 +199,11 @@ mac_terminal() {
 mac_launcher() {
     term=$1
     q_tiny=$(sh_quote "$PREFIX/tiny")
+    # Opened from Finder or Launchpad, tiny starts the way an editor does,
+    # with the browser hidden; a tiny from before 0.6.10 has no such option.
+    if "$PREFIX/tiny" --help 2>/dev/null | grep -q -- --hide-browser; then
+        q_tiny="$q_tiny --hide-browser"
+    fi
     q_path=$(sh_quote "PATH=$PATH")
     q_lang=""
     if [ -n "${LANG:-}" ]; then q_lang=" $(sh_quote "LANG=$LANG")"; fi

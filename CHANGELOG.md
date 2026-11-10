@@ -3,6 +3,21 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.6.10 - 2026-11-09
+
+- **`*cd` opens another folder as the project**, without leaving tiny. A
+  name is a folder in the project, `..` the one above it, `~` home (and
+  `*cd` alone goes there), a full path goes there, and `*cd -` goes back to
+  the project before. Tab finishes the folder's name. `*project ~/notes`
+  and `*open project ~/notes` say the same. Open files stay open, unsaved
+  changes and all.
+- **From the desktop, tiny opens as an editor would.** Started from the
+  applications menu, its icon, or a file opened from a file manager, it
+  opens with the browser hidden: the file across the whole window, or with
+  no file, the folder, with how to bring the browser back (`Ctrl+T`) and
+  `*cd` for another one. The launchers ask for it with the new
+  `--hide-browser`, which works from a terminal too.
+
 ## 0.6.9 - 2026-11-05
 
 - **tiny is in the applications menu**, with an icon of its own: the green

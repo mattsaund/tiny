@@ -76,6 +76,45 @@ fn path_candidates(root: &Path, typed: &str, show_hidden: bool) -> Vec<String> {
     out
 }
 
+/// The folders `*cd` could go to, finishing `typed` the way it was begun:
+/// from the project, from home after `~/`, or from the top of the disk.
+/// `~` and `..` on their own are finished with the separator that goes
+/// into them.
+fn folder_candidates(root: &Path, typed: &str, show_hidden: bool) -> Vec<String> {
+    let sep = std::path::MAIN_SEPARATOR_STR;
+    let cut = typed.rfind(std::path::is_separator).map_or(0, |i| i + 1);
+    let (dir_part, fragment) = typed.split_at(cut);
+    if fragment == "~" && dir_part.is_empty() || fragment == ".." {
+        return vec![format!("{typed}{sep}")];
+    }
+    let base = if dir_part.is_empty() {
+        root.to_path_buf()
+    } else {
+        let path = crate::files::project::expand(dir_part);
+        if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        }
+    };
+    let Ok(entries) = fs::read_dir(&base) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') && !show_hidden && !fragment.starts_with('.') {
+                return None;
+            }
+            Some(format!("{dir_part}{name}{sep}"))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 /// Fill in the rest of whatever is being typed: a verb, a setting name after
 /// `set` and then its value, the kind of thing after `goto`, a joining word,
 /// or a name.
@@ -298,6 +337,16 @@ fn completion_options(
                 3 if RENAME.contains(&v) => offer(&["to"]),
                 _ => return None,
             }
+        }
+        // A folder to open as the project, anywhere on the disk.
+        "cd" | "chdir" | "project" if position >= 1 => folder_candidates(root, &typed, show_hidden),
+        _ if goto
+            && position >= 2
+            && args
+                .get(1)
+                .is_some_and(|k| k.eq_ignore_ascii_case("project")) =>
+        {
+            folder_candidates(root, &typed, show_hidden)
         }
         "split" if position == 1 => offer(&["down"]),
         "close" if position == 1 => offer(&["others", "terminal"]),

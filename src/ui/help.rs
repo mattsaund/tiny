@@ -251,6 +251,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("*close", "this pane, or others"),
     ("*terminal", ""),
     ("*play 20", "what was recorded"),
+    ("*cd ~/notes", "another folder"),
     ("*reload", ""),
     ("*commit [message]", "what is staged"),
     ("*set tab_width to 2", ""),

@@ -34,6 +34,7 @@
 //! | [`term`] | the terminal under the panes |
 //! | [`mouse`] | the wheel, a click and a drag |
 //! | [`navigate`] | picking a window with the arrows, and going in |
+//! | [`cd`] | another folder as the project, from `*cd` |
 //! | [`source`] | the git window: what has changed, and what to do about it |
 //! | [`branches`] | the git window's branches: switching, making, deleting |
 //! | [`watch`] | noticing files another program changed |
@@ -130,6 +131,7 @@ mod tests;
 mod actions;
 mod bar;
 mod branches;
+mod cd;
 mod clip;
 mod command;
 mod fileops;
@@ -309,6 +311,9 @@ pub struct App {
     /// The last `goto` that went somewhere, and which of its places it went
     /// to, so running it again goes on to the next one.
     last_jump: Option<(String, usize)>,
+    /// The project before the last `*cd`, which `*cd -` goes back to, see
+    /// [`cd`].
+    previous_root: Option<PathBuf>,
     /// A plan is being made to describe under the bar, not to be carried
     /// out: anything too slow to do on a keystroke can say so and wait.
     planning_for_preview: bool,
@@ -483,6 +488,7 @@ impl App {
             names: None,
             replace_count: None,
             last_jump: None,
+            previous_root: None,
             planning_for_preview: false,
             plugins: crate::plugins::Plugins::default(),
             plugins_dir: None,

@@ -25,6 +25,7 @@ pub(super) use ratatui::style::{Color, Modifier};
 pub(super) use std::fs;
 pub(super) use std::path::{Path, PathBuf};
 
+mod cd;
 mod commands;
 mod editing;
 mod fileops;

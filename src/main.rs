@@ -99,6 +99,8 @@ USAGE:
 OPTIONS:
     -h, --help          show this message
     -V, --version       show the version
+        --hide-browser  start with the browser hidden; Ctrl+T shows it.
+                        How the applications menu starts tiny
         --update        install the newest release, if there is one
         --config        print the path of the config file
         --licenses      terms of the bundled syntax definitions
@@ -120,6 +122,13 @@ KEYS:
 /// binary's `bin`: `~/.local/share/man/man1` for `~/.local/bin`, which is
 /// where `man` looks, given that `bin` is on the PATH.
 const MAN_PAGE: &str = "share/man/man1/tiny.1";
+
+/// Take `flag` out of `args`, and say whether it was there.
+fn take_flag(args: &mut Vec<String>, flag: &str) -> bool {
+    let before = args.len();
+    args.retain(|a| a != flag);
+    args.len() != before
+}
 
 /// Print to stdout, and do not mind if nobody is listening.
 ///
@@ -175,6 +184,13 @@ fn real_main() -> Result<()> {
             })
         })
         .collect::<Result<_>>()?;
+    // The way in from the desktop: the applications menu, an icon, or a file
+    // opened from a file manager. The installers' launchers say it, for
+    // tiny to start the way an editor does, the file or the folder across
+    // the whole window, see `desktop`. Anywhere among the arguments, so it
+    // can stand in front of a file.
+    let mut args = args;
+    let hide_browser = take_flag(&mut args, "--hide-browser");
     match args.first().map(String::as_str) {
         Some("-h") | Some("--help") => {
             emit(USAGE);
@@ -235,6 +251,9 @@ fn real_main() -> Result<()> {
     // The browser's colors from git, asked on a thread, which no test starts
     // without asking for it, see `app::marks`.
     app.color_from_git();
+    if hide_browser {
+        app.hide_browser_at_start();
+    }
     // A release build asks, once, whether there is a newer one. A debug build
     // is somebody working on tiny, and is left alone, and so is one the
     // package manager looks after, see `update`.
@@ -733,6 +752,19 @@ mod tests {
         let conf = conf_dir.join(CONF_NAME);
         fs::write(&conf, "borders = true\n").unwrap();
         (bin, conf)
+    }
+
+    #[test]
+    fn hide_browser_is_taken_out_wherever_it_stands() {
+        let mut args: Vec<String> = vec!["--hide-browser".into(), "notes.md".into()];
+        assert!(take_flag(&mut args, "--hide-browser"));
+        assert_eq!(args, ["notes.md"]);
+        let mut args: Vec<String> = vec!["notes.md".into(), "--hide-browser".into()];
+        assert!(take_flag(&mut args, "--hide-browser"));
+        assert_eq!(args, ["notes.md"]);
+        let mut args: Vec<String> = vec!["notes.md".into()];
+        assert!(!take_flag(&mut args, "--hide-browser"));
+        assert_eq!(args, ["notes.md"]);
     }
 
     #[test]

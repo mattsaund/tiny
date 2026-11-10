@@ -147,6 +147,8 @@ pub(super) enum Plan {
     Branch(super::branches::BranchPlan),
     Publish(super::publish::Publish),
     Clone(super::publish::Cloning),
+    /// Another folder as the project, see `cd`.
+    Project(PathBuf),
     Reload,
     Update,
     Split {
@@ -470,6 +472,7 @@ impl App {
             Sentence::Clone { from, into } => {
                 self.plan_clone(from, into.as_deref()).map(Plan::Clone)
             }
+            Sentence::Project(typed) => self.plan_project(typed).map(Plan::Project),
             Sentence::Reload => Ok(Plan::Reload),
             Sentence::Update => Ok(Plan::Update),
             Sentence::Split { stacked } => Ok(Plan::Split { stacked: *stacked }),
@@ -943,6 +946,7 @@ impl App {
             Plan::Branch(b) => self.describe_branch(b),
             Plan::Publish(p) => self.describe_publish(p),
             Plan::Clone(c) => self.describe_clone(c),
+            Plan::Project(dir) => format!("opens {} as the project", super::cd::shown(dir)),
             Plan::Reload => "reads the disk and the plugins again".into(),
             Plan::Update => "asks GitHub for a newer tiny".into(),
             Plan::Split { stacked: false } => "a new pane beside this one".into(),
@@ -1075,6 +1079,7 @@ impl App {
             Plan::Branch(b) => self.carry_out_branch(b),
             Plan::Publish(p) => self.publish(p),
             Plan::Clone(c) => self.clone_repository(c),
+            Plan::Project(dir) => self.open_project(&dir),
             Plan::Reload => self.cmd_reload(),
             Plan::Update => self.cmd_update(),
             Plan::Split { stacked } => {

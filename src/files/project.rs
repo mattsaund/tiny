@@ -153,7 +153,7 @@ fn touch(path: &Path) -> Result<()> {
 /// literal tilde: the shell only expands it unquoted, and cmd.exe never does.
 /// Deliberately handles just `~` and `~/...`; `~otheruser` is not supported and
 /// is left as a literal path, which will simply fail to open.
-fn expand(s: &str) -> PathBuf {
+pub fn expand(s: &str) -> PathBuf {
     let tail = if s == "~" {
         Some("")
     } else {

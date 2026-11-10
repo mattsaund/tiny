@@ -215,6 +215,18 @@ impl App {
         self.coloring.asking = Some(rx);
     }
 
+    /// The project is another folder now, see [`super::cd`]: the colors of
+    /// the one before go, an answer still coming about it is not waited
+    /// for, and git is asked about the new one.
+    pub(super) fn recolor_elsewhere(&mut self) {
+        self.coloring.marks = Marks::default();
+        self.coloring.asking = None;
+        self.coloring.again = false;
+        self.coloring.git_dir = None;
+        self.coloring.stamps = Stamps::default();
+        self.recolor();
+    }
+
     /// Take in an answer, and notice the repository moving under us.
     /// Returns whether the colors changed, for the event loop to draw them.
     pub fn poll_colors(&mut self) -> bool {

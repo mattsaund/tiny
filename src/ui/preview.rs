@@ -22,6 +22,7 @@ use super::editor::draw_editor;
 use super::parts::{FORMAT_LIMIT, Outline, label, mark_query, pane};
 
 use crate::app::{App, Focus, LinkHit, Mode, PaneHit, Preview, TextHits, TextKind, link_area};
+use crate::config::keys::Action;
 use crate::text::markdown;
 use crate::text::search::Matcher;
 use crate::text::tabs;
@@ -186,6 +187,16 @@ pub(super) fn draw_pane(
             info,
         } => draw_media(f, app, inner, &path, kind, size, &info),
         Preview::Directory { path, entries } => {
+            // With the browser folded away there is no row to go right on,
+            // so the way back to it is what to say, and the way elsewhere.
+            let hint = if app.tree_hidden {
+                format!(
+                    "{} for the browser   *new for a file   *cd for another folder",
+                    app.key_name(Action::ToggleTreePane)
+                )
+            } else {
+                "right to open   *new for a file".to_string()
+            };
             let lines = vec![
                 Line::from(Span::styled(label(&path), pal.heading)),
                 Line::from(""),
@@ -196,7 +207,7 @@ pub(super) fn draw_pane(
                 Line::from(""),
                 // The command rather than a key: it works wherever you happen
                 // to be when you read it.
-                Line::from(Span::styled("right to open   *new for a file", pal.dim)),
+                Line::from(Span::styled(hint, pal.dim)),
             ];
             app.preview_len = lines.len();
             f.render_widget(Paragraph::new(lines), inner);

@@ -204,6 +204,10 @@ pub enum Sentence {
     },
     /// `merge login`: into the branch checked out.
     Merge(String),
+    /// `cd ~/notes`, `project ~/notes`: another folder as the project, as
+    /// the words after the verb say it. Nothing for home, `-` for the one
+    /// before, see `cd`.
+    Project(String),
     Reload,
     Update,
     /// `split`, or `split down`: a new pane beside this one, or below it.
@@ -382,6 +386,18 @@ pub fn parse(line: &str) -> Sentence {
         }
         _ if RENAME.contains(&v) && rest.first().is_some_and(|w| w.is(&["branch"])) => {
             rename_branch(&rest[1..])
+        }
+        // Another folder as the project. `cd` alone is home, the way it is
+        // in a shell; `project` alone has not said which.
+        "cd" | "chdir" => Sentence::Project(joined(rest)),
+        "project" if rest.is_empty() => {
+            Sentence::Incomplete("which folder? project ~/notes".into())
+        }
+        "project" => Sentence::Project(joined(rest)),
+        // `open project ~/notes`. A folder in the project that is itself
+        // called `project` is still `open project`, with nothing after.
+        _ if GOTO.contains(&v) && rest.len() > 1 && rest[0].is(&["project"]) => {
+            Sentence::Project(joined(&rest[1..]))
         }
         _ if GOTO.contains(&v) => goto(rest),
         _ if LINE.contains(&v) => goto(&w),
@@ -898,6 +914,8 @@ pub const VERBS: &[&str] = &[
     "switch",
     "checkout",
     "merge",
+    "cd",
+    "project",
     "reload",
     "settings",
     "update",
@@ -928,7 +946,8 @@ pub const VERBS: &[&str] = &[
 
 /// What may follow `goto`, for completing the second word.
 pub const KINDS: &[&str] = &[
-    "line", "function", "word", "text", "heading", "file", "folder", "map", "git", "help",
+    "line", "function", "word", "text", "heading", "file", "folder", "project", "map", "git",
+    "help",
 ];
 
 #[cfg(test)]
@@ -937,6 +956,23 @@ mod tests {
 
     fn named(s: &str) -> Place {
         Place::Named(s.to_string())
+    }
+
+    #[test]
+    fn cd_and_project_name_a_folder_to_open_as_the_project() {
+        let project = |s: &str| Sentence::Project(s.to_string());
+        assert_eq!(parse("cd ~/notes"), project("~/notes"));
+        assert_eq!(parse("cd"), project(""), "home, as in a shell");
+        assert_eq!(parse("cd -"), project("-"));
+        assert_eq!(parse("chdir .."), project(".."));
+        assert_eq!(parse("cd my notes"), project("my notes"));
+        assert_eq!(parse(r#"cd "two  spaces""#), project("two  spaces"));
+        assert_eq!(parse("project ~/notes"), project("~/notes"));
+        assert!(matches!(parse("project"), Sentence::Incomplete(_)));
+        assert_eq!(parse("open project ~/notes"), project("~/notes"));
+        assert_eq!(parse("please cd notes"), project("notes"));
+        // A folder in the project that is called `project`.
+        assert!(matches!(parse("open project"), Sentence::Goto { .. }));
     }
 
     fn goes(target: Target, within: Option<Place>) -> Sentence {
