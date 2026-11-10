@@ -3,7 +3,7 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
-## 0.6.10 - 2026-11-09
+## 0.7.0 - 2026-11-09
 
 - **`*cd` opens another folder as the project**, without leaving tiny. A
   name is a folder in the project, `..` the one above it, `~` home (and

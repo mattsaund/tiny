@@ -382,7 +382,7 @@
         $added = $false
         $what = 'Edit text, notes and code in the terminal'
         # Started from the Start menu or from Explorer, tiny opens the way an
-        # editor does, with the browser hidden; a tiny from before 0.6.10 has
+        # editor does, with the browser hidden; a tiny from before 0.7.0 has
         # no such option, so it is asked.
         $flag = ''
         if ((& $Exe --help 2>$null | Out-String) -match '--hide-browser') { $flag = '--hide-browser' }
