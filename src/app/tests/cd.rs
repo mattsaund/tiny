@@ -1,5 +1,5 @@
-//! `*cd`, another folder as the project, and the folded start the desktop's
-//! launchers ask for with `--hide-browser`.
+//! `*cd`, another folder as the project; the folded start `--hide-browser`
+//! asks for; and how tiny opens from the desktop, which passes no flag.
 
 use super::*;
 use crate::files::project::canonical;
@@ -142,7 +142,7 @@ fn tab_finishes_a_folder_for_cd_and_offers_no_files() {
 }
 
 #[test]
-fn the_desktop_start_hides_the_browser_and_says_how_to_get_it_back() {
+fn hide_browser_folds_it_away_and_says_how_to_get_it_back() {
     let (_td, mut app) = project();
     app.hide_browser_at_start();
     assert!(app.tree_hidden);
@@ -158,21 +158,34 @@ fn the_desktop_start_hides_the_browser_and_says_how_to_get_it_back() {
     assert_eq!((app.focus, app.entered), (Focus::Tree, true));
 }
 
+/// A double-click on a text file starts tiny on that file, which fills the
+/// window with the browser collapsed; the menu and the icon start it on
+/// no file, which opens on the browser. Neither passes `--hide-browser`.
 #[test]
-fn a_file_from_the_desktop_opens_across_the_window_as_it_always_did() {
+fn a_file_opened_from_the_desktop_fills_the_window_and_the_menu_opens_the_browser() {
     let td = tempfile::tempdir().unwrap();
     build(td.path());
+    for name in ["README.md", "src/main.py", "notes/design.md"] {
+        let file = td.path().join(name);
+        let app = App::new(target(td.path(), Some(file)), Config::default(), None).unwrap();
+        assert!(app.tree_hidden, "{name}: the browser is collapsed");
+        assert_eq!(app.focus, Focus::Editor, "{name}: the keyboard is in it");
+    }
+    let mut app = App::new(target(td.path(), None), Config::default(), None).unwrap();
+    assert!(!app.tree_hidden, "the menu opens on the browser");
+    assert_eq!((app.focus, app.entered), (Focus::Tree, true));
+    assert!(joined(&mut app).contains("BROWSER"));
+    // And the flag, given a file as well, has nothing more to do.
     let file = td.path().join("README.md");
     let mut app = App::new(target(td.path(), Some(file)), Config::default(), None).unwrap();
     let status = app.status.clone();
     app.hide_browser_at_start();
     assert!(app.tree_hidden);
-    assert_eq!(app.focus, Focus::Editor);
     assert_eq!(app.status, status, "nothing else to say");
 }
 
 #[test]
-fn a_warning_is_not_replaced_by_the_desktop_start() {
+fn a_warning_is_not_replaced_by_the_folded_start() {
     let td = tempfile::tempdir().unwrap();
     build(td.path());
     let mut app = App::new(

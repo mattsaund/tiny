@@ -194,11 +194,11 @@ jobs:
           $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'tiny.lnk'
           if (-not (Test-Path $link)) { throw 'no Start menu shortcut' }
           $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($link)
-          if ($shortcut.TargetPath -ne $exe -or $shortcut.Arguments -ne '--hide-browser') {
+          if ($shortcut.TargetPath -ne $exe -or $shortcut.Arguments -ne '') {
             throw "the shortcut starts $($shortcut.TargetPath) $($shortcut.Arguments)"
           }
           $command = (Get-ItemProperty 'HKCU:\Software\Classes\Applications\tiny.exe\shell\open\command').'(default)'
-          if ($command -ne ('"' + $exe + '" --hide-browser "%1"')) { throw "Open with runs $command" }
+          if ($command -ne ('"' + $exe + '" "%1"')) { throw "Open with runs $command" }
           $with = Get-ItemProperty 'HKCU:\Software\Classes\.md\OpenWithProgids'
           if ($null -eq $with.'tiny.text') { throw '.md files are not offered tiny' }
           # Its icon: green where the disk is, beside the t.
@@ -246,7 +246,6 @@ jobs:
           cmp "$app/Contents/Resources/applet.icns" "$GITHUB_WORKSPACE/packaging/desktop/tiny.icns"
           sh -n "$app/Contents/Resources/open-tiny"
           cat "$app/Contents/Resources/open-tiny"
-          grep -q -- "tiny' --hide-browser\"$" "$app/Contents/Resources/open-tiny"
       # And that it opens a file: tiny running, on it, in a window of
       # Terminal. A runner's desktop is not a person's, so this is said
       # rather than enforced.
@@ -257,7 +256,7 @@ jobs:
         run: |
           open -a "$HOME/Applications/tiny.app" "$GITHUB_WORKSPACE/CHANGELOG.md"
           for _ in $(seq 1 30); do
-            if pgrep -f "$TINY_PREFIX/tiny --hide-browser $GITHUB_WORKSPACE/CHANGELOG.md" >/dev/null; then
+            if pgrep -f "$TINY_PREFIX/tiny $GITHUB_WORKSPACE/CHANGELOG.md" >/dev/null; then
               echo "tiny is running on CHANGELOG.md"
               pkill -f "$TINY_PREFIX/tiny" || true
               exit 0
@@ -300,7 +299,7 @@ jobs:
           share="$RUNNER_TEMP/share"
           entry="$share/applications/tiny.desktop"
           cat "$entry"
-          grep -qxF "Exec=\"$TINY_PREFIX/tiny\" --hide-browser %f" "$entry"
+          grep -qxF "Exec=\"$TINY_PREFIX/tiny\" %f" "$entry"
           sudo apt-get update -qq && sudo apt-get install -y -qq desktop-file-utils >/dev/null
           desktop-file-validate "$entry"
           test -f "$share/icons/hicolor/scalable/apps/tiny.svg"

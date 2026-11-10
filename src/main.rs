@@ -99,8 +99,7 @@ USAGE:
 OPTIONS:
     -h, --help          show this message
     -V, --version       show the version
-        --hide-browser  start with the browser hidden; Ctrl+T shows it.
-                        How the applications menu starts tiny
+        --hide-browser  start with the browser hidden; Ctrl+T shows it
         --update        install the newest release, if there is one
         --config        print the path of the config file
         --licenses      terms of the bundled syntax definitions
@@ -184,11 +183,11 @@ fn real_main() -> Result<()> {
             })
         })
         .collect::<Result<_>>()?;
-    // The way in from the desktop: the applications menu, an icon, or a file
-    // opened from a file manager. The installers' launchers say it, for
-    // tiny to start the way an editor does, the file or the folder across
-    // the whole window, see `desktop`. Anywhere among the arguments, so it
-    // can stand in front of a file.
+    // The file or the folder across the whole window from the start, the
+    // browser a Ctrl+T away. Anywhere among the arguments, so it can stand in
+    // front of a file. The desktop's launchers do not pass it: from the menu
+    // tiny opens on the browser, to go anywhere from, and a file named on
+    // the command line already opens across the window.
     let mut args = args;
     let hide_browser = take_flag(&mut args, "--hide-browser");
     match args.first().map(String::as_str) {

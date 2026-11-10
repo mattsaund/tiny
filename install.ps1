@@ -381,11 +381,6 @@
     function Install-Menu([string]$Exe) {
         $added = $false
         $what = 'Edit text, notes and code in the terminal'
-        # Started from the Start menu or from Explorer, tiny opens the way an
-        # editor does, with the browser hidden; a tiny from before 0.7.0 has
-        # no such option, so it is asked.
-        $flag = ''
-        if ((& $Exe --help 2>$null | Out-String) -match '--hide-browser') { $flag = '--hide-browser' }
         # The shortcut. A program Windows runs in a console opens in the
         # terminal Windows is set to use, which is Windows Terminal on 11.
         $programs = [Environment]::GetFolderPath('Programs')
@@ -393,7 +388,6 @@
             try {
                 $link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $programs 'tiny.lnk'))
                 $link.TargetPath = $Exe
-                $link.Arguments = $flag
                 $link.WorkingDirectory = $HOME
                 $link.IconLocation = "$Exe,0"
                 $link.Description = $what
@@ -406,8 +400,7 @@
         # opens, that kind listed under each extension, and the program
         # among those Settings lets you choose a default from.
         try {
-            $before = if ($flag) { "$flag " } else { '' }
-            $open = '"' + $Exe + '" ' + $before + '"%1"'
+            $open = '"' + $Exe + '" "%1"'
             $icon = '"' + $Exe + '",0'
             $app = 'Software\Classes\Applications\tiny.exe'
             Set-UserValue $app 'FriendlyAppName' 'tiny'

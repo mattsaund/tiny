@@ -50,8 +50,7 @@ tiny ~/notes         # that folder, made if it is missing
 tiny ~/code/main.py  # that file
 ```
 
-`*cd ~/notes` opens another folder without leaving tiny. From the applications
-menu tiny opens with the browser hidden; `Ctrl+T` shows it.
+`*cd ~/notes` opens another folder without leaving tiny.
 
 ## Moving around
 

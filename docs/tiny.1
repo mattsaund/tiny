@@ -5,7 +5,7 @@
 .\"
 .\" A test in src/main.rs reads this against the keymap and the options, so a
 .\" key or an option that changes without changing here fails the build.
-.TH TINY 1 2026-11-09 "tiny 0.7.0" "User Commands"
+.TH TINY 1 2026-11-09 "tiny 0.7.1" "User Commands"
 .SH NAME
 tiny \- an IDE, text editor, knowledge manager and file browser in the \%terminal
 .SH SYNOPSIS
@@ -46,7 +46,8 @@ Windows and Launchpad on a Mac, where it opens in a terminal, and among the
 programs a file manager offers for text files.
 Choosing it there once, as the program for a kind of file, makes a
 double-click open those in tiny.
-Started from any of those, tiny opens with the browser hidden.
+From the menu, tiny opens on the browser, to go anywhere from;
+a file opened from a file manager fills the window, as on the command line.
 .PP
 Inside tiny,
 .B "*cd folder"
@@ -73,7 +74,6 @@ Shows the version.
 Starts with the browser hidden: the file across the whole window, or the
 folder.
 Ctrl+T shows the browser.
-It is how the applications menu starts tiny.
 .TP
 .B \-\-update
 Installs the newest release, if there is one.
