@@ -5,7 +5,7 @@
 
 pkgname=tiny-ide
 _name=tiny
-pkgver=0.6.9
+pkgver=0.7.0
 pkgrel=1
 pkgdesc="An IDE, text editor, knowledge manager and file browser in the terminal"
 arch=('x86_64' 'aarch64')
@@ -28,7 +28,7 @@ conflicts=('tiny-ide-bin' 'tiny')
 # flags on them do not link with Rust's.
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('132ab023fdbddc257941a275b147998ba81bde893ddad923ed5ad8f06ebe6056')
+sha256sums=('c30036d8a64f7e2c8747c8ebb67e424c9a78b871ee735980a8d5522e276a1e81')
 
 prepare() {
   cd "$_name-$pkgver"

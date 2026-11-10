@@ -1,6 +1,6 @@
 pkgbase = tiny-ide
 	pkgdesc = An IDE, text editor, knowledge manager and file browser in the terminal
-	pkgver = 0.6.9
+	pkgver = 0.7.0
 	pkgrel = 1
 	url = https://github.com/mattsaund/tiny
 	arch = x86_64
@@ -19,7 +19,7 @@ pkgbase = tiny-ide
 	conflicts = tiny-ide-bin
 	conflicts = tiny
 	options = !lto
-	source = tiny-ide-0.6.9.tar.gz::https://github.com/mattsaund/tiny/archive/refs/tags/v0.6.9.tar.gz
-	sha256sums = 132ab023fdbddc257941a275b147998ba81bde893ddad923ed5ad8f06ebe6056
+	source = tiny-ide-0.7.0.tar.gz::https://github.com/mattsaund/tiny/archive/refs/tags/v0.7.0.tar.gz
+	sha256sums = c30036d8a64f7e2c8747c8ebb67e424c9a78b871ee735980a8d5522e276a1e81
 
 pkgname = tiny-ide
