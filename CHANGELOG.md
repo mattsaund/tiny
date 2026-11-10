@@ -11,6 +11,9 @@ Each version is a `v` tag, with ready-made binaries on its
   still fills the window, the way `tiny <file>` always has. The
   launchers no longer pass `--hide-browser`, which stays for a terminal,
   and `tiny --update` puts them right.
+- **The gray offer in the command line shows from the first letter.** It
+  used to wait until what was typed could only be one word; now `*c`
+  offers `copy`, and Tab puts in just what was offered, as before.
 
 ## 0.7.0 - 2026-11-09
 

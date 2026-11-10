@@ -316,6 +316,49 @@ fn tab_stops_where_the_candidates_stop_agreeing() {
     assert_eq!(completed(&mut app, "copy rep"), "copy report-");
 }
 
+/// What the bar draws on the command line, from the sigil on.
+fn command_line(app: &mut App) -> String {
+    let rows = screen(app, 90, 24);
+    rows.into_iter()
+        .find(|r| r.starts_with(" * "))
+        .expect("the command line is drawn")
+}
+
+#[test]
+fn the_gray_offer_shows_from_the_first_letter_and_is_what_tab_puts_in() {
+    let (_td, mut app) = fixture();
+    command_bar(&mut app);
+    type_str(&mut app, "c");
+    assert!(
+        command_line(&mut app).starts_with(" * copy "),
+        "{}",
+        command_line(&mut app)
+    );
+    app.on_key(k(KeyCode::Esc));
+    assert_eq!(
+        completed(&mut app, "c"),
+        "copy",
+        "Tab puts in what was offered"
+    );
+    // And a name after a verb, from its first letter too.
+    command_bar(&mut app);
+    type_str(&mut app, "goto file R");
+    assert!(
+        command_line(&mut app).starts_with(" * goto file README.md"),
+        "{}",
+        command_line(&mut app)
+    );
+    app.on_key(k(KeyCode::Esc));
+    // Nothing typed of the word yet: nothing offered, as Tab offers nothing.
+    command_bar(&mut app);
+    type_str(&mut app, "copy ");
+    assert!(
+        command_line(&mut app).starts_with(" * copy  "),
+        "{}",
+        command_line(&mut app)
+    );
+}
+
 #[test]
 fn tab_again_goes_round_what_the_candidates_could_be() {
     let (td, mut app) = fixture();

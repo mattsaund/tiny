@@ -207,6 +207,11 @@ fn common_rest(typed: &str, matches: &[String]) -> Option<String> {
 /// gray before the key is pressed: a suggestion you can see is worth more than
 /// one you have to guess at, and it costs one `read_dir`.
 ///
+/// What they all share, when that is more than was typed; and where it is
+/// not, the first of them, which is what Tab puts in when they share no
+/// more. So the offer is there from the first letter (`c` offers `copy`),
+/// rather than only once enough is typed to leave one word it could be.
+///
 /// Returns only the *remainder*: every candidate is filtered by what has been
 /// typed already, so the completion always begins with it.
 pub fn completion_for(
@@ -218,7 +223,16 @@ pub fn completion_for(
     branches: &[String],
 ) -> Option<String> {
     let (typed, matches) = completion_options(b, root, show_hidden, added, known, branches)?;
-    common_rest(&typed, &matches)
+    common_rest(&typed, &matches).or_else(|| {
+        // Tab goes round them only once something of the word is typed.
+        if typed.is_empty() {
+            return None;
+        }
+        matches
+            .iter()
+            .map(|m| m[typed.len()..].to_string())
+            .find(|rest| !rest.is_empty())
+    })
 }
 
 /// The word being typed, and every way of finishing it, each once.
