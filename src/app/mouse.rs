@@ -12,6 +12,8 @@
 //! goes for the git window's rows and buttons and the map's boxes. A double
 //! click is two clicks, so it opens.
 //!
+//! A scrollbar is taken hold of and moved, see [`super::scrollbar`].
+//!
 //! A drag on a line where two parts meet moves it: the browser's edge, the
 //! line between two panes or above the terminal, and in the git window the
 //! edge of the list and the line between a diff's halves. The parts on
@@ -227,6 +229,7 @@ impl App {
         if !area.contains(at)
             || self.drag.is_some()
             || self.resizing.is_some()
+            || self.scrolling.is_some()
             || self.window != Window::Main
         {
             return false;
@@ -265,6 +268,7 @@ impl App {
         let count = self.count_press(at);
         self.drag = None;
         self.resizing = None;
+        self.scrolling = None;
         // What is over the window gets the click first.
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => {}
@@ -299,6 +303,11 @@ impl App {
                 self.mode = other;
                 return;
             }
+        }
+        // A scrollbar, before the line between two parts that it is drawn
+        // on: that line can still be taken by the border beside it.
+        if self.press_scrollbar(at) {
+            return;
         }
         // A line between two parts, before either part: its borders are
         // where it is taken hold of.
@@ -421,6 +430,9 @@ impl App {
     /// The left button moving while down: the divider it took hold of, or
     /// the selection in the pane the press was in, follows it.
     fn drag_to(&mut self, at: Position) -> bool {
+        if self.scrolling.is_some() {
+            return self.drag_scrollbar(at);
+        }
         if let Some((d, grab)) = self.resizing.take() {
             let from = i32::from(if d.across { at.x } else { at.y });
             let to = (from + grab).clamp(i32::from(d.range.0), i32::from(d.range.1));
@@ -490,6 +502,7 @@ impl App {
     /// nowhere selects nothing.
     fn release(&mut self) {
         self.resizing = None;
+        self.scrolling = None;
         if self.drag.take().is_some()
             && let Some(ed) = self.active_buffer_mut()
             && ed.anchor == Some(ed.pos())

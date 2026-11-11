@@ -19,9 +19,11 @@ use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::editor::draw_editor;
-use super::parts::{FORMAT_LIMIT, Outline, label, mark_query, pane};
+use super::parts::{FORMAT_LIMIT, Outline, label, mark_query, pane, scrollbar};
 
-use crate::app::{App, Focus, LinkHit, Mode, PaneHit, Preview, TextHits, TextKind, link_area};
+use crate::app::{
+    App, Focus, LinkHit, Mode, PaneHit, Preview, Scroll, Scrolls, TextHits, TextKind, link_area,
+};
 use crate::config::keys::Action;
 use crate::text::markdown;
 use crate::text::search::Matcher;
@@ -42,7 +44,7 @@ pub(super) fn draw_preview(f: &mut Frame, app: &mut App, area: Rect) {
             && matches!(app.mode, Mode::Normal | Mode::Help(_)),
         app.entered,
     );
-    let text = draw_pane(f, app, area, outline);
+    let text = draw_pane(f, app, area, outline, None);
     app.last_panes.push(PaneHit {
         pinned: None,
         area,
@@ -97,7 +99,7 @@ pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, id: usize, area: Rect, a
     } else {
         Outline::Plain
     };
-    let text = draw_pane(f, app, area, outline);
+    let text = draw_pane(f, app, area, outline, Some(id));
     app.last_panes.push(PaneHit {
         pinned: Some(id),
         area,
@@ -122,6 +124,17 @@ pub(super) fn draw_pinned(f: &mut Frame, app: &mut App, id: usize, area: Rect, a
     app.split = Some(split);
 }
 
+/// Where a pane is and how it is drawn: all of it, what is inside its
+/// border, its outline, and which pane it is, `None` for the one with the
+/// keyboard and otherwise one set aside.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Spot {
+    pub area: Rect,
+    pub inner: Rect,
+    pub outline: Outline,
+    pub pinned: Option<usize>,
+}
+
 /// One pane, with or without the keyboard. Returns where its lines were
 /// drawn, when it showed a file's lines, for the mouse.
 ///
@@ -132,6 +145,7 @@ pub(super) fn draw_pane(
     app: &mut App,
     area: Rect,
     outline: Outline,
+    pinned: Option<usize>,
 ) -> Option<TextHits> {
     let pal = app.palette;
     let focused = outline == Outline::Entered;
@@ -168,6 +182,12 @@ pub(super) fn draw_pane(
     // what makes stepping through search results show where each hit sits in
     // the file, and not only which file it is in.
     let query = app.live_query().and_then(Matcher::new);
+    let spot = Spot {
+        area,
+        inner,
+        outline,
+        pinned,
+    };
 
     match app.preview.clone() {
         Preview::Buffer { path, kind } => {
@@ -175,9 +195,9 @@ pub(super) fn draw_pane(
             // a picture of the file then, with no cursor in it. The moment it
             // is focused it becomes the editor, markdown formatting and all.
             if kind.reads_first() && !focused {
-                draw_reading(f, app, area, inner, &path, kind, query.as_ref());
+                draw_reading(f, app, spot, &path, kind, query.as_ref());
             } else {
-                return draw_editor(f, app, inner, &path, kind, focused, query.as_ref());
+                return draw_editor(f, app, spot, &path, kind, query.as_ref());
             }
         }
         Preview::Media {
@@ -340,12 +360,12 @@ fn opener_name(kind: crate::files::media::Kind) -> &'static str {
 fn draw_reading(
     f: &mut Frame,
     app: &mut App,
-    area: Rect,
-    inner: Rect,
+    spot: Spot,
     path: &std::path::Path,
     kind: TextKind,
     query: Option<&Matcher>,
 ) {
+    let Spot { area, inner, .. } = spot;
     let pal = app.palette;
     let tab_width = app.config.tab_width;
     let Some(ed) = app.buffers.get(path) else {
@@ -438,6 +458,20 @@ fn draw_reading(
         .collect();
     f.render_widget(Paragraph::new(view).style(pal.text), inner);
     app.last_links.extend(links);
+    let scroll = Scroll {
+        total: app.preview_len,
+        shown: height,
+        at: app.preview_scroll,
+    };
+    scrollbar(
+        f,
+        &mut app.last_scrollbars,
+        (area, inner),
+        spot.outline.style(&pal),
+        pal.glyphs,
+        scroll,
+        || Scrolls::Page(spot.pinned),
+    );
 
     // Scroll position, on the bottom border so it never covers a line of text.
     // The guard decides whether to draw at all, so `checked_div` would not

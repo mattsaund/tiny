@@ -26,8 +26,8 @@ use unicode_width::UnicodeWidthStr;
 /// change how the document looks rather than only where the cursor is.
 pub(super) const FORMAT_LIMIT: usize = 4000;
 
-use crate::app::App;
-use crate::config::Palette;
+use crate::app::{App, Scroll, ScrollHit, Scrolls};
+use crate::config::{Glyphs, Palette};
 use crate::text::search::Matcher;
 
 /// How a part of the window is outlined: not picked, picked by the arrows
@@ -105,6 +105,50 @@ pub(super) fn pane<'a>(
     let inner = block.inner(area);
     f.render_widget(block, area);
     inner
+}
+
+// ---- scrollbars -----------------------------------------------------------
+
+/// A scrollbar down the right side of a pane, only while what it shows runs
+/// past what fits. Drawn over the pane's right border, which is its track,
+/// so a pane that fits looks exactly as it did. Without a border, the thumb
+/// alone, over the last column. In the style of the pane's outline, so it is
+/// as quiet or as bright as the pane is.
+///
+/// `area` is the whole pane and `inner` what is inside its border. Where it
+/// was drawn is written down for the mouse, with what it scrolls, which is
+/// only worked out when there is a bar to take hold of.
+pub(super) fn scrollbar(
+    f: &mut Frame,
+    hits: &mut Vec<ScrollHit>,
+    (area, inner): (Rect, Rect),
+    style: Style,
+    glyphs: &Glyphs,
+    scroll: Scroll,
+    scrolls: impl FnOnce() -> Scrolls,
+) {
+    let Some((start, len)) = scroll.thumb(inner.height) else {
+        return;
+    };
+    let x = if inner.right() < area.right() {
+        area.right() - 1
+    } else {
+        inner.right().saturating_sub(1)
+    };
+    let buf = f.buffer_mut();
+    for row in start..start + len {
+        let at = (x, inner.y + row);
+        if buf.area.contains(at.into()) {
+            buf[at].set_symbol(glyphs.scroll_thumb).set_style(style);
+        }
+    }
+    hits.push(ScrollHit {
+        scrolls: scrolls(),
+        x,
+        top: inner.y,
+        track: inner.height,
+        scroll,
+    });
 }
 
 // ---- the selected row -----------------------------------------------------

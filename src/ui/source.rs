@@ -24,9 +24,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use super::parts::{Outline, highlight_row};
+use super::parts::{Outline, highlight_row, scrollbar};
 
-use crate::app::{App, Divider, GitButton, GitFocus, GitHit, GitRow, Moves};
+use crate::app::{App, Divider, GitButton, GitFocus, GitHit, GitRow, Moves, Scroll, Scrolls};
 use crate::config::Palette;
 use crate::config::keys::Action;
 use crate::git::{Code, DiffLine, LineKind};
@@ -261,6 +261,20 @@ fn draw_branches(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     f.render_widget(Paragraph::new(lines), inner);
     app.git.branch_scroll = scroll;
     app.git.branch_area = Some(inner);
+    let scroll = Scroll {
+        total,
+        shown: height,
+        at: scroll,
+    };
+    scrollbar(
+        f,
+        &mut app.last_scrollbars,
+        (area, inner),
+        outline.style(pal),
+        pal.glyphs,
+        scroll,
+        || Scrolls::GitBranches,
+    );
 }
 
 /// The left column: buttons, then what has changed, in two sections.
@@ -370,6 +384,10 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     let scroll = scroll.min(lines.len().saturating_sub(height));
     app.git.list_scroll = scroll;
     app.git.list_cols = Some((area.x, area.x + area.width));
+    // Which row of the list each line is of, for the scrollbar to bring the
+    // cursor along by.
+    let row_of: Vec<usize> = line_rows.iter().map(|(row, _)| *row).collect();
+    let total = lines.len();
     app.git.list_hits = line_rows
         .into_iter()
         .enumerate()
@@ -398,6 +416,20 @@ fn draw_changes(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
     f.render_widget(block, area);
     let shown: Vec<Line> = lines.into_iter().skip(scroll).take(height).collect();
     f.render_widget(Paragraph::new(shown), inner);
+    let scroll = Scroll {
+        total,
+        shown: height,
+        at: scroll,
+    };
+    scrollbar(
+        f,
+        &mut app.last_scrollbars,
+        (area, inner),
+        outline.style(pal),
+        pal.glyphs,
+        scroll,
+        || Scrolls::GitList(row_of),
+    );
 }
 
 /// The columns each button on a line covers, from where to where, and which
@@ -579,6 +611,24 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
             })
             .collect();
         f.render_widget(Paragraph::new(rows), inner);
+        // One bar for the two halves, which scroll together: on the right
+        // of the second.
+        if i == 1 {
+            let scroll = Scroll {
+                total: lines.len(),
+                shown: inner.height as usize,
+                at: top,
+            };
+            scrollbar(
+                f,
+                &mut app.last_scrollbars,
+                (*half, inner),
+                border,
+                pal.glyphs,
+                scroll,
+                || Scrolls::GitDiff,
+            );
+        }
     }
     // Written back for the same reason every other height is: paging cannot
     // know how tall the columns are until they have been drawn.
@@ -760,6 +810,20 @@ fn draw_message(f: &mut Frame, app: &mut App, area: Rect, pal: &Palette) {
             .collect()
     };
     f.render_widget(Paragraph::new(lines), inner);
+    let scroll = Scroll {
+        total: editor.line_count(),
+        shown: height,
+        at: scroll_y,
+    };
+    scrollbar(
+        f,
+        &mut app.last_scrollbars,
+        (area, inner),
+        outline.style(pal),
+        pal.glyphs,
+        scroll,
+        || Scrolls::GitMessage,
+    );
 
     // The real cursor, so typing looks like typing: counted in columns, the
     // way the text was drawn, so a tab or a wide character before it does

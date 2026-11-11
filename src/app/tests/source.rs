@@ -7,6 +7,7 @@
 //! before-and-after columns show the file as it was and as it is.
 
 use super::*;
+use crate::app::{ScrollHit, Scrolls};
 use crate::git::Mark;
 use crate::text::linediff::{Change, LineMark};
 
@@ -224,6 +225,63 @@ fn a_formatted_markdown_block_is_marked_on_every_row_it_takes() {
         lane_before(&mut app, "goodbye gadget"),
         (g.line_changed.to_string(), Some(Color::Blue))
     );
+}
+
+#[test]
+fn the_git_windows_list_and_diff_have_bars_the_mouse_moves() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (td, mut app) = repo();
+    let at = td.path();
+    for i in 0..40 {
+        fs::write(at.join(format!("new{i:02}.txt")), "x\n").unwrap();
+    }
+    let long: String = (1..=200).map(|i| format!("line {i}\n")).collect();
+    fs::write(at.join("README.md"), long).unwrap();
+    command(&mut app, "reload");
+    source(&mut app);
+    let bars = |app: &mut App| {
+        let mut t = Terminal::new(TestBackend::new(90, 20)).unwrap();
+        t.draw(|f| crate::ui::draw(f, app)).unwrap();
+        app.last_scrollbars.clone()
+    };
+    let press = |app: &mut App, (x, y): (u16, u16)| {
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            app.on_mouse(MouseEvent {
+                kind,
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+    };
+    let find = |hits: &[ScrollHit], which: fn(&Scrolls) -> bool| {
+        hits.iter().find(|h| which(&h.scrolls)).cloned().unwrap()
+    };
+
+    // The list runs past the window: its end, and the cursor brought along.
+    let list = find(&bars(&mut app), |s| matches!(s, Scrolls::GitList(_)));
+    press(&mut app, (list.x, list.top + list.track - 1));
+    assert!(app.git.list_scroll > 0, "the list moved");
+    let shown = bars(&mut app);
+    assert!(
+        app.git.list_hits.iter().any(|h| h.row == app.git.selected),
+        "the cursor's row is on screen"
+    );
+
+    // The diff of the long file, down to its end.
+    app.git.selected = 0;
+    while app.git.current().map(|(c, _)| c.path.as_str()) != Some("README.md") {
+        app.git.selected += 1;
+        assert!(app.git.selected < app.git.rows.len(), "README.md is listed");
+    }
+    app.sync_diff();
+    let diff = find(&bars(&mut app), |s| *s == Scrolls::GitDiff);
+    press(&mut app, (diff.x, diff.top + diff.track - 1));
+    assert_eq!(app.git.diff_scroll, diff.scroll.total - diff.scroll.shown);
+    assert!(shown.iter().all(|h| h.x < 90));
 }
 
 /// Switch to the source window the way `Ctrl+G` does.

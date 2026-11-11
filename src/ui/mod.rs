@@ -128,6 +128,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.git.diff_area = None;
     app.last_dividers.clear();
     app.last_links.clear();
+    app.last_scrollbars.clear();
     // Set again by any pane this frame draws from a guess.
     app.colors_behind = false;
     let [bar_row, main, status_row] = Layout::vertical([

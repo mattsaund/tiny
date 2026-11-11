@@ -155,6 +155,26 @@ impl Editor {
         self.goal_col = self.cursor_col;
     }
 
+    /// Put the view, `rows` lines tall, with `top` as its first line, the way
+    /// a scrollbar does. The cursor stays where it is if that is in view,
+    /// and otherwise comes to the nearer edge of it at the column it was
+    /// headed for, as an arrow key would bring it, letting go of the
+    /// selection as a move does.
+    pub fn scroll_to(&mut self, top: usize, rows: usize) {
+        let last = self.lines.len().saturating_sub(1);
+        self.scroll_y = top.min(last);
+        self.scroll_rows = 0;
+        let bottom = (self.scroll_y + rows.max(1) - 1).min(last);
+        let line = self.cursor_line.clamp(self.scroll_y, bottom);
+        if line == self.cursor_line {
+            return;
+        }
+        self.break_undo_group();
+        self.collapse();
+        self.cursor_line = line;
+        self.cursor_col = self.goal_col.min(self.line_chars(line));
+    }
+
     // ---- one cursor's steps -----------------------------------------------
 
     fn step_left(&mut self) {

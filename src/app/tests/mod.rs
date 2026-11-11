@@ -37,6 +37,7 @@ mod mouse;
 mod navigation;
 mod plugins;
 mod preview;
+mod scrollbars;
 mod scrolling;
 mod search;
 mod sentences;

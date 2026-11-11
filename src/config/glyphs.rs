@@ -148,6 +148,9 @@ pub struct Glyphs {
     pub line_changed: &'static str,
     pub line_deleted_below: &'static str,
     pub line_deleted_above: &'static str,
+    /// The part of a scrollbar that says where the pane is, drawn over its
+    /// right border. The border itself is the rest of the bar.
+    pub scroll_thumb: &'static str,
 }
 
 pub static UNICODE: Glyphs = Glyphs {
@@ -173,6 +176,7 @@ pub static UNICODE: Glyphs = Glyphs {
     line_changed: "┃",
     line_deleted_below: "▁",
     line_deleted_above: "▔",
+    scroll_thumb: "█",
 };
 
 /// What a console draws, from one font: only characters in both code page
@@ -205,6 +209,7 @@ pub static CONSOLE: Glyphs = Glyphs {
     line_changed: "▌",
     line_deleted_below: "▄",
     line_deleted_above: "▀",
+    scroll_thumb: "█",
 };
 
 pub static ASCII: Glyphs = Glyphs {
@@ -239,12 +244,13 @@ pub static ASCII: Glyphs = Glyphs {
     line_changed: "|",
     line_deleted_below: "_",
     line_deleted_above: "^",
+    scroll_thumb: "#",
 };
 
 /// The characters outside ASCII that are in both code page 437 and WGL4,
 /// of the ones the console set might want: what every console font has.
 #[cfg(test)]
-pub(crate) const CONSOLE_CHARACTERS: &str = "─│┌┐└┘├┤┬┴┼═║╔╗╚╝►▼•○∙→▌▄▀";
+pub(crate) const CONSOLE_CHARACTERS: &str = "─│┌┐└┘├┤┬┴┼═║╔╗╚╝►▼•○∙→▌▄▀█";
 
 #[cfg(test)]
 mod tests {
@@ -276,6 +282,7 @@ mod tests {
             g.line_changed,
             g.line_deleted_below,
             g.line_deleted_above,
+            g.scroll_thumb,
         ]
         .concat();
         out.extend(g.bullets.iter().copied());

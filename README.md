@@ -126,6 +126,7 @@ addresses open in your browser, links to files open in tiny.
 | `*` | a command |
 | click, drag | place the cursor, select |
 | `Ctrl` and a click | follow a link |
+| click or drag a scrollbar | scroll there |
 | `Shift` and a move, `Ctrl+A` | select, select all |
 | `Tab` | finish a word, or a command |
 | `Ctrl+C`, `Ctrl+X`, `Ctrl+V` | copy, cut, paste |

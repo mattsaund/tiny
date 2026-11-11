@@ -41,9 +41,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::parts::{FORMAT_LIMIT, digits, mark_query};
+use super::parts::{FORMAT_LIMIT, Outline, digits, mark_query, scrollbar};
+use super::preview::Spot;
 
-use crate::app::{App, LinkHit, TextHits, TextKind, link_area};
+use crate::app::{App, LinkHit, Scroll, Scrolls, TextHits, TextKind, link_area};
 use crate::config::{Colors, Palette};
 use crate::text::editor::Editor;
 use crate::text::linediff::{Change, LineMark};
@@ -67,12 +68,13 @@ use crate::text::tabs;
 pub(super) fn draw_editor(
     f: &mut Frame,
     app: &mut App,
-    inner: Rect,
+    spot: Spot,
     path: &std::path::Path,
     kind: TextKind,
-    focused: bool,
     query: Option<&Matcher>,
 ) -> Option<TextHits> {
+    let Spot { area, inner, .. } = spot;
+    let focused = spot.outline == Outline::Entered;
     let pal = app.palette;
     if !app.buffers.contains_key(path) {
         return None;
@@ -277,6 +279,36 @@ pub(super) fn draw_editor(
     }
     f.render_widget(Paragraph::new(lines).style(pal.text), inner);
     app.last_links.extend(links);
+    // Formatted, the rows are the note's as drawn, every one of them; as it
+    // is written, a row is a line and only the screenful was made.
+    let scroll = if live {
+        Scroll {
+            total: rows.len(),
+            shown: height,
+            at: top,
+        }
+    } else {
+        Scroll {
+            total: ed.line_count(),
+            shown: height,
+            at: scroll_y,
+        }
+    };
+    scrollbar(
+        f,
+        &mut app.last_scrollbars,
+        (area, inner),
+        spot.outline.style(&pal),
+        pal.glyphs,
+        scroll,
+        || {
+            if live {
+                Scrolls::Blocks(rows.iter().map(|row| row.anchor().0).collect())
+            } else {
+                Scrolls::Lines(spot.pinned)
+            }
+        },
+    );
     let hits = TextHits {
         area: Rect {
             x: inner.x + gutter as u16,

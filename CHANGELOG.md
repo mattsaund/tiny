@@ -3,6 +3,15 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.7.2 - 2026-11-11
+
+- **Scrollbars.** The browser, a file and the git window's list, branches,
+  diff and commit message show one on their right edge, but only while
+  there is more than fits. It sits on the border, so a part that fits looks
+  as it always did. A click on a scrollbar scrolls there and the thumb can
+  be dragged. Where the view follows a cursor, as in the browser or a file,
+  the cursor comes along into view.
+
 ## 0.7.1 - 2026-11-09
 
 - **From the applications menu, tiny opens on the browser again**, in your

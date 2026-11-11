@@ -14,9 +14,11 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use super::parts::{Outline, highlight_row, highlight_row_in, keep_visible, mark_query, pane};
+use super::parts::{
+    Outline, highlight_row, highlight_row_in, keep_visible, mark_query, pane, scrollbar,
+};
 
-use crate::app::{App, Bar, Focus, Mode};
+use crate::app::{App, Bar, Focus, Mode, Scroll, Scrolls};
 use crate::git::Mark;
 use crate::text::search::{self, HitKind, Matcher};
 use crate::text::tabs;
@@ -114,6 +116,20 @@ pub(super) fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(spans));
     }
     f.render_widget(Paragraph::new(lines), inner);
+    let scroll = Scroll {
+        total: app.rows.len(),
+        shown: height,
+        at: app.tree_scroll,
+    };
+    scrollbar(
+        f,
+        &mut app.last_scrollbars,
+        (area, inner),
+        outline.style(&pal),
+        pal.glyphs,
+        scroll,
+        || Scrolls::Browser,
+    );
 }
 
 /// The most of the panes a dropped-down result list is allowed to take.

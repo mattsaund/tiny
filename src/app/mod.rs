@@ -33,6 +33,7 @@
 //! | [`split`] | the panes, side by side and stacked |
 //! | [`term`] | the terminal under the panes |
 //! | [`mouse`] | the wheel, a click and a drag |
+//! | [`scrollbar`] | the scrollbars, and moving them with the mouse |
 //! | [`navigate`] | picking a window with the arrows, and going in |
 //! | [`cd`] | another folder as the project, from `*cd` |
 //! | [`source`] | the git window: what has changed, and what to do about it |
@@ -149,6 +150,7 @@ mod plugins;
 mod preview;
 mod prompt;
 mod publish;
+mod scrollbar;
 mod sentence;
 mod settings;
 mod source;
@@ -164,6 +166,7 @@ pub use self::mode::{
 };
 pub use self::mouse::{Divider, GitHit, LinkHit, Moves, PaneHit, TextHits, link_area};
 pub use self::preview::{Preview, TextKind};
+pub use self::scrollbar::{Scroll, ScrollHit, Scrolls};
 pub use self::source::{Button as GitButton, GitFocus, GitPane, Row as GitRow};
 pub use self::split::{MIN_PANE_HEIGHT, MIN_PANE_WIDTH, Split};
 use self::watch::Watch;
@@ -386,6 +389,11 @@ pub struct App {
     pub last_dividers: Vec<Divider>,
     /// The links the last frame drew, which a click follows.
     pub last_links: Vec<LinkHit>,
+    /// The scrollbars the last frame drew, which a press takes hold of, and
+    /// the one held while the button is down, with where on its thumb it
+    /// was taken, see [`scrollbar`].
+    pub last_scrollbars: Vec<ScrollHit>,
+    scrolling: Option<(ScrollHit, u16)>,
     /// A drag going on in a file, and the last press, for double clicks.
     drag: Option<mouse::Drag>,
     press: Option<mouse::Press>,
@@ -520,6 +528,8 @@ impl App {
             last_map_boxes: Vec::new(),
             last_dividers: Vec::new(),
             last_links: Vec::new(),
+            last_scrollbars: Vec::new(),
+            scrolling: None,
             drag: None,
             press: None,
             resizing: None,
