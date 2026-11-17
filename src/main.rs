@@ -371,6 +371,12 @@ fn cursor_style(config: &Config) -> SetCursorStyle {
 fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
     let mut looked = std::time::Instant::now();
     app.input_waiting = || event::poll(Duration::ZERO).unwrap_or(false);
+    // crossterm starts hearing that the window changed size the first time
+    // it is asked for an event, so ask before the first frame. From then on
+    // a change is an event, and one before it the first draw measures. Asked
+    // only after drawing, a change in between was lost, and the frame stayed
+    // the old size until something else happened.
+    let _ = event::poll(Duration::ZERO);
     // Whether the next frame is drawn only for colors still to read.
     let mut reading = false;
     // What the cursor was last set to, so it is only said again when a

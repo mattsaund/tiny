@@ -12,6 +12,9 @@ Each version is a `v` tag, with ready-made binaries on its
   along with the old copy an update leaves beside it. A tiny installed with
   cargo is dropped from cargo's records too. Linux and macOS were not
   affected.
+- **A window resized as tiny starts.** A change of size in the moment tiny
+  drew its first frame went unnoticed on Linux and macOS, and the frame
+  stayed the old size until a key was pressed.
 
 ## 0.7.2 - 2026-11-11
 
