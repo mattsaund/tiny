@@ -185,8 +185,9 @@ jobs:
       # its own icon. Then all of that gone after an uninstall, tiny.exe with
       # it: Windows will not delete a program while it runs, so the tiny that
       # removes itself moves aside and is deleted once it has closed, with
-      # any copy an update set aside. Then the same for a tiny cargo has a
-      # record of, which cargo forgets.
+      # any copy an update set aside. A tiny open in another window holds it
+      # until that closes too. Then the same for a tiny cargo has a record
+      # of, which cargo forgets.
       - name: Check the Start menu and Open with, and that an uninstall takes them
         shell: powershell
         env:
@@ -227,6 +228,11 @@ jobs:
             }
             throw "the tiny.exe set aside in $Folder is still there"
           }
+          # Another tiny open meanwhile, as when the uninstall is run in the
+          # terminal inside one.
+          $open = Start-Process -FilePath $exe -WindowStyle Hidden -PassThru
+          Start-Sleep -Seconds 3
+          if ($open.HasExited) { throw "the other tiny did not stay open ($($open.ExitCode))" }
           # The answer from cmd, which sends it as the bytes typed.
           cmd /c "echo y| `"$exe`" --uninstall"
           if ($LASTEXITCODE -ne 0) { throw "the uninstall failed ($LASTEXITCODE)" }
@@ -235,6 +241,12 @@ jobs:
           if (Test-Path 'HKCU:\Software\Classes\Applications\tiny.exe') { throw 'Open with still has tiny' }
           $with = Get-ItemProperty 'HKCU:\Software\Classes\.md\OpenWithProgids' -ErrorAction SilentlyContinue
           if ($with -and $null -ne $with.'tiny.text') { throw '.md files are still offered tiny' }
+          # Held while the other tiny runs, past the ten seconds of trying.
+          Start-Sleep -Seconds 20
+          if (-not (Get-ChildItem -Path $env:TINY_PREFIX -Filter 'tiny.exe.old-*')) {
+            throw 'the copy set aside went while a tiny still ran it'
+          }
+          Stop-Process -Id $open.Id
           Wait-SetAside $env:TINY_PREFIX
           cmd /c "echo y| `"$cargo\bin\tiny.exe`" --uninstall"
           if ($LASTEXITCODE -ne 0) { throw "the uninstall of cargo's tiny failed ($LASTEXITCODE)" }

@@ -770,20 +770,27 @@ fn deleting(
 /// The script [`deleting`] runs. For ten seconds it tries every half second,
 /// in which time the tiny that set itself aside closes, and a virus scanner
 /// reading it lets go. Anything still held after that is running in another
-/// window, so the script waits for every tiny to close and tries once more.
+/// window, so the script waits for every tiny to close, then tries for ten
+/// seconds more, as Windows can hold on to a program's file for a moment
+/// after the program has ended.
 const DELETE_ONCE_CLOSED: &str = r#"$folder = $env:TINY_FOLDER
 $pattern = $env:TINY_SET_ASIDE
+# Whether every copy has gone, trying every half second for ten seconds.
 function Remove-SetAside {
-    Get-ChildItem -LiteralPath $folder -Filter $pattern -File -ErrorAction SilentlyContinue |
-        Remove-Item -Force -ErrorAction SilentlyContinue
-    return -not (Get-ChildItem -LiteralPath $folder -Filter $pattern -File -ErrorAction SilentlyContinue)
+    foreach ($i in 1..20) {
+        Get-ChildItem -LiteralPath $folder -Filter $pattern -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        if (-not (Get-ChildItem -LiteralPath $folder -Filter $pattern -File -ErrorAction SilentlyContinue)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
 }
-foreach ($i in 1..20) {
-    if (Remove-SetAside) { exit }
-    Start-Sleep -Milliseconds 500
+if (-not (Remove-SetAside)) {
+    Wait-Process -Name $env:TINY_PROGRAM -ErrorAction SilentlyContinue
+    Remove-SetAside | Out-Null
 }
-Wait-Process -Name $env:TINY_PROGRAM -ErrorAction SilentlyContinue
-Remove-SetAside | Out-Null
 "#;
 
 /// `tiny --uninstall`: show what will go, ask, then remove it.
