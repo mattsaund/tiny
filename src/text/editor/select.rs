@@ -57,9 +57,9 @@ impl Editor {
             return chars(from.line, from.col, Some(to.col));
         }
         let mut out = chars(from.line, from.col, None);
-        for line in from.line + 1..to.line {
+        for line in self.lines.iter().take(to.line).skip(from.line + 1) {
             out.push('\n');
-            out.push_str(&self.lines[line]);
+            out.push_str(line);
         }
         out.push('\n');
         out.push_str(&chars(to.line, 0, Some(to.col)));

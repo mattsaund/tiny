@@ -182,9 +182,11 @@ jobs:
           & "$env:TINY_PREFIX\tiny.exe" --version
           if ($LASTEXITCODE -ne 0) { exit 1 }
       # tiny in the Start menu, offered by "Open with" for text, and wearing
-      # its own icon; then all of that gone after an uninstall. Windows keeps
-      # a program that is running, so the uninstall says it could not remove
-      # tiny.exe itself and fails: what is checked is that the rest went.
+      # its own icon. Then all of that gone after an uninstall, tiny.exe with
+      # it: Windows will not delete a program while it runs, so the tiny that
+      # removes itself moves aside and is deleted once it has closed, with
+      # any copy an update set aside. Then the same for a tiny cargo has a
+      # record of, which cargo forgets.
       - name: Check the Start menu and Open with, and that an uninstall takes them
         shell: powershell
         env:
@@ -206,12 +208,42 @@ jobs:
           $pixel = [System.Drawing.Icon]::ExtractAssociatedIcon($exe).ToBitmap().GetPixel(8, 22)
           Write-Host "tiny.exe's icon at (8, 22): $pixel"
           if (-not ($pixel.G -gt 100 -and $pixel.R -lt 100 -and $pixel.B -lt 110)) { throw 'tiny.exe does not wear its icon' }
+          # A copy of it with a record in cargo's bookkeeping, as `cargo
+          # install` leaves one.
+          $cargo = Join-Path $env:RUNNER_TEMP 'cargoroot'
+          New-Item -ItemType Directory -Force -Path "$cargo\bin" | Out-Null
+          Copy-Item $exe "$cargo\bin\tiny.exe"
+          Set-Content -Path "$cargo\.crates.toml" -Value @(
+            '[v1]',
+            '"tiny 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)" = ["tiny.exe"]'
+          )
+          # A copy an update set aside, as it does with the tiny updating.
+          Copy-Item $exe (Join-Path $env:TINY_PREFIX 'tiny.exe.old-0badc0de')
+          # Every tiny.exe set aside, gone within twenty seconds.
+          function Wait-SetAside([string]$Folder) {
+            foreach ($i in 1..40) {
+              if (-not (Get-ChildItem -Path $Folder -Filter 'tiny.exe.old-*')) { return }
+              Start-Sleep -Milliseconds 500
+            }
+            throw "the tiny.exe set aside in $Folder is still there"
+          }
           # The answer from cmd, which sends it as the bytes typed.
           cmd /c "echo y| `"$exe`" --uninstall"
+          if ($LASTEXITCODE -ne 0) { throw "the uninstall failed ($LASTEXITCODE)" }
+          if (Test-Path $exe) { throw 'tiny.exe is still in its place' }
           if (Test-Path $link) { throw 'the shortcut is still there' }
           if (Test-Path 'HKCU:\Software\Classes\Applications\tiny.exe') { throw 'Open with still has tiny' }
           $with = Get-ItemProperty 'HKCU:\Software\Classes\.md\OpenWithProgids' -ErrorAction SilentlyContinue
           if ($with -and $null -ne $with.'tiny.text') { throw '.md files are still offered tiny' }
+          Wait-SetAside $env:TINY_PREFIX
+          cmd /c "echo y| `"$cargo\bin\tiny.exe`" --uninstall"
+          if ($LASTEXITCODE -ne 0) { throw "the uninstall of cargo's tiny failed ($LASTEXITCODE)" }
+          if (Test-Path "$cargo\bin\tiny.exe") { throw "cargo's tiny.exe is still in its place" }
+          if (Select-String -Path "$cargo\.crates.toml" -Pattern 'tiny ' -SimpleMatch -Quiet) {
+            throw 'cargo still has a record of tiny'
+          }
+          Wait-SetAside "$cargo\bin"
+          Write-Host 'both are gone, each once it had closed'
           exit 0
 
   install-macos:

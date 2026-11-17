@@ -244,26 +244,27 @@ if ($registered) { $registered.DeleteValue('tiny', $false); $registered.Close() 
 $software.Close()
 ";
 
-/// Run [`UNREGISTER`]. Handed to PowerShell encoded, as its documentation
-/// says to for a script with quotes in it, so nothing on the way can read
-/// them as anything else.
+/// Run [`UNREGISTER`].
 fn unregister() -> bool {
-    let utf16: Vec<u8> = UNREGISTER
-        .encode_utf16()
-        .flat_map(u16::to_le_bytes)
-        .collect();
-    Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-EncodedCommand",
-            &base64(&utf16),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    powershell(UNREGISTER).status().is_ok_and(|s| s.success())
+}
+
+/// Windows PowerShell, to run `script` and say nothing. Handed the script
+/// encoded, as its documentation says to for one with quotes in it, so
+/// nothing on the way can read them as anything else.
+pub(crate) fn powershell(script: &str) -> Command {
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let mut cmd = Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        &base64(&utf16),
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+    cmd
 }
 
 /// Run a program that tidies up after something removed, if it is here.
@@ -277,7 +278,7 @@ fn quietly(program: &str, args: &[&std::ffi::OsStr]) {
         .status();
 }
 
-/// Standard base64, for [`unregister`].
+/// Standard base64, for [`powershell`].
 fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);

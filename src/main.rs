@@ -503,6 +503,11 @@ struct Removal {
     /// The manual page the installer put beside the binary, in
     /// `share/man/man1` next to its `bin`.
     man: Option<PathBuf>,
+    /// Copies of the binary set aside beside it while they ran, as
+    /// install.ps1 does on Windows with a tiny.exe it replaces, which every
+    /// update from inside tiny is. The next install clears them away, but
+    /// after an uninstall there is none.
+    old_copies: Vec<PathBuf>,
     /// The `--root` cargo installed into, when its bookkeeping names tiny.
     /// `cargo uninstall` is then the right way to remove the binary, because
     /// it also forgets the entry; unlinking alone leaves cargo believing
@@ -566,12 +571,18 @@ impl Removal {
             .and_then(|p| p.parent()?.parent())
             .map(|prefix| prefix.join(MAN_PAGE))
             .filter(|p| p.is_file());
+        let old_copies = bin
+            .as_deref()
+            .filter(|p| p.is_file())
+            .map(old_copies_of)
+            .unwrap_or_default();
         Self {
             bin: bin.filter(|p| p.is_file()),
             conf,
             plugins_dir,
             conf_dir,
             man,
+            old_copies,
             cargo_root,
             menu: desktop::Menu::default(),
         }
@@ -591,6 +602,9 @@ impl Removal {
         }
         out.extend(self.menu.lines());
         if let Some(p) = &self.man {
+            out.push(format!("  {}", p.display()));
+        }
+        for p in &self.old_copies {
             out.push(format!("  {}", p.display()));
         }
         if let Some(p) = &self.bin {
@@ -632,10 +646,32 @@ impl Removal {
         let Some(bin) = &self.bin else {
             return errors;
         };
+        // Windows will not delete a program while it runs, and the one being
+        // removed is the one doing the removing. It will rename one, though,
+        // so there tiny.exe is moved aside, gone from its place at once, and
+        // deleted when it has closed. Unix deletes a running program happily.
+        let aside = if cfg!(windows) && is_running(bin) {
+            set_aside(bin)
+        } else {
+            None
+        };
+        // One still running, in a window open since before an update, is
+        // deleted with the copy just set aside, once it has closed.
+        for p in &self.old_copies {
+            if let Err(e) = std::fs::remove_file(p)
+                && aside.is_none()
+            {
+                errors.push(format!("{}: {e}", p.display()));
+            }
+        }
         // Hand it to cargo when cargo owns it, so its bookkeeping is updated
-        // too. Best effort: an old install whose cargo has since been removed
-        // still gets unlinked below.
+        // too. cargo will not forget a program it cannot find, so one set
+        // aside is copied back for it to delete. Best effort: an old install
+        // whose cargo has since been removed is still deleted below.
         if let Some(root) = &self.cargo_root {
+            if let Some(aside) = &aside {
+                let _ = std::fs::copy(aside, bin);
+            }
             let done = std::process::Command::new("cargo")
                 .args(["uninstall", "--quiet", "--root"])
                 .arg(root)
@@ -647,19 +683,108 @@ impl Removal {
                 return errors;
             }
         }
-        // Unix unlinks a running executable happily; Windows will not, so say
-        // what to do about it rather than only that it did not work.
-        if let Err(e) = std::fs::remove_file(bin) {
-            let hint = if cfg!(target_os = "windows") {
-                ". Windows will not delete a running program: close tiny and delete it"
-            } else {
-                ""
-            };
-            errors.push(format!("{}: {e}{hint}", bin.display()));
+        if bin.exists()
+            && let Err(e) = std::fs::remove_file(bin)
+        {
+            errors.push(format!("{}: {e}", bin.display()));
         }
         errors
     }
 }
+
+/// Whether `bin` is the program running now, as it is for `tiny --uninstall`.
+fn is_running(bin: &std::path::Path) -> bool {
+    std::env::current_exe().is_ok_and(|exe| exe == bin)
+}
+
+/// What a copy of `bin` set aside while it ran is called, but for the eight
+/// hex digits that end it: `tiny.exe.old-`, as install.ps1 names one.
+fn aside_prefix(bin: &std::path::Path) -> Option<String> {
+    Some(format!("{}.old-", bin.file_name()?.to_str()?))
+}
+
+/// The copies of `bin` set aside beside it, see [`Removal::old_copies`].
+/// Windows does not mind the case of a name, so neither does this.
+fn old_copies_of(bin: &std::path::Path) -> Vec<PathBuf> {
+    let (Some(dir), Some(prefix)) = (bin.parent(), aside_prefix(bin)) else {
+        return Vec::new();
+    };
+    let prefix = prefix.to_ascii_lowercase();
+    let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.to_ascii_lowercase().starts_with(&prefix))
+        })
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    found.sort();
+    found
+}
+
+/// Move tiny.exe aside, as Windows allows while it runs where it would not
+/// delete it, and have every copy set aside beside it deleted once they have
+/// closed. It is named as install.ps1 names one, which that clears away the
+/// next time, should the deleting never happen. Returns where it went, or
+/// `None` if it would not move.
+fn set_aside(bin: &std::path::Path) -> Option<PathBuf> {
+    use std::hash::{BuildHasher, Hasher};
+    let (folder, prefix) = (bin.parent()?, aside_prefix(bin)?);
+    // Eight hex digits, new for every uninstall.
+    let n = std::hash::RandomState::new().build_hasher().finish() as u32;
+    let aside = bin.with_file_name(format!("{prefix}{n:08x}"));
+    std::fs::rename(bin, &aside).ok()?;
+    let program = bin.file_stem().unwrap_or_default();
+    // Should PowerShell not start, the next install clears it away.
+    let _ = deleting(folder, &format!("{prefix}*"), program).spawn();
+    Some(aside)
+}
+
+/// A PowerShell of its own to delete the files in `folder` that `pattern`
+/// names, once every `program` running has closed, for [`set_aside`]. It
+/// gets a console of its own with no window, so it carries on when the
+/// window tiny ran in is closed. What it is to delete is handed over in its
+/// environment, where no quote in a name can be mistaken for the end of one.
+fn deleting(
+    folder: &std::path::Path,
+    pattern: &str,
+    program: &std::ffi::OsStr,
+) -> std::process::Command {
+    let mut cmd = desktop::powershell(DELETE_ONCE_CLOSED);
+    cmd.env("TINY_FOLDER", folder)
+        .env("TINY_SET_ASIDE", pattern)
+        .env("TINY_PROGRAM", program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// The script [`deleting`] runs. For ten seconds it tries every half second,
+/// in which time the tiny that set itself aside closes, and a virus scanner
+/// reading it lets go. Anything still held after that is running in another
+/// window, so the script waits for every tiny to close and tries once more.
+const DELETE_ONCE_CLOSED: &str = r#"$folder = $env:TINY_FOLDER
+$pattern = $env:TINY_SET_ASIDE
+function Remove-SetAside {
+    Get-ChildItem -LiteralPath $folder -Filter $pattern -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    return -not (Get-ChildItem -LiteralPath $folder -Filter $pattern -File -ErrorAction SilentlyContinue)
+}
+foreach ($i in 1..20) {
+    if (Remove-SetAside) { exit }
+    Start-Sleep -Milliseconds 500
+}
+Wait-Process -Name $env:TINY_PROGRAM -ErrorAction SilentlyContinue
+Remove-SetAside | Out-Null
+"#;
 
 /// `tiny --uninstall`: show what will go, ask, then remove it.
 ///
@@ -751,6 +876,72 @@ mod tests {
         let conf = conf_dir.join(CONF_NAME);
         fs::write(&conf, "borders = true\n").unwrap();
         (bin, conf)
+    }
+
+    #[test]
+    fn a_running_tiny_exe_is_deleted_by_a_powershell_of_its_own() {
+        let folder = Path::new(r"C:\Users\o'brien\.local\bin");
+        let cmd = deleting(folder, "tiny.exe.old-*", std::ffi::OsStr::new("tiny"));
+        assert_eq!(cmd.get_program(), "powershell");
+        let envs: Vec<_> = cmd.get_envs().collect();
+        let has = |key: &str, value: &std::ffi::OsStr| {
+            envs.contains(&(std::ffi::OsStr::new(key), Some(value)))
+        };
+        assert!(
+            has("TINY_FOLDER", folder.as_os_str()),
+            "the folder, exactly as it is: {envs:?}"
+        );
+        assert!(has("TINY_SET_ASIDE", "tiny.exe.old-*".as_ref()));
+        assert!(has("TINY_PROGRAM", "tiny".as_ref()));
+        assert!(DELETE_ONCE_CLOSED.contains("Wait-Process -Name $env:TINY_PROGRAM"));
+    }
+
+    #[test]
+    fn copies_an_update_set_aside_go_too() {
+        let td = tempfile::tempdir().unwrap();
+        let dir = td.path().join("bin");
+        fs::create_dir(&dir).unwrap();
+        let bin = dir.join("tiny.exe");
+        let old = ["tiny.exe.old-0123abcd", "TINY.EXE.old-89abcdef"].map(|n| dir.join(n));
+        let theirs = ["tinyx.exe.old-0123abcd", "tiny.exe.older", "notes.md"].map(|n| dir.join(n));
+        for p in std::iter::once(&bin).chain(&old).chain(&theirs) {
+            fs::write(p, "x").unwrap();
+        }
+
+        let removal = Removal::plan(Some(bin.clone()), None);
+        let mut expected = old.to_vec();
+        expected.sort();
+        assert_eq!(removal.old_copies, expected);
+        for p in &old {
+            assert!(
+                removal.lines().contains(&format!("  {}", p.display())),
+                "{} is listed: {:?}",
+                p.display(),
+                removal.lines()
+            );
+        }
+        assert!(removal.perform().is_empty());
+        assert!(!bin.exists());
+        for p in &old {
+            assert!(!p.exists(), "{} went", p.display());
+        }
+        for p in &theirs {
+            assert!(p.exists(), "{} stays", p.display());
+        }
+    }
+
+    #[test]
+    fn a_tiny_not_running_is_simply_deleted() {
+        let td = tempfile::tempdir().unwrap();
+        let (bin, _) = fake_install(td.path());
+        assert!(!is_running(&bin));
+        assert!(is_running(&std::env::current_exe().unwrap()));
+        assert!(Removal::plan(Some(bin.clone()), None).perform().is_empty());
+        assert_eq!(
+            fs::read_dir(bin.parent().unwrap()).unwrap().count(),
+            0,
+            "nothing set aside beside it"
+        );
     }
 
     #[test]

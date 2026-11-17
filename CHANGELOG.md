@@ -3,6 +3,16 @@
 Each version is a `v` tag, with ready-made binaries on its
 [release page](https://github.com/mattsaund/tiny/releases).
 
+## 0.7.3 - 2026-11-17
+
+- **Uninstalling on Windows.** `tiny --uninstall` removed everything but
+  tiny.exe and said it could not delete that, as Windows will not delete a
+  program while it runs and the tiny uninstalling always is. Now tiny.exe is
+  moved aside, which Windows allows, and deleted the moment tiny closes,
+  along with the old copy an update leaves beside it. A tiny installed with
+  cargo is dropped from cargo's records too. Linux and macOS were not
+  affected.
+
 ## 0.7.2 - 2026-11-11
 
 - **Scrollbars.** The browser, a file and the git window's list, branches,
